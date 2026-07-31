@@ -1,0 +1,491 @@
+//! Getting the invoice out of the PDF.
+//!
+//! # Why this direction first
+//!
+//! Receiving is more common than sending, and reading carries none of the
+//! risk. Extraction is: parse the cross-reference table, walk the document
+//! catalogue to `/Names/EmbeddedFiles`, and inflate one stream. No rendering,
+//! no fonts, no text layout, and — critically — no chance of breaking the
+//! PDF/A-3 conformance the file already had.
+//!
+//! # The name lookup, and why it is a list
+//!
+//! ⚠ ZUGFeRD 2.1 and Factur-X use `factur-x.xml`; ZUGFeRD 2.0 used
+//! `zugferd-invoice.xml`; ZUGFeRD 1.0 used `ZUGFeRD-invoice.xml`. A *reader*
+//! must accept all of them — it does not choose what arrives — while a writer
+//! picks one. That asymmetry is why [`FILENAMES`] exists as a list rather than
+//! a constant, and the names are ⚠ until checked against a fetched
+//! specification.
+//!
+//! Matching is case-insensitive because the specification's casing and real
+//! producers' casing have not historically agreed.
+
+use std::collections::BTreeMap;
+
+use super::{Error, IsInvoice, Profile};
+
+/// Embedded filenames a ZUGFeRD or Factur-X invoice may use. ⚠
+///
+/// Ordered by preference: a file carrying two of them — which should not
+/// happen, and does — resolves to the most recent convention.
+pub const FILENAMES: &[&str] = &[
+    "factur-x.xml",
+    "zugferd-invoice.xml",
+    "xrechnung.xml",
+    "order-x.xml",
+];
+
+/// What the PDF's XMP metadata declares about the invoice inside it.
+///
+/// This is how a receiver discovers that an invoice is there, and which profile
+/// it claims, **before parsing anything**. Getting it wrong yields a file that
+/// opens fine and that no counterparty detects as an e-invoice — which is why
+/// it is read and reported rather than ignored as decoration.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Xmp {
+    /// `fx:DocumentType` — `INVOICE` or `ORDER`. ⚠
+    pub document_type: Option<String>,
+    /// `fx:DocumentFileName` — the embedded file's name, as the metadata
+    /// claims it. May disagree with the file actually attached. ⚠
+    pub document_filename: Option<String>,
+    /// `fx:Version` — the ZUGFeRD / Factur-X version. ⚠
+    pub version: Option<String>,
+    /// `fx:ConformanceLevel` — the profile, in the XMP's own vocabulary. ⚠
+    pub conformance_level: Option<String>,
+}
+
+/// A disagreement between what the PDF declares and what it contains.
+///
+/// Each of these is a document that validates, opens, and is wrong in a way no
+/// schema notices. They are warnings rather than errors: the payload is still
+/// readable, and refusing an invoice over a metadata mismatch would be worse
+/// than reporting it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Divergence {
+    /// The XMP names a different profile than the payload's BT-24.
+    ///
+    /// A receiver that routes on the XMP and a receiver that routes on BT-24
+    /// then process the same file differently — and both are behaving
+    /// correctly.
+    Profile {
+        /// What `fx:ConformanceLevel` says.
+        xmp: String,
+        /// What BT-24 says.
+        payload: String,
+    },
+    /// The XMP names a different embedded filename than the one attached.
+    Filename {
+        /// What `fx:DocumentFileName` says.
+        xmp: String,
+        /// The file actually found.
+        actual: String,
+    },
+    /// A full-invoice profile is attached as `/AFRelationship /Data`.
+    ///
+    /// `Data` says the XML is *supplementary* to a PDF that is itself the
+    /// invoice. That is right for MINIMUM and BASIC WL, which carry no lines
+    /// and are booking aids. For BASIC, EN 16931, EXTENDED and XRECHNUNG the
+    /// XML **is** the invoice, and every published source agrees `Data` is
+    /// wrong there — while disagreeing on the replacement (`Alternative` in
+    /// German guidance, `Source` in PDFlib's for Factur-X abroad).
+    ///
+    /// So this reports the case they agree on and stays silent on the rest. A
+    /// receiver that routes on `/AFRelationship` may treat such a file as a
+    /// PDF with an attachment rather than as an e-invoice.
+    Relationship {
+        /// The value found.
+        found: String,
+        /// The profile the payload claims, which is what makes it wrong.
+        profile: Profile,
+    },
+    /// The PDF carries no XMP invoice metadata at all.
+    ///
+    /// Readable here, because the embedded file was found by name — but a
+    /// counterparty scanning metadata first will not see an e-invoice.
+    NoXmp,
+}
+
+/// What extraction produced.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct Extracted {
+    /// The payload, **verbatim**.
+    ///
+    /// Whoever is diagnosing a rejected invoice needs the bytes the
+    /// counterparty actually sent, not this crate's reconstruction of them.
+    pub xml: String,
+    /// The embedded file's name, as the PDF records it.
+    pub filename: String,
+    /// The profile the document claims, read from its BT-24.
+    ///
+    /// A *claim*, not a finding. What a document says it is and what it is are
+    /// different questions, and the gap between them is a real diagnostic.
+    pub profile: Profile,
+    /// BT-24 verbatim, when the payload carries one.
+    pub specification_id: Option<String>,
+    /// The payload as the semantic model, when the `cii` feature is on.
+    ///
+    /// `None` means the payload could not be read *as CII* — which for a
+    /// ZUGFeRD file means something is wrong with it, and [`Extracted::xml`] is
+    /// where to look. Reporting that rather than erroring keeps the bytes
+    /// available for diagnosis.
+    #[cfg(feature = "cii")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "cii")))]
+    pub invoice: Option<en16931::Invoice>,
+    /// Elements in the payload outside the EN 16931 subset, and values present
+    /// but not representable. Empty for a conforming document.
+    #[cfg(feature = "cii")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "cii")))]
+    pub syntax_findings: Vec<String>,
+    /// `/AFRelationship` for the embedded invoice, verbatim.
+    ///
+    /// `None` when the attachment carries none — lawful in PDF, and a signal in
+    /// itself that the file was produced by a generic attacher rather than by
+    /// something that knows about hybrid invoices. See [`Divergence::Relationship`].
+    pub relationship: Option<String>,
+    /// What the PDF's own metadata declares, independently of the payload.
+    pub xmp: Xmp,
+    /// Disagreements between the metadata and the payload. Usually empty.
+    pub divergence: Vec<Divergence>,
+}
+
+/// Every embedded file in a PDF, by name.
+///
+/// Exposed because "no invoice found" is much easier to act on when the caller
+/// can see what *was* attached — and because a PDF carrying a differently named
+/// invoice is the common support question.
+pub fn embedded_files(pdf: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, Error> {
+    Ok(collect_embedded(&lopdf::Document::load_mem(pdf)?))
+}
+
+/// The embedded files of an already-parsed document.
+///
+/// Split out so [`extract`] parses the PDF once rather than twice — it needs
+/// both the attachments and the XMP.
+fn collect_embedded(doc: &lopdf::Document) -> BTreeMap<String, Vec<u8>> {
+    let mut out = BTreeMap::new();
+
+    // Two places hold embedded files, and real documents use both:
+    //   * the catalogue's /Names/EmbeddedFiles name tree — where PDF/A-3 and
+    //     the ZUGFeRD specification say it belongs, and
+    //   * a page's /Annots as a /FileAttachment annotation.
+    // Reading only the first is the common bug, and it fails on exactly the
+    // files a user reports as "works in every other viewer".
+    for object in doc.objects.values() {
+        let Ok(dict) = object.as_dict() else { continue };
+        let is_filespec = dict
+            .get(b"Type")
+            .ok()
+            .and_then(|t| t.as_name().ok())
+            .is_some_and(|n| n == b"Filespec");
+        if !is_filespec {
+            continue;
+        }
+        let Some(name) = filespec_name(dict) else {
+            continue;
+        };
+        let Some(bytes) = filespec_bytes(doc, dict) else {
+            continue;
+        };
+        out.insert(name, bytes);
+    }
+    out
+}
+
+/// The `/AFRelationship` recorded for the attachment named `filename`.
+///
+/// # Why this is worth reading
+///
+/// PDF/A-3 uses `/AFRelationship` to say *how* an attached file relates to the
+/// document, and for a hybrid invoice the value is legally load-bearing rather
+/// than descriptive: it is the difference between "this XML is the invoice,
+/// the pages are a rendering of it" and "the pages are the invoice, this XML is
+/// supplementary data".
+///
+/// `Data` is right for the profiles that carry **no lines** — MINIMUM and
+/// BASIC WL are booking aids attached to a PDF that is itself the invoice. For
+/// the profiles that carry a whole invoice it is wrong, and published guidance
+/// then splits: German sources say `Alternative`, and PDFlib documents `Source`
+/// for Factur-X to non-German recipients. This crate reports the value and
+/// takes no position where the sources disagree — see [`Divergence::Relationship`],
+/// which fires only on the case they agree about.
+fn af_relationship(doc: &lopdf::Document, filename: &str) -> Option<String> {
+    doc.objects.values().find_map(|object| {
+        let dict = object.as_dict().ok()?;
+        if dict.get(b"Type").ok()?.as_name().ok()? != b"Filespec" {
+            return None;
+        }
+        if filespec_name(dict)?.eq_ignore_ascii_case(filename) {
+            let raw = dict.get(b"AFRelationship").ok()?.as_name().ok()?;
+            Some(String::from_utf8_lossy(raw).into_owned())
+        } else {
+            None
+        }
+    })
+}
+
+/// A `/Filespec`'s name, preferring `/UF` (Unicode) over `/F` (byte string).
+fn filespec_name(dict: &lopdf::Dictionary) -> Option<String> {
+    for key in [&b"UF"[..], &b"F"[..], &b"Desc"[..]] {
+        if let Ok(obj) = dict.get(key)
+            && let Ok(s) = obj.as_str()
+        {
+            return Some(String::from_utf8_lossy(s).into_owned());
+        }
+    }
+    None
+}
+
+/// The decompressed contents of a `/Filespec`'s embedded stream.
+fn filespec_bytes(doc: &lopdf::Document, dict: &lopdf::Dictionary) -> Option<Vec<u8>> {
+    let ef = dict.get(b"EF").ok()?.as_dict().ok()?;
+    // `/F` is the usual key; `/UF` appears alongside it in files produced for
+    // Unicode-aware readers and is the same stream.
+    let stream_ref = ef.get(b"F").or_else(|_| ef.get(b"UF")).ok()?;
+    let stream = match stream_ref {
+        lopdf::Object::Reference(id) => doc.get_object(*id).ok()?.as_stream().ok()?,
+        other => other.as_stream().ok()?,
+    };
+    // `get_plain_content` returns the raw bytes when the stream is not
+    // compressed, which several producers' output is.
+    stream
+        .decompressed_content()
+        .ok()
+        .or_else(|| Some(stream.content.clone()))
+}
+
+/// Extract the invoice from a ZUGFeRD / Factur-X PDF.
+///
+/// # Errors
+///
+/// [`Error::Pdf`] if the bytes are not a readable PDF, [`Error::NoInvoice`] if
+/// it carries no embedded file under a name this crate recognises — with the
+/// names it *does* carry, so the caller can say something useful — and
+/// [`Error::Encoding`] if the payload is not UTF-8.
+pub fn extract(pdf: &[u8]) -> Result<Extracted, Error> {
+    let doc = lopdf::Document::load_mem(pdf)?;
+    let xmp = read_xmp(&doc);
+    let mut files = collect_embedded(&doc);
+
+    // Preference order, not first match: a file carrying both `factur-x.xml`
+    // and `zugferd-invoice.xml` resolves to the newer convention rather than to
+    // whichever the PDF happened to list first.
+    let wanted = FILENAMES
+        .iter()
+        .find_map(|want| files.keys().find(|k| k.eq_ignore_ascii_case(want)).cloned());
+
+    // `remove_entry` rather than `get`: the payload is taken out and owned
+    // without a clone, and no lookup remains that could fail — so this function
+    // has no panicking path at all, which is worth more than a `# Panics`
+    // section explaining one.
+    let Some((filename, bytes)) = wanted.and_then(|f| files.remove_entry(&f)) else {
+        return Err(Error::NoInvoice {
+            looked_for: FILENAMES,
+            found: files.into_keys().collect(),
+        });
+    };
+    let xml = String::from_utf8(bytes)?;
+    let specification_id = specification_id(&xml);
+    let profile = specification_id
+        .as_deref()
+        .map_or(Profile::Unknown, Profile::parse);
+
+    // The payload is CII, and `crate::cii` is the crate's own reader — so
+    // `extract` returns the model rather than a string the caller must find a
+    // parser for. Without the feature it returns the bytes and says so.
+    #[cfg(feature = "cii")]
+    let (invoice, syntax_findings) = match crate::cii::from_str(&xml) {
+        Ok(r) => {
+            let mut findings = r.unmapped;
+            findings.extend(r.malformed);
+            (Some(r.invoice), findings)
+        }
+        Err(e) => (None, vec![e.to_string()]),
+    };
+
+    let relationship = af_relationship(&doc, &filename);
+
+    Ok(Extracted {
+        divergence: diverge(
+            &xmp,
+            &filename,
+            profile,
+            specification_id.as_deref(),
+            relationship.as_deref(),
+        ),
+        #[cfg(feature = "cii")]
+        invoice,
+        #[cfg(feature = "cii")]
+        syntax_findings,
+        xml,
+        filename,
+        profile,
+        specification_id,
+        relationship,
+        xmp,
+    })
+}
+
+/// Compare what the PDF declares against what it contains.
+fn diverge(
+    xmp: &Xmp,
+    filename: &str,
+    profile: Profile,
+    specification_id: Option<&str>,
+    relationship: Option<&str>,
+) -> Vec<Divergence> {
+    let mut out = Vec::new();
+
+    // Checked before the XMP, and independently of it: a file can carry perfect
+    // metadata and still be attached in a way that says it is not the invoice.
+    // Only the case every source agrees on — `Data` on a profile that has lines.
+    if relationship.is_some_and(|r| r.eq_ignore_ascii_case("Data"))
+        && profile.is_en16931_invoice() == IsInvoice::Yes
+    {
+        out.push(Divergence::Relationship {
+            found: relationship.unwrap_or_default().to_owned(),
+            profile,
+        });
+    }
+
+    if *xmp == Xmp::default() {
+        out.push(Divergence::NoXmp);
+        return out;
+    }
+    if let Some(level) = &xmp.conformance_level {
+        let claimed = Profile::parse(level);
+        // Compare *profiles*, not strings: the XMP writes `EN 16931` where
+        // BT-24 writes a URN, and they mean the same thing. Comparing the
+        // literals would report a divergence on every conforming document.
+        if claimed != Profile::Unknown && claimed != profile {
+            out.push(Divergence::Profile {
+                xmp: level.clone(),
+                payload: specification_id.unwrap_or("<absent>").to_owned(),
+            });
+        }
+    }
+    if let Some(declared) = &xmp.document_filename
+        && !declared.eq_ignore_ascii_case(filename)
+    {
+        out.push(Divergence::Filename {
+            xmp: declared.clone(),
+            actual: filename.to_owned(),
+        });
+    }
+    out
+}
+
+/// The document-level XMP packet, if there is one.
+///
+/// Read with substring extraction rather than an XML parser, for the same
+/// reason [`specification_id`] is: this crate does not own an XML binding, and
+/// pulling in a parser to read four fields would be the beginning of owning
+/// one. XMP is RDF, and a *general* reader of it would need one — but these
+/// four elements are flat text in a namespace nothing else uses.
+fn read_xmp(doc: &lopdf::Document) -> Xmp {
+    let Some(packet) = xmp_packet(doc) else {
+        return Xmp::default();
+    };
+    Xmp {
+        document_type: xmp_field(&packet, "DocumentType"),
+        document_filename: xmp_field(&packet, "DocumentFileName"),
+        version: xmp_field(&packet, "Version"),
+        conformance_level: xmp_field(&packet, "ConformanceLevel"),
+    }
+}
+
+fn xmp_packet(doc: &lopdf::Document) -> Option<String> {
+    let catalog = doc.catalog().ok()?;
+    let meta = catalog.get(b"Metadata").ok()?;
+    let stream = match meta {
+        lopdf::Object::Reference(id) => doc.get_object(*id).ok()?.as_stream().ok()?,
+        other => other.as_stream().ok()?,
+    };
+    let bytes = stream
+        .decompressed_content()
+        .unwrap_or_else(|_| stream.content.clone());
+    // XMP is required to be UTF-8; `from_utf8_lossy` rather than a failure
+    // because a mangled metadata packet must not stop a readable invoice
+    // being extracted.
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// One `fx:`-namespaced element's text.
+///
+/// The prefix is matched loosely — `fx:`, `zf:` and `pdfaExtension`-declared
+/// variants all appear in the wild ⚠ — by looking for the local name preceded
+/// by a colon.
+fn xmp_field(packet: &str, local_name: &str) -> Option<String> {
+    let needle = format!(":{local_name}>");
+    let start = packet.find(&needle)? + needle.len();
+    let rest = &packet[start..];
+    let end = rest.find("</")?;
+    let value = rest[..end].trim();
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+/// BT-24 from a CII payload, without a parser.
+///
+/// The element is `ram:GuidelineSpecifiedDocumentContextParameter/ram:ID`, and
+/// finding it is a substring search rather than a parse on purpose: this crate
+/// does not own the CII binding, and pulling in an XML parser to read one
+/// element would be the beginning of owning it. `xrechnung` is where a real CII
+/// reader belongs; here the identifier is metadata about the payload, and the
+/// payload is handed back verbatim for whoever does parse it.
+fn specification_id(xml: &str) -> Option<String> {
+    let anchor = xml.find("GuidelineSpecifiedDocumentContextParameter")?;
+    let rest = &xml[anchor..];
+    let open = rest.find(":ID>").map(|i| i + 4)?;
+    let close = rest[open..].find("</")?;
+    let value = rest[open..open + close].trim();
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bt24_is_found_in_a_cii_fragment() {
+        let xml = r"<rsm:ExchangedDocumentContext>
+          <ram:GuidelineSpecifiedDocumentContextParameter>
+            <ram:ID>urn:cen.eu:en16931:2017</ram:ID>
+          </ram:GuidelineSpecifiedDocumentContextParameter>
+        </rsm:ExchangedDocumentContext>";
+        assert_eq!(
+            specification_id(xml).as_deref(),
+            Some("urn:cen.eu:en16931:2017")
+        );
+    }
+
+    /// The *guideline* parameter, not the business-process one that precedes it.
+    #[test]
+    fn bt23_is_not_mistaken_for_bt24() {
+        let xml = r"<ram:BusinessProcessSpecifiedDocumentContextParameter>
+            <ram:ID>urn:process</ram:ID>
+          </ram:BusinessProcessSpecifiedDocumentContextParameter>
+          <ram:GuidelineSpecifiedDocumentContextParameter>
+            <ram:ID>urn:factur-x.eu:1p0:basic</ram:ID>
+          </ram:GuidelineSpecifiedDocumentContextParameter>";
+        assert_eq!(
+            specification_id(xml).as_deref(),
+            Some("urn:factur-x.eu:1p0:basic")
+        );
+    }
+
+    #[test]
+    fn a_payload_without_bt24_reports_none() {
+        assert_eq!(specification_id("<rsm:CrossIndustryInvoice/>"), None);
+        assert_eq!(
+            specification_id("<ram:GuidelineSpecifiedDocumentContextParameter/>"),
+            None
+        );
+    }
+
+    #[test]
+    fn bytes_that_are_not_a_pdf_say_so() {
+        assert!(matches!(extract(b"not a pdf"), Err(Error::Pdf(_))));
+    }
+}

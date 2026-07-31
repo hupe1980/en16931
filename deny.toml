@@ -1,9 +1,9 @@
-# cargo-deny configuration
+# cargo-deny configuration, for the whole workspace
 # Docs: https://embarkstudios.github.io/cargo-deny/
 
 [graph]
 targets      = []     # every target, so a platform-specific dependency cannot hide
-all-features = true   # the widest graph this crate can produce
+all-features = true   # the widest graph this workspace can produce
 
 [advisories]
 version = 2
@@ -27,6 +27,12 @@ allow = [
     "MIT",
     "Apache-2.0",
     "Unicode-3.0",   # unicode-ident
+    # `encoding_rs` is `(Apache-2.0 OR MIT) AND BSD-3-Clause` — the AND makes
+    # this one mandatory rather than an alternative. It arrives through `lopdf`,
+    # so it is in the graph only when `en16931-formats/zugferd` is on. `en16931`
+    # itself never sees it, which is the point of that feature being off by
+    # default.
+    "BSD-3-Clause",
 ]
 
 [bans]

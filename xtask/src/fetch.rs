@@ -11,11 +11,18 @@
 //!
 //! # What is fetched, and what is not
 //!
-//! Only what the code generator and the test suites actually read. Earlier
-//! versions of this also pulled `phive-rules` — 3.6 GB in full, sparse-checked
-//! out to three modules — and three specification PDFs. Nothing consumed any of
-//! them: they were research material, and a fetch that downloads what nobody
-//! reads is a fetch people learn to skip.
+//! Only what the generators and the test suites actually read — for **both**
+//! crates, which is the point of fetching once. `en16931` needs the code-list
+//! Schematron; `en16931-formats` needs the *preprocessed* Schematron, the only
+//! form in which a rule's context is fully resolved rather than a `$Variable`,
+//! and every published UBL and CII instance, because its element-order tables
+//! are derived from 320 and 170 documents respectively. A table derived from
+//! three examples is a guess with a large sample size written on it.
+//!
+//! Earlier versions of this also pulled `phive-rules` — 3.6 GB in full,
+//! sparse-checked out to three modules — and three specification PDFs. Nothing
+//! consumed any of them: they were research material, and a fetch that
+//! downloads what nobody reads is a fetch people learn to skip.
 //!
 //! The normative text of EN 16931-1 is free of charge with derivative use
 //! permitted under the 2018 CEN–European Commission agreement, and
@@ -34,10 +41,16 @@
 //!
 //! # Pinning
 //!
-//! The CEN artefacts are pinned to a tag, so regenerating the code lists is a
+//! The CEN artefacts are pinned to a tag, so regenerating a table is a
 //! reviewable diff rather than a moving target. Bump [`CEN_REF`] deliberately,
-//! and update `en16931::ARTEFACT_VERSION` to match — `tests/attribution.rs`
-//! checks that they agree.
+//! and update `en16931::ARTEFACT_VERSION` to match —
+//! `crates/en16931/tests/artefact_pin.rs` checks that they agree, along with the
+//! revision stamped into every generated table.
+//!
+//! **One pin, for both crates.** Split across two repositories this was two
+//! constants and a comment asking that they be kept equal; a workspace makes it
+//! one, so "the two crates derived their tables from different artefact
+//! revisions" is no longer a state that can be reached.
 
 use std::path::Path;
 use std::process::Command;
@@ -46,7 +59,9 @@ use crate::root;
 
 /// The pinned CEN artefact **tag**.
 ///
-/// Must equal `en16931::ARTEFACT_VERSION`.
+/// Must equal `en16931::ARTEFACT_VERSION`, and the `ARTEFACT` constant the code
+/// generator stamps into every table's provenance line.
+/// `crates/en16931/tests/artefact_pin.rs` asserts all three.
 pub const CEN_REF: &str = "validation-1.3.16";
 
 /// Which kind of ref a source is pinned to.
@@ -100,14 +115,16 @@ static REPOS: &[Repo] = &[
         name: "eInvoicing-EN16931",
         url: "https://github.com/ConnectingEurope/eInvoicing-EN16931.git",
         reference: Ref::Tag(CEN_REF),
-        purpose: "CEN/TC 434 — the abstract model, code lists and per-rule test corpus. \
-                  The primary source for rule ids, severities, contexts and ~4 400 code values.",
+        purpose: "CEN/TC 434 — the abstract model, code lists and per-rule test corpus, \
+                  the preprocessed Schematron behind the prohibition tables, and 490 \
+                  published UBL and CII instances behind the element-order tables.",
     },
     Repo {
         name: "peppol-bis-invoice-3",
         url: "https://github.com/OpenPEPPOL/peppol-bis-invoice-3.git",
         reference: Ref::Branch("master"),
-        purpose: "Peppol BIS Billing 3.0 — PEPPOL-EN16931-* and the national rule sets.",
+        purpose: "Peppol BIS Billing 3.0 — PEPPOL-EN16931-*, the national rule sets, and \
+                  the widest real-world sample of UBL in the corpus suite.",
     },
     Repo {
         name: "xrechnung-schematron",

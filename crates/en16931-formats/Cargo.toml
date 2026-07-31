@@ -1,0 +1,98 @@
+[package]
+name        = "en16931-formats"
+description = """\
+European e-invoicing formats on top of the EN 16931 semantic model: UBL 2.1 \
+and UN/CEFACT CII in both directions, the XRechnung CIUS, and ZUGFeRD / \
+Factur-X hybrid PDFs. Every business rule is delegated to `en16931`.\
+"""
+keywords   = ["einvoice", "xrechnung", "zugferd", "en16931", "ubl"]
+categories = ["finance", "encoding", "parser-implementations"]
+readme     = "README.md"
+
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+authors.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+## UBL 2.1 — `Invoice` and `CreditNote`, both directions.
+##
+## On by default: it is the syntax XRechnung is overwhelmingly sent in, and a
+## default build that could not read one would surprise everybody.
+default = ["ubl"]
+ubl = ["dep:roxmltree"]
+## UN/CEFACT CII D16B — `rsm:CrossIndustryInvoice`, both directions.
+##
+## One binding serving two consumers is the reason this is one crate: XRechnung
+## is carried in CII as well as UBL, and every ZUGFeRD payload is CII — which is
+## why `zugferd` enables this feature rather than duplicating the binding.
+cii = ["dep:roxmltree"]
+## ZUGFeRD / Factur-X: extracting the invoice from a hybrid PDF.
+##
+## **Off by default, and that matters.** `lopdf` brings AES, ChaCha20, SHA-2,
+## `getrandom` and `libc` — a graph of 57 crates against 13 for `ubl` alone,
+## and one that does not build for `wasm32-unknown-unknown`. Nobody reading a
+## UBL invoice should pay for a PDF parser.
+zugferd = ["dep:lopdf", "cii"]
+## Render the visible invoice under a corporate design. **Not yet implemented.**
+render = ["zugferd"]
+## `serde` on this crate's own public types.
+serde = ["dep:serde", "en16931/serde"]
+
+[dependencies]
+# Declared in `[workspace.dependencies]`: a path *and* a version, so `cargo
+# publish` resolves it from crates.io while everything here builds against the
+# sibling. No `[patch.crates-io]`, and no publish-ordering hazard — a breaking
+# change to the model and its use here land in one commit.
+en16931.workspace   = true
+thiserror.workspace = true
+# The model's amounts are `rust_decimal`-backed and the reader parses into them.
+# Pinned to `en16931`'s version deliberately: two `Decimal` types in one graph
+# is a compile error nobody enjoys diagnosing. The pin lives in
+# `[workspace.dependencies]`, so the two cannot drift.
+rust_decimal.workspace = true
+
+# Reading XML only. The writers build strings and need nothing at all.
+#
+# `roxmltree` rather than `quick-xml`: arena-allocated rather than
+# allocation-per-node, no panics on hostile input, and — the deciding point —
+# the reader CEN's conformance suites already validate was written against it.
+roxmltree = { workspace = true, optional = true }
+
+# PDF object parsing, for `zugferd`. `default-features = false` drops chrono,
+# jiff, rayon and time: a date library and a thread pool are not needed to
+# inflate one stream.
+lopdf = { version = "0.44", default-features = false, optional = true }
+
+serde = { workspace = true, optional = true }
+
+[[example]]
+name              = "zugferd_extract"
+required-features = ["zugferd"]
+
+[[example]]
+name              = "write_both_syntaxes"
+required-features = ["ubl"]
+
+[[example]]
+name              = "read_and_validate"
+required-features = ["ubl"]
+
+[dev-dependencies]
+# The same workspace entry, with the feature the suites need. A path-only
+# dependency would be a wildcard, which `deny.toml` bans.
+en16931      = { workspace = true, features = ["serde"] }
+lopdf        = { version = "0.44", default-features = false }
+proptest     = "1.11"
+# The suites parse what the writers emit, whether or not the library itself
+# pulls in a parser for the feature set under test.
+roxmltree    = { workspace = true }
+rust_decimal = { workspace = true, features = ["macros"] }
+serde_json   = "1"
+

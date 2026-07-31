@@ -1,87 +1,56 @@
 [workspace]
-members = ["xtask"]
+resolver = "3"
+members  = ["crates/en16931", "crates/en16931-formats", "xtask"]
 
+# ── Why one repository and two crates ─────────────────────────────────────────
+#
+# The *crate* boundary is load-bearing and stays exactly as it was:
+# `en16931-formats` depends on `en16931`, so rustc forbids the reverse, and
+# "the semantic rules do not depend on a syntax" is enforced rather than asked
+# for. A workspace does not weaken that — acyclicity is a per-crate rule, not a
+# per-repository one.
+#
+# The *repository* boundary bought nothing and cost real work. Both crates
+# derive their tables from the same four upstream artefact repositories at the
+# same pinned revision; split, that meant two `xtask/src/fetch.rs`, two `spec/`
+# trees of the same 136 MB, and two `CEN_REF` constants that had to be kept in
+# step by hand — with `en16931-formats` carrying a comment asserting its pin
+# "must equal `en16931::ARTEFACT_VERSION`" and no way to check it across the
+# gap. `artefact_pins_agree` in `crates/en16931-formats/tests/` now does.
+#
+# It also made every coordinated breaking change a `[patch.crates-io]` block
+# with a "delete this later" comment, plus a publish-ordering hazard. Here it is
+# a path dependency that is always right, and `cargo publish` derives the order
+# from the graph.
+#
 # `xtask` is the build-task runner (`cargo xtask fetch` / `codegen`). Not
 # published, and its dependencies never reach a consumer.
 
-[package]
-name         = "en16931"
-version      = "0.1.0"
-edition       = "2024"
+[workspace.package]
+# Lockstep: `en16931-formats` re-exports `en16931`'s types across its surface,
+# so a breaking change to the model breaks the bindings either way. Cost is
+# republishing an unchanged crate on a bindings-only patch.
+#
+# Bump here and in the dependency requirement below — the only two places.
+version      = "0.2.0"
+edition      = "2024"
 # `let`-chains, stabilised in 1.88. CI reads this value rather than repeating it.
 rust-version = "1.88"
 authors      = ["hupe1980"]
-description  = """\
-The EN 16931 semantic data model and its business rules, as Rust types. \
-Validates the model rather than a serialised document, so findings point at \
-BT-151 on line 3 instead of at an XPath. No XML, no PDF, no I/O.\
-"""
-keywords     = ["einvoice", "en16931", "invoice", "xrechnung", "peppol"]
-categories   = ["finance", "data-structures", "encoding"]
 license      = "MIT OR Apache-2.0"
 repository   = "https://github.com/hupe1980/en16931"
-readme       = "README.md"
 
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = ["--cfg", "docsrs"]
+[workspace.dependencies]
+# The internal edge. A `version` as well as a `path`, so `cargo publish`
+# resolves it from crates.io. Cargo has no `version.workspace` for a dependency
+# requirement, so this is the second and last copy of the number;
+# `versions_are_managed_by_the_workspace` asserts the two agree.
+en16931 = { version = "0.2.0", path = "crates/en16931" }
 
-[features]
-## Stronger payment-identifier checks, via the `sepa` crate.
-##
-## Without it, BT-84's IBAN check is ISO 7064 mod-97-10 — correct, and blind to
-## length, so a 21-character German IBAN passes. With it, the full ISO 13616
-## registry, plus an EPC creditor-identifier check on BT-90.
-##
-## Off by default: it brings `quick-xml`, which this crate otherwise goes to
-## some lengths not to have.
-sepa = ["dep:sepa"]
-## Emit a `ValidationReport` as SVRL, which every Schematron tool here speaks.
-##
-## **Adds no dependencies.** SVRL is a report format, not an invoice syntax:
-## writing it needs escaping, not a parser, and no UBL or CII element names.
-svrl = []
-default = []
-## `serde::Serialize` / `Deserialize` on all public types.
-##
-## Types carrying invariants re-run their validation on deserialisation via
-## `#[serde(try_from = ...)]` rather than trusting reconstructed fields.
-serde = ["dep:serde", "rust_decimal/serde"]
-## Convert to and from `chrono::NaiveDate`.
-chrono = ["dep:chrono"]
-## Convert to and from `time::Date`.
-time = ["dep:time"]
-## Conversion from `billing::BillingDocument`.
-billing = ["dep:billing"]
-
-[dependencies]
-# The same two dependencies `billing` has, for the same reason: an invoice model
-# has no business pulling in a runtime. Everything else is optional.
+# Pinned once, for the reason `en16931-formats` states at its own use site: two
+# `rust_decimal` majors in one graph means two incompatible `Decimal` types and
+# a compile error nobody enjoys diagnosing.
 rust_decimal = { version = "1.42", default-features = false, features = ["std"] }
+roxmltree    = "0.21"
 thiserror    = "2"
-
-billing = { version = "0.10", optional = true }
-serde   = { version = "1", features = ["derive"], optional = true }
-chrono  = { version = "0.4", optional = true, default-features = false }
-time    = { version = "0.3", optional = true, default-features = false }
-sepa = { version = "0.5", default-features = false, optional = true }
-
-[dev-dependencies]
-criterion = { version = "0.7.0", features = ["html_reports"] }
-proptest = "1.11.0"
-# Test-only, for `tests/conformance.rs`: reads CEN's and KoSIT's UBL
-# conformance instances so the rules can be checked against the authorities'
-# own suites. The library ships no XML and has no XML dependency.
-roxmltree = "0.21.1"
-rust_decimal = { version = "1.42", features = ["macros"] }
-serde_json   = "1"
-
-# Both report shapes are feature-gated, so the example is too — rather than
-# compiling to a program that only prints "build with --features …".
-[[example]]
-name              = "report_formats"
-required-features = ["serde", "svrl"]
-
-[[bench]]
-name    = "validate"
-harness = false
+serde        = { version = "1", features = ["derive"] }

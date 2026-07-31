@@ -1,0 +1,4 @@
+# Domain names `doc_markdown` mistakes for code identifiers because of their
+# internal capitals. Backticking "ZUGFeRD" in prose would be wrong — it is the
+# name of a specification, not an item.
+doc-valid-idents = ["ZUGFeRD", "KoSIT", "OpenPeppol", "PDF/A", "XRechnung", "UN/CEFACT", "veraPDF", "PDFlib", "ChaCha20", "OpenSSL", "crates.io", ".."]

@@ -1,13 +1,23 @@
 [package]
-name         = "xtask"
-version      = "0.0.0"
-edition      = "2024"
-rust-version = "1.88"
-publish      = false
-description  = "Build tasks for en16931. Not published; not a dependency of the library."
+name        = "xtask"
+version     = "0.0.0"
+publish     = false
+description = "Build tasks for the en16931 workspace. Not published; not a dependency of either library."
+
+edition.workspace      = true
+rust-version.workspace = true
+# Declared even though this member is never published: `cargo deny` walks every
+# node in the workspace graph, and an unlicensed one fails the licence gate. A
+# real field is a better answer than an exception that would also excuse the
+# next unpublished member added without thinking about it.
+license.workspace      = true
 
 [dependencies]
-# Parsing a Schematron is parsing XML. The library has no XML dependency and
-# will not gain one — this is a separate, unpublished workspace member, so its
-# dependencies never reach a consumer's graph.
-roxmltree = "0.21"
+# Parsing a Schematron is parsing XML. `en16931` has no XML dependency and will
+# not gain one; this is an unpublished workspace member, so its dependencies
+# never reach a consumer's graph.
+#
+# It is also the same parser `en16931-formats` reads documents with — deriving
+# the binding tables with a *different* parser than the one that will read the
+# documents would make the tables agree with something nothing else uses.
+roxmltree.workspace = true

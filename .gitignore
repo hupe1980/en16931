@@ -35,7 +35,9 @@ target
 # Reference specifications and validation artefacts (see spec/README.md).
 # Not committed: the CEN validation artefacts are EUPL-1.2 and the vendor
 # specifications carry their own terms — keeping them out of the repo keeps
-# this crate's MIT OR Apache-2.0 licensing clean. Fetch with `just spec`.
+# both crates' MIT OR Apache-2.0 licensing clean. Fetch with `just spec`.
+#
+# One tree at the workspace root, serving both crates. It used to be two.
 /spec/
 
 

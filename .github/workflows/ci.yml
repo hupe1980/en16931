@@ -38,7 +38,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   # ── Documentation ───────────────────────────────────────────────────────────
   docs:
@@ -48,11 +48,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo doc --no-deps --all-features
+      # `-D warnings`, matching `just doc`. Without it a broken intra-doc link
+      # is a warning nobody reads, and rustdoc's link checking is the only
+      # thing that notices a `[`crate::foo`]` pointing at something that has
+      # moved or been deleted.
+      - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
 
   # ── Feature powerset ────────────────────────────────────────────────────────
   # Features gate what compiles at all here, so "it builds with everything on"
   # proves very little. Each combination below changes the dependency graph.
+  #
+  # Scoped with `-p`, deliberately. The features belong to individual crates,
+  # and a workspace-wide `--features svrl` does not even parse. More importantly
+  # the *claims* are per crate: "en16931 builds for wasm32" is the promise its
+  # README makes, and a `--workspace` build would fail on `lopdf` for a reason
+  # that says nothing about the model crate.
   features:
     name: Feature combinations
     runs-on: ubuntu-latest
@@ -62,24 +72,47 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: no default features
-        run: cargo clippy --all-targets --no-default-features -- -D warnings
-      - name: svrl only
-        run: cargo clippy --all-targets --no-default-features --features svrl -- -D warnings
-      - name: serde only
-        run: cargo clippy --all-targets --no-default-features --features serde -- -D warnings
-      # The whole point of this crate is that it has no I/O and no XML. If it
+
+      # en16931 — the model.
+      - name: en16931 · no default features
+        run: cargo clippy -p en16931 --all-targets --no-default-features -- -D warnings
+      - name: en16931 · svrl only
+        run: cargo clippy -p en16931 --all-targets --no-default-features --features svrl -- -D warnings
+      - name: en16931 · serde only
+        run: cargo clippy -p en16931 --all-targets --no-default-features --features serde -- -D warnings
+
+      # en16931-formats — the syntax bindings.
+      - name: en16931-formats · ubl only (default)
+        run: cargo clippy -p en16931-formats --all-targets -- -D warnings
+      - name: en16931-formats · cii only
+        run: cargo clippy -p en16931-formats --all-targets --no-default-features --features cii -- -D warnings
+      - name: en16931-formats · no syntax at all
+        run: cargo clippy -p en16931-formats --all-targets --no-default-features -- -D warnings
+      - name: en16931-formats · zugferd (pulls in a PDF parser)
+        run: cargo clippy -p en16931-formats --all-targets --features zugferd -- -D warnings
+
+      # The whole point of `en16931` is that it has no I/O and no XML. If it
       # stops building for wasm32, something was added that should not have been.
-      - name: wasm32
+      - name: wasm32 · en16931
         run: |
           rustup target add wasm32-unknown-unknown
-          cargo build --target wasm32-unknown-unknown --no-default-features --features svrl,serde
+          cargo build -p en16931 --target wasm32-unknown-unknown --no-default-features --features svrl,serde
+      # The syntax bindings reach wasm too, as long as `zugferd` is off —
+      # `lopdf` brings getrandom and libc, so it is excluded rather than
+      # expected to pass.
+      - name: wasm32 · en16931-formats (ubl + cii)
+        run: cargo build -p en16931-formats --target wasm32-unknown-unknown --features cii
 
   # ── Generated code and the authorities' suites ──────────────────────────────
-  # `src/codes/generated.rs` is derived from the artefacts, not written by hand,
-  # and the conformance suites run CEN's and KoSIT's own instances. Both need
-  # `spec/`, which is not committed — so without this job the code lists could
-  # drift and the conformance suites would skip while still reporting green.
+  # Five generated files across both crates — the code lists, and the element
+  # order and prohibition tables for each syntax — are derived from the
+  # artefacts, not written by hand. The conformance and corpus suites run CEN's
+  # and KoSIT's own instances. All of it needs `spec/`, which is not committed,
+  # so without this job the tables could drift and the suites would skip while
+  # still reporting green.
+  #
+  # One fetch serves both crates, which is the concrete payoff of one
+  # repository: this job used to exist twice and download the same 136 MB twice.
   codegen:
     name: Generated code and conformance suites
     runs-on: ubuntu-latest
@@ -93,8 +126,15 @@ jobs:
         run: cargo xtask fetch
       - name: Generated code is current
         run: cargo xtask check
+      # `EN16931_REQUIRE_SPEC=1` turns "skip because spec/ is missing" into a
+      # failure. Without it this job's guarantee is aspirational: the suites
+      # skip silently, report green, and the run says the conformance corpus
+      # passed when it validated nothing. That is not hypothetical — moving the
+      # crates under `crates/` did exactly that, and every suite stayed green.
       - name: Suites that need the artefacts
-        run: cargo test --all-features
+        run: cargo test --workspace --all-features
+        env:
+          EN16931_REQUIRE_SPEC: "1"
 
   # ── Benchmarks ──────────────────────────────────────────────────────────────
   # Compile-only: timings on shared runners are too noisy to gate on, but a
@@ -106,22 +146,36 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo bench --no-run --all-features
+      - run: cargo bench -p en16931 --no-run --all-features
 
   # ── MSRV ────────────────────────────────────────────────────────────────────
-  # The toolchain comes from Cargo.toml, so the job and the manifest cannot
-  # disagree — or agree while both are wrong, which is what happened.
+  # The toolchain comes from the manifests, so the job and they cannot disagree
+  # — or agree while both are wrong, which is what happened once.
+  #
+  # The root is a *virtual* manifest with no `[package]`, so this takes the
+  # highest `rust-version` across the published members rather than looking for
+  # a package at the root. Both inherit `[workspace.package]` today; taking the
+  # maximum means a member that later raises its own does not silently get
+  # tested against a lower one.
   msrv:
-    name: MSRV (from Cargo.toml)
+    name: MSRV (from the manifests)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Read rust-version from Cargo.toml
+      - name: Read the highest rust-version in the workspace
         id: msrv
         run: |
-          V=$(cargo metadata --no-deps --format-version 1 \
-            | python3 -c "import sys,json,os;m=json.load(sys.stdin);r=os.path.realpath('Cargo.toml');print(next(p['rust_version'] for p in m['packages'] if os.path.realpath(p['manifest_path'])==r))")
+          V=$(cargo metadata --no-deps --format-version 1 | python3 -c "
+          import sys, json
+          m = json.load(sys.stdin)
+          members = set(m['workspace_members'])
+          vs = [p['rust_version'] for p in m['packages']
+                if p['id'] in members and p.get('rust_version')]
+          if not vs:
+              sys.exit('no member declares rust-version')
+          print(max(vs, key=lambda v: [int(x) for x in v.split('.')]))
+          ")
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "MSRV is $V"
       - uses: dtolnay/rust-toolchain@master
@@ -129,9 +183,9 @@ jobs:
           toolchain: ${{ steps.msrv.outputs.version }}
       - uses: Swatinem/rust-cache@v2
       # Build, not test: dev-dependencies may need a newer compiler than the
-      # crate, and holding them to the MSRV would pin it to theirs.
-      - run: cargo build --all-features
-      - run: cargo build --no-default-features
+      # crates, and holding them to the MSRV would pin it to theirs.
+      - run: cargo build --workspace --all-features
+      - run: cargo build --workspace --no-default-features
 
   # ── Test matrix ─────────────────────────────────────────────────────────────
   test:
@@ -158,13 +212,13 @@ jobs:
         with:
           key: ${{ matrix.os }}-${{ matrix.rust }}
       - name: Test — default features
-        run: cargo test --all-targets
+        run: cargo test --workspace --all-targets
       - name: Test — all features
-        run: cargo test --lib --tests --all-features
+        run: cargo test --workspace --lib --tests --all-features
       - name: Test — no default features
-        run: cargo test --all-targets --no-default-features
+        run: cargo test --workspace --all-targets --no-default-features
       - name: Doc tests
-        run: cargo test --doc --all-features
+        run: cargo test --workspace --doc --all-features
 
   # ── Security advisory scan ──────────────────────────────────────────────────
   audit:
@@ -193,26 +247,33 @@ jobs:
         run: cargo deny --all-features check
 
   # ── Semver ──────────────────────────────────────────────────────────────────
-  # Needs a published baseline to diff against, so it is a no-op until the first
-  # release — and switches itself on when that happens, rather than waiting for
-  # someone to remember. It is a linter, not a prover: behavioural breakage is
-  # invisible to it and is covered by the suites instead.
+  # Needs a published baseline to diff against, so it is a no-op until a crate's
+  # first release — and switches itself on when that happens, rather than
+  # waiting for someone to remember. It is a linter, not a prover: behavioural
+  # breakage is invisible to it and is covered by the suites instead.
+  #
+  # One job per crate: they version independently, and `en16931-formats` being
+  # unpublished must not suppress the check on `en16931`.
   semver:
-    name: Semver compatibility
+    name: Semver compatibility (${{ matrix.crate }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: [en16931, en16931-formats]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Is this crate on crates.io yet?
+      - name: Is ${{ matrix.crate }} on crates.io yet?
         id: published
         run: |
-          NAME=$(cargo metadata --no-deps --format-version 1 \
-            | python3 -c "import sys,json,os;m=json.load(sys.stdin);r=os.path.realpath('Cargo.toml');print(next(p['name'] for p in m['packages'] if os.path.realpath(p['manifest_path'])==r))")
-          if curl -sfL "https://crates.io/api/v1/crates/$NAME" -o /dev/null; then
+          if curl -sfL "https://crates.io/api/v1/crates/${{ matrix.crate }}" -o /dev/null; then
             echo "yes=true" >> "$GITHUB_OUTPUT"
           else
             echo "yes=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::$NAME is not published yet — no baseline to compare against"
+            echo "::notice::${{ matrix.crate }} is not published yet — no baseline to compare against"
           fi
       - uses: obi1kenobi/cargo-semver-checks-action@v2
         if: steps.published.outputs.yes == 'true'
+        with:
+          package: ${{ matrix.crate }}
