@@ -1,0 +1,97 @@
+[workspace]
+members = ["xtask"]
+
+# `xtask` is the build-task runner (`cargo xtask codegen`). It is a workspace
+# member rather than a script so the generator is compiled, type-checked and
+# linted like everything else — and so regenerating the code lists needs no
+# toolchain the crate does not already require.
+#
+# It is `publish = false` and its dependencies (an XML parser, which this crate
+# deliberately does not have) never reach a consumer's graph.
+
+[package]
+name         = "en16931"
+version      = "0.1.0"
+edition       = "2024"
+rust-version = "1.85"
+authors      = ["hupe1980"]
+description  = """\
+The EN 16931 semantic data model and its business rules, as Rust types. \
+Validates the model rather than a serialised document, so findings point at \
+BT-151 on line 3 instead of at an XPath. No XML, no PDF, no I/O.\
+"""
+keywords     = ["einvoice", "en16931", "invoice", "xrechnung", "peppol"]
+categories   = ["finance", "data-structures", "encoding"]
+license      = "MIT OR Apache-2.0"
+repository   = "https://github.com/hupe1980/en16931"
+readme       = "README.md"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+## Stronger payment-identifier checks, via the `sepa` crate.
+##
+## `BR-DE-19` / `BR-DE-20` say BT-84 and BT-91 "should contain a valid IBAN".
+## Without this feature that is ISO 7064 mod-97-10 — correct, and blind to
+## length: a German IBAN of 21 characters passes. With it, the check is the full
+## ISO 13616 registry, and BT-90 gains an EPC AT-02 creditor-identifier check
+## that nothing else in the standard performs.
+##
+## Off by default because the default build is `rust_decimal` + `thiserror` and
+## nothing else, and `sepa` brings `quick-xml` — which this crate otherwise
+## goes to some lengths not to have.
+sepa = ["dep:sepa"]
+## Emit a `ValidationReport` as SVRL, the report format every Schematron tool in
+## this field speaks.
+##
+## **Adds no dependencies.** SVRL is a *report* format, not an invoice syntax:
+## writing it needs escaping, not a parser, and no UBL or CII element names. The
+## "no XML" invariant is about never learning a syntax binding, and this does
+## not.
+svrl = []
+default = []
+## `serde::Serialize` / `Deserialize` on all public types.
+##
+## Types carrying invariants re-run their validation on deserialisation via
+## `#[serde(try_from = ...)]` rather than trusting reconstructed fields.
+serde = ["dep:serde", "rust_decimal/serde"]
+## Convert to and from `chrono::NaiveDate`.
+chrono = ["dep:chrono"]
+## Convert to and from `time::Date`.
+time = ["dep:time"]
+## Conversion from `billing::BillingDocument`.
+billing = ["dep:billing"]
+
+[dependencies]
+# The same two dependencies `billing` has, for the same reason: an invoice model
+# has no business pulling in a runtime. Everything else is optional.
+rust_decimal = { version = "1.42", default-features = false, features = ["std"] }
+thiserror    = "2"
+
+billing = { version = "0.10", optional = true }
+serde   = { version = "1", features = ["derive"], optional = true }
+chrono  = { version = "0.4", optional = true, default-features = false }
+time    = { version = "0.3", optional = true, default-features = false }
+sepa = { version = "0.5", default-features = false, optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.7.0", features = ["html_reports"] }
+proptest = "1.11.0"
+# Test-only, for `tests/conformance.rs`: reads CEN's and KoSIT's UBL
+# conformance instances so the rules can be checked against the authorities'
+# own suites. The library ships no XML and has no XML dependency.
+roxmltree = "0.21.1"
+rust_decimal = { version = "1.42", features = ["macros"] }
+serde_json   = "1"
+
+# Both report shapes are feature-gated, so the example is too — rather than
+# compiling to a program that only prints "build with --features …".
+[[example]]
+name              = "report_formats"
+required-features = ["serde", "svrl"]
+
+[[bench]]
+name    = "validate"
+harness = false

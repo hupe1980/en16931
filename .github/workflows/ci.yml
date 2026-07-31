@@ -1,0 +1,191 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call: # reusable — called by release.yml
+
+# Cancel any in-progress run for the same branch / PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  RUSTDOCFLAGS: "-D warnings"
+
+jobs:
+  # ── Formatting ──────────────────────────────────────────────────────────────
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  # ── Linting ─────────────────────────────────────────────────────────────────
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+
+  # ── Documentation ───────────────────────────────────────────────────────────
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --no-deps --all-features
+
+  # ── Feature powerset ────────────────────────────────────────────────────────
+  # Features gate what compiles at all here, so "it builds with everything on"
+  # proves very little. Each combination below changes the dependency graph.
+  features:
+    name: Feature combinations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: no default features
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
+      - name: svrl only
+        run: cargo clippy --all-targets --no-default-features --features svrl -- -D warnings
+      - name: serde only
+        run: cargo clippy --all-targets --no-default-features --features serde -- -D warnings
+      # The whole point of this crate is that it has no I/O and no XML. If it
+      # stops building for wasm32, something was added that should not have been.
+      - name: wasm32
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo build --target wasm32-unknown-unknown --no-default-features --features svrl,serde
+
+  # ── Generated code and the authorities' suites ──────────────────────────────
+  # `src/codes/generated.rs` is derived from the artefacts, not written by hand,
+  # and the conformance suites run CEN's and KoSIT's own instances. Both need
+  # `spec/`, which is not committed — so without this job the code lists could
+  # drift and the conformance suites would skip while still reporting green.
+  codegen:
+    name: Generated code and conformance suites
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Fetch the CEN / KoSIT / Peppol artefacts
+        run: ./fetch-spec.sh
+      - name: Generated code is current
+        run: cargo xtask check
+      - name: Suites that need the artefacts
+        run: cargo test --all-features
+
+  # ── Benchmarks ──────────────────────────────────────────────────────────────
+  # Compile-only: timings on shared runners are too noisy to gate on, but a
+  # benchmark that no longer builds is a real break.
+  bench:
+    name: Benchmarks compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo bench --no-run --all-features
+
+  # ── MSRV ────────────────────────────────────────────────────────────────────
+  msrv:
+    name: MSRV (rust-version = 1.85)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --all-features
+
+  # ── Test matrix ─────────────────────────────────────────────────────────────
+  test:
+    name: Test (${{ matrix.os }} · Rust ${{ matrix.rust }})
+    runs-on: ${{ matrix.os }}
+    needs: [fmt, clippy]       # fail fast before the expensive matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        os:   [ubuntu-latest, macos-latest, windows-latest]
+        rust: [stable, beta]
+        exclude:
+          # beta only on ubuntu, to keep the matrix manageable
+          - os: macos-latest
+            rust: beta
+          - os: windows-latest
+            rust: beta
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}-${{ matrix.rust }}
+      - name: Test — default features
+        run: cargo test --all-targets
+      - name: Test — all features
+        run: cargo test --lib --tests --all-features
+      - name: Test — no default features
+        run: cargo test --all-targets --no-default-features
+      - name: Doc tests
+        run: cargo test --doc --all-features
+
+  # ── Security advisory scan ──────────────────────────────────────────────────
+  audit:
+    name: Security audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Run audit
+        run: cargo audit
+
+  # ── License / dependency policy ─────────────────────────────────────────────
+  deny:
+    name: cargo-deny (licenses + advisories)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: Run cargo-deny
+        run: cargo deny --all-features check
+
+  # ── Semver ──────────────────────────────────────────────────────────────────
+  # Catches API changes that are breaking for the declared version bump. It is a
+  # linter, not a prover: behavioural breakage is invisible to it and is covered
+  # by the round-trip and conformance suites instead.
+  semver:
+    name: Semver compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: obi1kenobi/cargo-semver-checks-action@v2

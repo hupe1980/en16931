@@ -1,0 +1,13 @@
+[package]
+name         = "xtask"
+version      = "0.0.0"
+edition      = "2024"
+rust-version = "1.85"
+publish      = false
+description  = "Build tasks for en16931. Not published; not a dependency of the library."
+
+[dependencies]
+# Parsing a Schematron is parsing XML. The library has no XML dependency and
+# will not gain one — this is a separate, unpublished workspace member, so its
+# dependencies never reach a consumer's graph.
+roxmltree = "0.21"

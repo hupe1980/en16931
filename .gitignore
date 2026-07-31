@@ -19,3 +19,32 @@ target
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+
+# Added by cargo
+
+/target
+
+
+# Added by cargo
+#
+# already existing elements were commented out
+
+#/target
+
+# Reference specifications and validation artefacts (see spec/README.md).
+# Not committed: the CEN validation artefacts are EUPL-1.2 and the vendor
+# specifications carry their own terms — keeping them out of the repo keeps
+# this crate's MIT OR Apache-2.0 licensing clean. Fetch with `just spec`.
+/spec/
+
+
+# Custom 
+# Concept/design documents — local working notes, not part of the crate.
+CONCEPT.md
+XRECHNUNG.md
+ZUGFERD.md
+.DS_Store
+# Python bytecode from codegen/
+__pycache__/
+*.pyc

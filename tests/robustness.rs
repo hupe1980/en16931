@@ -1,0 +1,302 @@
+//! The invariant a validator must never break: **it does not panic.**
+//!
+//! A clearing platform validates millions of documents a day, and it does not
+//! choose them. An invoice arrives from a counterparty, gets parsed into the
+//! model, and is handed to `validate`. If a hostile or merely strange document
+//! can panic the validator, that is a denial of service in a system whose whole
+//! job is to keep running.
+//!
+//! The property is narrow and strong, and it is worth stating precisely:
+//!
+//! > For **any** `Invoice` that can be constructed, `validate` terminates,
+//! > returns a report, and does not panic — including on values at the
+//! > arithmetic boundaries, empty collections, and collections large enough to
+//! > overflow a sum.
+//!
+//! # Why `proptest` and not `cargo-fuzz`
+//!
+//! `cargo-fuzz` needs nightly and a separate crate that never builds in CI on
+//! stable. `proptest` runs in the ordinary test suite on every commit, which
+//! means the property is checked continuously rather than during an occasional
+//! campaign. Coverage-guided fuzzing finds *deeper* inputs, so it is worth
+//! adding later — but a property that only runs when someone remembers is a
+//! property that regresses.
+//!
+//! # What is deliberately generated
+//!
+//! Not "random bytes": the model is typed, so garbage bytes cannot reach it.
+//! The interesting inputs are **structurally valid but semantically absurd**
+//! documents — `i64::MAX` amounts that overflow when summed, thousands of lines,
+//! negative quantities against negative prices, empty strings where codes go.
+//! Those are what the arithmetic rules have to survive.
+
+use en16931::invoice::*;
+use en16931::{Date, InvoiceAmount, Percentage, Quantity, UnitPriceAmount, profiles, validate};
+use proptest::prelude::*;
+use rust_decimal::Decimal;
+
+/// Amounts clustered at the boundaries, where the overflow lives.
+fn any_amount() -> impl Strategy<Value = InvoiceAmount> {
+    prop_oneof![
+        // The extremes, which is where `checked_add` earns its keep.
+        Just(InvoiceAmount::from_minor_units(i64::MAX)),
+        Just(InvoiceAmount::from_minor_units(i64::MIN)),
+        Just(InvoiceAmount::ZERO),
+        any::<i64>().prop_map(InvoiceAmount::from_minor_units),
+        (-1_000_000i64..1_000_000).prop_map(InvoiceAmount::from_minor_units),
+    ]
+}
+
+fn any_code() -> impl Strategy<Value = Code> {
+    prop_oneof![
+        Just(Code::new("")),
+        Just(Code::new("S")),
+        Just(Code::new("Z")),
+        Just(Code::new("O")),
+        Just(Code::new("EUR")),
+        "[A-Za-z0-9 ]{0,8}".prop_map(Code::new),
+    ]
+}
+
+fn any_percentage() -> impl Strategy<Value = Percentage> {
+    prop_oneof![
+        Just(Percentage::ZERO),
+        Just(Percentage::new(Decimal::MAX)),
+        Just(Percentage::new(Decimal::MIN)),
+        (-100i64..1000).prop_map(|v| Percentage::new(Decimal::from(v))),
+    ]
+}
+
+fn any_quantity() -> impl Strategy<Value = Quantity> {
+    prop_oneof![
+        Just(Quantity::new(Decimal::ZERO)),
+        Just(Quantity::new(Decimal::MAX)),
+        Just(Quantity::new(Decimal::MIN)),
+        (-1000i64..1000).prop_map(|v| Quantity::new(Decimal::from(v))),
+    ]
+}
+
+fn any_line() -> impl Strategy<Value = InvoiceLine> {
+    (
+        any_amount(),
+        any_quantity(),
+        any_code(),
+        any_code(),
+        any_percentage(),
+        any::<bool>(),
+    )
+        .prop_map(|(net, qty, unit, cat, rate, has_rate)| InvoiceLine {
+            id: String::new(),
+            note: None,
+            order_line_reference: None,
+            accounting_reference: None,
+            object_identifier: None,
+            quantity: qty,
+            unit_code: unit,
+            net_amount: net,
+            period: None,
+            allowances: vec![],
+            charges: vec![],
+            price: PriceDetails {
+                // A zero base quantity is the division-by-zero `R120` must not
+                // take; generating it deliberately.
+                base_quantity: Some(qty),
+                net_price: UnitPriceAmount::new(Decimal::from(2)),
+                ..Default::default()
+            },
+            vat: LineVat {
+                category: cat,
+                rate: has_rate.then_some(rate),
+            },
+            item: Item::default(),
+        })
+}
+
+fn any_breakdown() -> impl Strategy<Value = VatBreakdown> {
+    (any_amount(), any_amount(), any_code(), any_percentage()).prop_map(
+        |(taxable, tax, cat, rate)| VatBreakdown {
+            taxable_amount: taxable,
+            tax_amount: tax,
+            category: cat,
+            rate: Some(rate),
+            exemption_reason: None,
+            exemption_reason_code: None,
+        },
+    )
+}
+
+prop_compose! {
+    /// A document that is structurally valid and semantically arbitrary.
+    fn any_invoice()(
+        lines in prop::collection::vec(any_line(), 0..12),
+        breakdown in prop::collection::vec(any_breakdown(), 0..6),
+        line_total in any_amount(),
+        taxable in any_amount(),
+        vat in proptest::option::of(any_amount()),
+        gross in any_amount(),
+        due in any_amount(),
+        currency in proptest::option::of(any_code()),
+        type_code in proptest::option::of(any_code()),
+        credit_note in any::<bool>(),
+    ) -> Invoice {
+        let mut inv = Invoice::default();
+        inv.kind = if credit_note { DocumentKind::CreditNote } else { DocumentKind::Invoice };
+        inv.currency = currency;
+        inv.type_code = type_code;
+        inv.lines = lines;
+        inv.vat_breakdown = breakdown;
+        inv.totals = DocumentTotals {
+            line_total,
+            taxable_total: taxable,
+            vat_total: vat,
+            gross_total: gross,
+            due,
+            ..Default::default()
+        };
+        inv
+    }
+}
+
+proptest! {
+    /// `validate` never panics, whatever the document.
+    #[test]
+    fn validate_never_panics(inv in any_invoice()) {
+        let report = validate(&inv);
+        // Touch every accessor: a panic hiding in one of them is still a panic
+        // in the caller's process.
+        let _ = report.is_valid();
+        let _ = report.rules_checked();
+        let _ = report.fatal().count();
+        let _ = report.warnings().count();
+        let _ = report.info().count();
+        let _ = report.advisory().count();
+        let _ = report.to_string();
+    }
+
+    /// Nor does any shipped profile, which runs strictly more rules.
+    #[test]
+    fn no_profile_panics(inv in any_invoice()) {
+        for p in profiles::ALL {
+            let report = p.validate(&inv);
+            let _ = report.is_valid();
+            let _ = report.to_string();
+        }
+    }
+
+    /// Validation is **deterministic and stably ordered**.
+    ///
+    /// A report is an artefact you store, diff and gate CI on. Two runs over the
+    /// same document that differ in order make every one of those uses a source
+    /// of noise.
+    #[test]
+    fn reports_are_deterministic(inv in any_invoice()) {
+        let a = validate(&inv);
+        let b = validate(&inv);
+        prop_assert_eq!(a.findings().len(), b.findings().len());
+        for (x, y) in a.findings().iter().zip(b.findings()) {
+            prop_assert_eq!(&x.rule, &y.rule);
+            prop_assert_eq!(x.path.to_string(), y.path.to_string());
+        }
+    }
+
+    /// Every finding names something the crate can explain — **under every
+    /// profile**, not just the core set.
+    ///
+    /// A report citing an id nobody can look up is worse than silence: it sends
+    /// the reader to KoSIT's index for a rule that is not there.
+    ///
+    /// The profile half is the half that mattered. `explain` searched `CORE`
+    /// only, so an ordinary XRechnung report — `BR-DE-16`,
+    /// `PEPPOL-EN16931-R120`, `BR-DEX-09` — resolved to `None` for every id in
+    /// it, and this property passed anyway because it only looked at
+    /// `validate()`.
+    #[test]
+    fn every_finding_can_be_explained(inv in any_invoice()) {
+        use en16931::validation::rules::{explain, explain_restriction};
+        for p in profiles::ALL {
+            for f in p.validate(&inv).findings() {
+                prop_assert!(
+                    explain(&f.rule).is_some() || explain_restriction(&f.rule).is_some(),
+                    "{} reports {} and nothing can explain it", p.id, f.rule
+                );
+            }
+        }
+    }
+
+    /// **§4.4.4, as a property.** A conformant CIUS never accepts a document
+    /// core EN 16931 rejects.
+    ///
+    /// This is what makes `Validated::widen` infallible, and it is the kind of
+    /// claim that deserves arbitrary input rather than a fixture: the structural
+    /// argument ("every restriction is a narrowing") is only as good as the
+    /// `Restriction` variants, and `extra_rules` is not a restriction at all.
+    ///
+    /// Profiles that suppress a core rule are excluded — they are not CIUSes,
+    /// and `is_conformant_cius()` is the thing that says so.
+    #[test]
+    fn conformant_profiles_never_accept_what_core_rejects(inv in any_invoice()) {
+        for p in profiles::ALL.iter().filter(|p| p.is_conformant_cius()) {
+            let mut doc = inv.clone();
+            doc.specification_id = Some(p.specification_id.to_owned());
+            if p.validate(&doc).is_valid() {
+                prop_assert!(
+                    validate(&doc).is_valid(),
+                    "{} accepted a document core EN 16931 rejects", p.id
+                );
+            }
+        }
+    }
+
+    /// `is_valid()` agrees with the absence of fatal findings, always.
+    #[test]
+    fn is_valid_means_no_fatal_findings(inv in any_invoice()) {
+        let report = validate(&inv);
+        prop_assert_eq!(report.is_valid(), report.fatal().count() == 0);
+    }
+}
+
+/// A minimal line carrying `net`. `InvoiceLine` has no `Default` on purpose —
+/// BT-129, BT-130, BT-131 and BG-29 are all mandatory — so tests spell it out.
+fn line(net: InvoiceAmount) -> InvoiceLine {
+    InvoiceLine {
+        id: String::new(),
+        note: None,
+        order_line_reference: None,
+        accounting_reference: None,
+        object_identifier: None,
+        quantity: Quantity::new(Decimal::ONE),
+        unit_code: Code::new("C62"),
+        net_amount: net,
+        period: None,
+        allowances: vec![],
+        charges: vec![],
+        price: PriceDetails::default(),
+        vat: LineVat::default(),
+        item: Item::default(),
+    }
+}
+
+/// The boundary cases worth naming, rather than hoping the generator finds them.
+#[test]
+fn the_extremes_are_survivable() {
+    // A sum that overflows `i64` twice over.
+    let mut inv = Invoice::default();
+    inv.totals.line_total = InvoiceAmount::from_minor_units(i64::MAX);
+    inv.lines = (0..3)
+        .map(|_| line(InvoiceAmount::from_minor_units(i64::MAX)))
+        .collect();
+    let _ = validate(&inv);
+
+    // A zero base quantity: `R120` divides by it if nothing stops it.
+    let mut inv = Invoice::default();
+    let mut l = line(InvoiceAmount::ZERO);
+    l.price.base_quantity = Some(Quantity::new(Decimal::ZERO));
+    inv.lines = vec![l];
+    for p in profiles::ALL {
+        let _ = p.validate(&inv);
+    }
+
+    // A date at the calendar's edge.
+    assert!(Date::parse("9999-12-31").is_ok());
+    assert!(Date::parse("0000-01-01").is_ok());
+}
