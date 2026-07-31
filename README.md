@@ -1057,7 +1057,7 @@ it would have been wrong in both directions.
 ## Getting the specifications
 
 ```sh
-./fetch-spec.sh          # → spec/, gitignored, ~138 MB
+cargo xtask fetch          # → spec/, gitignored, ~138 MB
 cargo test               # …and the conformance suites become live
 ```
 

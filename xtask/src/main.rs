@@ -1,6 +1,7 @@
 //! Build tasks for `en16931`.
 //!
 //! ```text
+//! cargo xtask fetch        download the artefacts into spec/
 //! cargo xtask codegen      regenerate src/codes/generated.rs from spec/
 //! cargo xtask check        regenerate into memory and fail if it differs
 //! ```
@@ -30,6 +31,8 @@
 //! The generator is compiled, type-checked and linted like the rest of the
 //! crate. `cargo xtask check` runs in CI, so the committed tables cannot drift
 //! away from the artefacts they claim to come from.
+
+mod fetch;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -238,7 +241,7 @@ fn spec() -> Result<PathBuf, String> {
     if p.is_dir() {
         Ok(p)
     } else {
-        Err("no spec/ directory — run ./fetch-spec.sh".to_owned())
+        Err("no spec/ directory — run `cargo xtask fetch`".to_owned())
     }
 }
 
@@ -469,7 +472,7 @@ fn generate() -> Result<(String, Vec<String>), String> {
         "//! Code lists generated from the CEN validation artefacts.\n\
          //!\n\
          //! **Do not edit.** Regenerate with `cargo xtask codegen` after\n\
-         //! `./fetch-spec.sh`, and review the diff.\n\
+         //! `cargo xtask fetch`, and review the diff.\n\
          //!\n\
          //! Artefact revision: `{ARTEFACT}`. Peppol tables: Peppol BIS Billing 3.0.\n\
          //!\n\
@@ -710,6 +713,7 @@ fn run(check_only: bool) -> Result<(), String> {
 
 fn main() -> ExitCode {
     let result = match std::env::args().nth(1).as_deref() {
+        Some("fetch") => fetch::run_fetch(),
         Some("codegen") => run(false),
         Some("check") => run(true),
         Some(other) => Err(format!("unknown task {other:?}\n\n{USAGE}")),

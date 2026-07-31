@@ -294,7 +294,7 @@ fn run(case: &Case, reader: &mut ubl::Reader, unevaluated: &BTreeSet<String>) ->
 fn cen_conformance_suite() {
     let cases = cases();
     if cases.is_empty() {
-        eprintln!("skipping: artefacts not present (run ./fetch-spec.sh)");
+        eprintln!("skipping: artefacts not present (run `cargo xtask fetch`)");
         return;
     }
     let unevaluated = unevaluated();
@@ -619,7 +619,7 @@ fn mutations() -> Vec<Mutation> {
 fn xrechnung_mutation_suite() {
     let all = mutations();
     if all.is_empty() {
-        eprintln!("skipping: artefacts not present (run ./fetch-spec.sh)");
+        eprintln!("skipping: artefacts not present (run `cargo xtask fetch`)");
         return;
     }
     let mut reader = ubl::Reader::default();
@@ -830,7 +830,7 @@ fn the_authorities_example_invoices_are_valid() {
     }
 
     if checked == 0 {
-        eprintln!("skipping: artefacts not present (run ./fetch-spec.sh)");
+        eprintln!("skipping: artefacts not present (run `cargo xtask fetch`)");
         return;
     }
     eprintln!(

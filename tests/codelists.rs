@@ -19,7 +19,7 @@
 //!
 //! # Running it
 //!
-//! Needs the artefacts: run `./fetch-spec.sh` first. Without `spec/` the test
+//! Needs the artefacts: run `cargo xtask fetch` first. Without `spec/` the test
 //! **skips** rather than fails, so a contributor without the artefacts — or CI
 //! without network — can still run the suite. The skip is printed, not silent.
 
@@ -92,7 +92,7 @@ fn assert_table_matches(xml: &str, name: &str, rule: &str, table: &[&str]) {
 #[test]
 fn committed_tables_match_the_artefacts() {
     let Some(path) = artefact() else {
-        eprintln!("skipping: {CODES_SCH} not present — run ./fetch-spec.sh");
+        eprintln!("skipping: {CODES_SCH} not present — run `cargo xtask fetch`");
         return;
     };
     let xml = std::fs::read_to_string(&path).expect("read artefact");

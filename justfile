@@ -8,10 +8,12 @@ default:
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
-# Fetch the CEN / KoSIT / Peppol artefacts into ./spec/ (not committed: the CEN
-# artefacts are EUPL-1.2 and the vendor specifications carry their own terms).
+# Fetch the CEN / KoSIT / Peppol artefacts into ./spec/.
+#
+# Not committed: the CEN artefacts are EUPL-1.2, a reciprocal licence, and
+# keeping them out of the repository is what keeps this crate MIT OR Apache-2.0.
 spec:
-    ./fetch-spec.sh
+    cargo xtask fetch
 
 # ── Code quality ──────────────────────────────────────────────────────────────
 

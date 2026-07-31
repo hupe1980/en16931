@@ -1,7 +1,7 @@
 //! Code lists generated from the CEN validation artefacts.
 //!
 //! **Do not edit.** Regenerate with `cargo xtask codegen` after
-//! `./fetch-spec.sh`, and review the diff.
+//! `cargo xtask fetch`, and review the diff.
 //!
 //! Artefact revision: `validation-1.3.16`. Peppol tables: Peppol BIS Billing 3.0.
 //!

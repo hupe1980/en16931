@@ -90,7 +90,7 @@ jobs:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Fetch the CEN / KoSIT / Peppol artefacts
-        run: ./fetch-spec.sh
+        run: cargo xtask fetch
       - name: Generated code is current
         run: cargo xtask check
       - name: Suites that need the artefacts
