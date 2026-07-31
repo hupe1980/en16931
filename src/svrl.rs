@@ -72,6 +72,40 @@ fn escape(s: &str, out: &mut String) {
     }
 }
 
+/// Write `<!-- body -->`, safely.
+///
+/// XML forbids `--` **anywhere inside** a comment and forbids a comment ending
+/// in `-`. Both are reachable from outside this crate: [`ValidationReport::suppressed`]
+/// carries rule ids a caller chose, and `Check::without("BR--CO-26")` produced a
+/// document no parser would accept.
+///
+/// Entities are *not* escaped here, and that is deliberate: a comment's content
+/// is not parsed, so writing `&amp;` inside one puts the five literal characters
+/// `&amp;` in front of the reader rather than an ampersand.
+fn comment(body: &str, out: &mut String) {
+    out.push_str("<!-- ");
+    let mut last_was_dash = false;
+    for c in body.chars() {
+        match c {
+            // Collapse a run of hyphens to one. Replacing rather than dropping
+            // keeps `BR--CO-26` legible as `BR-CO-26` instead of `BRCO-26`.
+            '-' if last_was_dash => {}
+            '-' => {
+                last_was_dash = true;
+                out.push('-');
+            }
+            // XML 1.0 cannot represent these at all, comment or not.
+            c if (c as u32) < 0x20 && !matches!(c, '\t' | '\n' | '\r') => {}
+            c => {
+                last_was_dash = false;
+                out.push(c);
+            }
+        }
+    }
+    // A comment may not end with `-`; the space before `-->` also guarantees it.
+    out.push_str(" -->");
+}
+
 const fn flag(s: Severity) -> &'static str {
     match s {
         Severity::Fatal => "fatal",
@@ -100,24 +134,26 @@ pub fn to_svrl(report: &ValidationReport) -> String {
 
     // The caveats, in the document rather than only in the docs — whoever reads
     // this file is exactly the person who needs them.
-    out.push_str(
-        "  <!-- Produced by en16931 from the semantic model. `location` is a \
+    out.push_str("  ");
+    comment(
+        "Produced by en16931 from the semantic model. `location` is a \
          business-term path, not an XPath: there is no source document. `test` \
-         names the rule; these rules are code, not XPath. -->\n",
+         names the rule; these rules are code, not XPath.",
+        &mut out,
     );
-    out.push_str(&format!(
-        "  <!-- {} -->\n",
-        crate::ATTRIBUTION.replace("--", "-")
-    ));
+    out.push('\n');
+    out.push_str("  ");
+    comment(crate::ATTRIBUTION, &mut out);
+    out.push('\n');
 
     out.push_str("  <svrl:active-pattern name=\"");
     escape(report.profile().unwrap_or("EN 16931"), &mut out);
     out.push_str("\"/>\n");
 
     for id in report.suppressed() {
-        out.push_str("  <!-- suppressed, NOT checked: ");
-        escape(id, &mut out);
-        out.push_str(" -->\n");
+        out.push_str("  ");
+        comment(&format!("suppressed, NOT checked: {id}"), &mut out);
+        out.push('\n');
     }
 
     for f in report.findings() {
@@ -186,6 +222,93 @@ mod tests {
             .run(&Invoice::default());
         let xml = to_svrl(&report);
         assert!(xml.contains("suppressed, NOT checked: BR-CO-26"));
+    }
+
+    /// **Parse** the output, rather than looking for substrings in it.
+    ///
+    /// Every other test here used `contains`, and an unbalanced tag, a bad
+    /// escape or an illegal comment would have satisfied all of them. It did:
+    /// a suppressed rule id containing `--` produced a document no parser
+    /// accepts, and nothing noticed until someone ran it.
+    #[test]
+    fn the_output_is_well_formed_xml() {
+        let report = profiles::XRECHNUNG.validate(&Invoice::default());
+        let xml = to_svrl(&report);
+        let doc = roxmltree::Document::parse(&xml).expect("well-formed SVRL");
+
+        let root = doc.root_element();
+        assert_eq!(root.tag_name().name(), "schematron-output");
+        assert_eq!(root.tag_name().namespace(), Some(SVRL_NS));
+        assert!(
+            root.attribute("title")
+                .is_some_and(|t| t.contains("XRechnung"))
+        );
+        assert_eq!(
+            root.attribute("schemaVersion"),
+            Some("EN 16931-1:2017+A1:2019")
+        );
+
+        let asserts: Vec<_> = root
+            .children()
+            .filter(|n| n.has_tag_name((SVRL_NS, "failed-assert")))
+            .collect();
+        assert_eq!(asserts.len(), report.findings().len());
+
+        for (node, finding) in asserts.iter().zip(report.findings()) {
+            // SVRL requires all three; a consumer keying on any of them must
+            // not meet an absent attribute.
+            assert_eq!(node.attribute("id"), Some(finding.rule.as_str()));
+            assert_eq!(
+                node.attribute("location"),
+                Some(finding.path.to_string().as_str())
+            );
+            assert_eq!(
+                node.attribute("test"),
+                Some(format!("en16931:{}", finding.rule).as_str())
+            );
+            assert!(matches!(
+                node.attribute("flag"),
+                Some("fatal" | "warning" | "information")
+            ));
+            let text = node
+                .children()
+                .find(|n| n.has_tag_name((SVRL_NS, "text")))
+                .and_then(|n| n.text())
+                .unwrap_or_default();
+            assert!(text.starts_with(&finding.message), "{text:?}");
+        }
+    }
+
+    /// Comment content that a caller can choose must not break the document.
+    ///
+    /// `Check::without` takes a `&str`, so the suppressed list is user input
+    /// that lands inside an XML comment — where `--` is illegal outright.
+    #[test]
+    fn hostile_suppressions_stay_well_formed() {
+        for id in [
+            "BR--CO-26",  // `--` is illegal anywhere inside a comment
+            "BR-CO-26--", // …including immediately before the close
+            "BR-CO-26-",  // a comment may not end with `-`
+            "a<b&c>d",    // metacharacters, which a comment does not escape
+            "BR\u{7}CO",  // a control character XML cannot represent
+            "----------",
+        ] {
+            let report = crate::validation::Check::new(&profiles::EN16931)
+                .without(id)
+                .run(&Invoice::default());
+            let xml = to_svrl(&report);
+            roxmltree::Document::parse(&xml)
+                .unwrap_or_else(|e| panic!("suppressing {id:?} produced invalid XML: {e}\n{xml}"));
+        }
+    }
+
+    /// A comment does not interpret entities, so escaping inside one is wrong:
+    /// it puts the five characters `&amp;` in front of the reader.
+    #[test]
+    fn comments_are_not_entity_escaped() {
+        let mut s = String::new();
+        comment("a & b < c", &mut s);
+        assert_eq!(s, "<!-- a & b < c -->");
     }
 
     /// Rule text is CEN's and contains characters XML cares about.

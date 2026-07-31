@@ -35,11 +35,24 @@
 //! the XML can map a BT path to an XPath. The reverse is lossy, so the semantic
 //! form is the one worth storing.
 //!
+//! # Why the string fields are `Cow`
+//!
+//! They were `&'static str`, which made the type **impossible to deserialise**:
+//! `serde` would have needed JSON that outlives the program. A shape whose
+//! stated purpose is "persist reports and read them back" that cannot be read
+//! back is not a shape, and `derive(Deserialize)` compiled anyway because the
+//! impl is only unusable at the call site.
+//!
+//! `Cow<'static, str>` costs nothing on the way out — every value comes from a
+//! constant, so it borrows — and deserialises into owned data on the way in.
+//!
 //! # The notice travels with it
 //!
 //! [`Report::attribution`] carries the CEN notice, because the licence condition
 //! is that it is visible to users — and a report handed to another system is
 //! exactly a place where the crate's own `Display` is not what anyone reads.
+
+use std::borrow::Cow;
 
 use crate::validation::{Finding, Severity, Source, ValidationReport};
 
@@ -63,17 +76,17 @@ pub const SCHEMA: &str = "en16931-report/1";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Report {
     /// Always [`SCHEMA`]. Reject what you do not recognise.
-    pub schema: &'static str,
+    pub schema: Cow<'static, str>,
     /// Whether anything fatal fired.
     pub valid: bool,
     /// The profile it was checked against, or `null` for the bare core rules.
     pub profile: Option<String>,
     /// Which edition of EN 16931-1 those rules belong to.
-    pub edition: &'static str,
+    pub edition: Cow<'static, str>,
     /// How many rules ran — SVRL's `fired-rule` count, in effect.
     pub rules_checked: usize,
     /// The CEN attribution notice. A licence condition, not metadata.
-    pub attribution: &'static str,
+    pub attribution: Cow<'static, str>,
     /// Rules the caller asked to skip, and which were therefore **not checked**.
     ///
     /// Empty on an ordinary run. Non-empty means `valid` is a weaker claim than
@@ -92,10 +105,10 @@ pub struct Entry {
     /// The rule id, as the authority publishes it — SVRL's `@id`.
     pub rule: String,
     /// SVRL's `@flag`: `fatal`, `warning` or `information`.
-    pub severity: &'static str,
+    pub severity: Cow<'static, str>,
     /// Where the rule came from — this crate's addition, and the thing that
     /// tells a reader whether an id is CEN's, a profile's, or ours.
-    pub source: &'static str,
+    pub source: Cow<'static, str>,
     /// A **business-term** path, `BG-25[2]/BT-151`, where SVRL puts an XPath.
     pub location: String,
     /// The rule's own wording — SVRL's `svrl:text`.
@@ -128,12 +141,12 @@ impl Report {
     #[must_use]
     pub fn of(report: &ValidationReport) -> Self {
         Self {
-            schema: SCHEMA,
+            schema: Cow::Borrowed(SCHEMA),
             valid: report.is_valid(),
             profile: report.profile().map(str::to_owned),
-            edition: report.edition().designation(),
+            edition: Cow::Borrowed(report.edition().designation()),
             rules_checked: report.rules_checked(),
-            attribution: crate::ATTRIBUTION,
+            attribution: Cow::Borrowed(crate::ATTRIBUTION),
             suppressed: report.suppressed().to_vec(),
             findings: report.findings().iter().map(Entry::of).collect(),
         }
@@ -147,12 +160,14 @@ impl Entry {
         // The rule's provenance is not on the `Finding` — it is on the rule — so
         // it is looked up. An id that resolves to nothing is a restriction,
         // which is always a profile's own.
+        // A rule id that resolves to nothing is a profile restriction, which is
+        // always the profile's own.
         let source =
             crate::validation::rules::explain(&f.rule).map_or("profile", |r| source_name(r.source));
         Self {
             rule: f.rule.clone(),
-            severity: severity_name(f.severity),
-            source,
+            severity: Cow::Borrowed(severity_name(f.severity)),
+            source: Cow::Borrowed(source),
             location: f.path.to_string(),
             text: f.message.clone(),
             expected: f.detail.as_ref().map(|d| d.expected.clone()),
@@ -186,7 +201,7 @@ mod tests {
 
         let e = out.findings.first().expect("findings");
         assert!(!e.rule.is_empty());
-        assert!(matches!(e.severity, "fatal" | "warning" | "information"));
+        assert!(matches!(&*e.severity, "fatal" | "warning" | "information"));
         assert!(!e.location.is_empty(), "SVRL's `location`, semantically");
         assert!(!e.text.is_empty(), "SVRL's `svrl:text`");
     }
@@ -215,6 +230,37 @@ mod tests {
         assert!(clean.suppressed.is_empty());
     }
 
+    /// The shape can be **read back**, which is the whole reason it exists.
+    ///
+    /// The fields were `&'static str`, so `derive(Deserialize)` compiled and
+    /// produced an impl no caller could use: deserialising needed JSON that
+    /// outlived the program. Nothing caught it because no test ever read one
+    /// back — the type was only ever serialised.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn a_report_survives_a_round_trip_through_json() {
+        let report = profiles::XRECHNUNG.validate(&Invoice::default());
+        let out = Report::of(&report);
+
+        let json = serde_json::to_string(&out).expect("serialise");
+        let back: Report = serde_json::from_str(&json).expect("deserialise");
+
+        assert_eq!(back, out);
+        assert_eq!(back.schema, SCHEMA);
+        assert_eq!(back.findings.len(), report.findings().len());
+    }
+
+    /// A consumer must be able to reject a schema version it does not know.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn an_unknown_schema_version_is_visible_to_a_reader() {
+        let json = serde_json::to_string(&Report::of(&validate(&Invoice::default())))
+            .expect("serialise")
+            .replace(SCHEMA, "en16931-report/99");
+        let back: Report = serde_json::from_str(&json).expect("deserialise");
+        assert_ne!(back.schema, SCHEMA, "a reader can compare and refuse");
+    }
+
     /// Provenance survives, so a reader can tell CEN's rules from ours.
     #[test]
     fn provenance_is_carried_per_finding() {
@@ -225,7 +271,7 @@ mod tests {
             .find(|e| e.rule.starts_with("BR-"))
             .expect("a CEN rule fired");
         assert!(
-            matches!(br.source, "standard+artefact" | "standard" | "artefact"),
+            matches!(&*br.source, "standard+artefact" | "standard" | "artefact"),
             "{}",
             br.source
         );
