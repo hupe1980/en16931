@@ -22,11 +22,23 @@ fn main() {
     let invoice = Invoice::default();
 
     // Every profile the crate knows, and how strict each is.
-    println!("{:<22} {:>6} {:>9}", "profile", "rules", "findings");
+    //
+    // The width comes from the data. A hard-coded one was too narrow by a
+    // single character for "XRechnung 3.0 Extension", which pushed that row's
+    // columns out of line — the sort of thing nobody notices until the output
+    // is in a bug report.
+    let width = profiles::ALL
+        .iter()
+        .map(|p| p.id.len())
+        .chain(std::iter::once("profile".len()))
+        .max()
+        .unwrap_or(24);
+
+    println!("{:<width$} {:>6} {:>9}", "profile", "rules", "findings");
     for profile in profiles::ALL {
         let report = profile.validate(&invoice);
         println!(
-            "{:<22} {:>6} {:>9}",
+            "{:<width$} {:>6} {:>9}",
             profile.id,
             report.rules_checked(),
             report.findings().len()
@@ -50,10 +62,25 @@ fn main() {
             // pay for that in stack size.
             let (_invoice, report) = *rejected;
             println!("refused, with {} finding(s):", report.findings().len());
-            for f in report.findings().iter().take(5) {
-                println!("  {} — {}", f.rule, f.path);
+
+            // Findings are ordered by **business-term path**, not by rule id —
+            // BT-1, BT-2, … BT-24, then the groups — because that is the order
+            // someone fixing the invoice works in. Printing the path makes the
+            // ordering self-evident; truncating without it made `BR-01` (BT-24)
+            // look absent when it was simply further down.
+            const SHOWN: usize = 8;
+            let shown = &report.findings()[..SHOWN.min(report.findings().len())];
+            // From the data again. A fixed width was wrong here too:
+            // `PEPPOL-EN16931-R001` is nineteen characters.
+            let w = shown.iter().map(|f| f.rule.len()).max().unwrap_or(0);
+            for f in shown {
+                println!("  {:<w$} {}", f.rule, f.path);
             }
-            println!("  …");
+            if let Some(rest) = report.findings().len().checked_sub(SHOWN)
+                && rest > 0
+            {
+                println!("  … and {rest} more, in business-term order");
+            }
             println!("\nThe invoice comes back with the report, so a caller can fix and retry.");
         }
     }
