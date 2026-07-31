@@ -109,9 +109,8 @@ jobs:
       - run: cargo bench --no-run --all-features
 
   # ── MSRV ────────────────────────────────────────────────────────────────────
-  # The toolchain comes from `rust-version` in Cargo.toml, not from a number
-  # written here. Hard-coding it is how this job passed for months against a
-  # declared MSRV of 1.85 that the crate had never actually supported.
+  # The toolchain comes from Cargo.toml, so the job and the manifest cannot
+  # disagree — or agree while both are wrong, which is what happened.
   msrv:
     name: MSRV (from Cargo.toml)
     runs-on: ubuntu-latest
@@ -129,9 +128,8 @@ jobs:
         with:
           toolchain: ${{ steps.msrv.outputs.version }}
       - uses: Swatinem/rust-cache@v2
-      # Build, not test: dev-dependencies are free to require a newer compiler
-      # than the crate does, and holding them to the MSRV would pin the MSRV to
-      # whatever criterion needs this month.
+      # Build, not test: dev-dependencies may need a newer compiler than the
+      # crate, and holding them to the MSRV would pin it to theirs.
       - run: cargo build --all-features
       - run: cargo build --no-default-features
 

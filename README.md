@@ -1063,15 +1063,8 @@ just ci                  # everything CI runs, locally
 
 ### Minimum supported Rust version
 
-**1.88**, and it is measured: 1.87 fails, 1.88 builds, and CI reads the number
-out of `Cargo.toml` rather than repeating it. The rule code uses `let`-chains —
-`if let Some(a) = x && let Some(b) = y` — which stabilised in 1.88, and
-rewriting them as nested `if let` would cost real readability in exactly the
-code that most needs it. The optional `sepa` feature requires 1.88
-independently, so nothing is gained by going lower.
-
-This said 1.85 for a long time and was simply wrong; nothing checked it, and the
-one job that would have was hard-coded to the same wrong number.
+**1.88** — the rule code uses `let`-chains. Measured, not declared: 1.87 fails,
+and CI reads the number from `Cargo.toml` rather than repeating it.
 
 ### The artefacts
 

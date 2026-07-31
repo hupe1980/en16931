@@ -1,28 +1,14 @@
 [workspace]
 members = ["xtask"]
 
-# `xtask` is the build-task runner (`cargo xtask codegen`). It is a workspace
-# member rather than a script so the generator is compiled, type-checked and
-# linted like everything else — and so regenerating the code lists needs no
-# toolchain the crate does not already require.
-#
-# It is `publish = false` and its dependencies (an XML parser, which this crate
-# deliberately does not have) never reach a consumer's graph.
+# `xtask` is the build-task runner (`cargo xtask fetch` / `codegen`). Not
+# published, and its dependencies never reach a consumer.
 
 [package]
 name         = "en16931"
 version      = "0.1.0"
 edition       = "2024"
-# Rust 1.88, measured rather than declared.
-#
-# The rule code uses `let`-chains — `if let Some(a) = x && let Some(b) = y` —
-# which stabilised in 1.88. Eight of them in this crate, and rewriting them as
-# nested `if let` would cost real readability in exactly the code that most
-# needs it. The optional `sepa` dependency requires 1.88 independently.
-#
-# This said 1.85 for a long time and was simply wrong: nothing checked it. CI
-# now reads this value with `cargo metadata` and builds against that exact
-# toolchain, so the number and the truth cannot drift apart again.
+# `let`-chains, stabilised in 1.88. CI reads this value rather than repeating it.
 rust-version = "1.88"
 authors      = ["hupe1980"]
 description  = """\
@@ -43,23 +29,17 @@ rustdoc-args = ["--cfg", "docsrs"]
 [features]
 ## Stronger payment-identifier checks, via the `sepa` crate.
 ##
-## `BR-DE-19` / `BR-DE-20` say BT-84 and BT-91 "should contain a valid IBAN".
-## Without this feature that is ISO 7064 mod-97-10 — correct, and blind to
-## length: a German IBAN of 21 characters passes. With it, the check is the full
-## ISO 13616 registry, and BT-90 gains an EPC AT-02 creditor-identifier check
-## that nothing else in the standard performs.
+## Without it, BT-84's IBAN check is ISO 7064 mod-97-10 — correct, and blind to
+## length, so a 21-character German IBAN passes. With it, the full ISO 13616
+## registry, plus an EPC creditor-identifier check on BT-90.
 ##
-## Off by default because the default build is `rust_decimal` + `thiserror` and
-## nothing else, and `sepa` brings `quick-xml` — which this crate otherwise
-## goes to some lengths not to have.
+## Off by default: it brings `quick-xml`, which this crate otherwise goes to
+## some lengths not to have.
 sepa = ["dep:sepa"]
-## Emit a `ValidationReport` as SVRL, the report format every Schematron tool in
-## this field speaks.
+## Emit a `ValidationReport` as SVRL, which every Schematron tool here speaks.
 ##
-## **Adds no dependencies.** SVRL is a *report* format, not an invoice syntax:
-## writing it needs escaping, not a parser, and no UBL or CII element names. The
-## "no XML" invariant is about never learning a syntax binding, and this does
-## not.
+## **Adds no dependencies.** SVRL is a report format, not an invoice syntax:
+## writing it needs escaping, not a parser, and no UBL or CII element names.
 svrl = []
 default = []
 ## `serde::Serialize` / `Deserialize` on all public types.
