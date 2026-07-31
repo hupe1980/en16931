@@ -13,7 +13,17 @@ members = ["xtask"]
 name         = "en16931"
 version      = "0.1.0"
 edition       = "2024"
-rust-version = "1.85"
+# Rust 1.88, measured rather than declared.
+#
+# The rule code uses `let`-chains — `if let Some(a) = x && let Some(b) = y` —
+# which stabilised in 1.88. Eight of them in this crate, and rewriting them as
+# nested `if let` would cost real readability in exactly the code that most
+# needs it. The optional `sepa` dependency requires 1.88 independently.
+#
+# This said 1.85 for a long time and was simply wrong: nothing checked it. CI
+# now reads this value with `cargo metadata` and builds against that exact
+# toolchain, so the number and the truth cannot drift apart again.
+rust-version = "1.88"
 authors      = ["hupe1980"]
 description  = """\
 The EN 16931 semantic data model and its business rules, as Rust types. \

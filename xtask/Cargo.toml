@@ -2,7 +2,7 @@
 name         = "xtask"
 version      = "0.0.0"
 edition      = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 publish      = false
 description  = "Build tasks for en16931. Not published; not a dependency of the library."
 

@@ -109,16 +109,31 @@ jobs:
       - run: cargo bench --no-run --all-features
 
   # ── MSRV ────────────────────────────────────────────────────────────────────
+  # The toolchain comes from `rust-version` in Cargo.toml, not from a number
+  # written here. Hard-coding it is how this job passed for months against a
+  # declared MSRV of 1.85 that the crate had never actually supported.
   msrv:
-    name: MSRV (rust-version = 1.85)
+    name: MSRV (from Cargo.toml)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Read rust-version from Cargo.toml
+        id: msrv
+        run: |
+          V=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c "import sys,json;print(next(p['rust_version'] for p in json.load(sys.stdin)['packages'] if p['rust_version']))")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "MSRV is $V"
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.85"
+          toolchain: ${{ steps.msrv.outputs.version }}
       - uses: Swatinem/rust-cache@v2
+      # Build, not test: dev-dependencies are free to require a newer compiler
+      # than the crate does, and holding them to the MSRV would pin the MSRV to
+      # whatever criterion needs this month.
       - run: cargo build --all-features
+      - run: cargo build --no-default-features
 
   # ── Test matrix ─────────────────────────────────────────────────────────────
   test:

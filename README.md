@@ -1061,6 +1061,18 @@ cargo xtask check        # fail if the committed file no longer matches
 just ci                  # everything CI runs, locally
 ```
 
+### Minimum supported Rust version
+
+**1.88**, and it is measured: 1.87 fails, 1.88 builds, and CI reads the number
+out of `Cargo.toml` rather than repeating it. The rule code uses `let`-chains —
+`if let Some(a) = x && let Some(b) = y` — which stabilised in 1.88, and
+rewriting them as nested `if let` would cost real readability in exactly the
+code that most needs it. The optional `sepa` feature requires 1.88
+independently, so nothing is gained by going lower.
+
+This said 1.85 for a long time and was simply wrong; nothing checked it, and the
+one job that would have was hard-coded to the same wrong number.
+
 ### The artefacts
 
 `spec/` is **not committed**: the CEN artefacts are EUPL-1.2, a reciprocal
