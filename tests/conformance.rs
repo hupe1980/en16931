@@ -237,7 +237,7 @@ fn run(case: &Case, reader: &mut ubl::Reader, unevaluated: &BTreeSet<String>) ->
         .map(|r| r.id.as_str().to_owned());
     let Some(canonical) = canonical else {
         // `UBL-*` and `CII-*` are syntax rules — element order, cardinality,
-        // datatype facets. They belong to the format crates by construction.
+        // datatype facets. They belong to `en16931-formats` by construction.
         if case.rule.starts_with("UBL-") || case.rule.starts_with("CII-") {
             return Outcome::SkippedSyntaxRule;
         }
@@ -335,7 +335,7 @@ fn cen_conformance_suite() {
          disagreed:             {}\n  \
          diverged, declared:    {}\n  \
          skipped, unevaluated:  {skipped_unevaluated}  (type-retired or undecidable)\n  \
-         skipped, syntax rules: {skipped_syntax}  (UBL-*/CII-*, the format crates' job)\n  \
+         skipped, syntax rules: {skipped_syntax}  (UBL-*/CII-*, `en16931-formats`' job)\n  \
          skipped, malformed:    {}  (value the model refuses at the boundary)\n  \
          skipped, unreadable:   {}",
         cases.len(),

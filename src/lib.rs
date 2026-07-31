@@ -3,7 +3,7 @@
 //! `billing` proves an invoice is *arithmetically* correct. This crate proves it
 //! is *legally meaningful*: it holds the EN 16931 semantic data model, decides
 //! what the standard and its national usage specifications demand, and hands a
-//! proof of that decision to the format crates.
+//! proof of that decision to the syntax layer.
 //!
 //! **It never emits a byte of XML.** UBL, CII and PDF/A-3 belong to `xrechnung`
 //! and `zugferd`; the 1 339 syntax-binding rules belong with them. This crate
@@ -91,7 +91,7 @@
 //! panics, is deterministic, and never cites an unresolvable rule id.
 //!
 //! Out of scope, deliberately and named rather than quietly dropped: the 1 339
-//! *syntax* rules (`UBL-*`, `CII-*`) belong to the format crates, and Peppol's
+//! *syntax* rules (`UBL-*`, `CII-*`) belong to `en16931-formats`, and Peppol's
 //! ~90 national rules (`DK-R-*`, `SE-R-*`, …) are country registry-format and
 //! check-digit checks. See
 //! `FEEDBACK_BILLING.md` for the upstream work it rests on.

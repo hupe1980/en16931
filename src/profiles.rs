@@ -10,7 +10,7 @@
 //!
 //! ZUGFeRD's BASIC and MINIMUM are not levels of this either — they are profiles
 //! *of ZUGFeRD*, and MINIMUM is explicitly **not** an EN 16931-conformant
-//! invoice. If the format crates need them, they define them.
+//! invoice. If `en16931-formats` needs them, they define them.
 
 use crate::validation::profile::{Profile, ProfileMarker, Restriction, Underlies, terms as t};
 use crate::validation::rules::peppol;

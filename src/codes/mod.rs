@@ -6,7 +6,7 @@
 //! > be entered exactly as shown in the selected code list.
 //!
 //! Fourteen lists, **4 386 values**, all generated from the pinned CEN
-//! validation artefacts by `codegen/generate.py` and re-verified against them by
+//! validation artefacts by `cargo xtask codegen` and re-verified against them by
 //! `tests/codelists.rs`. See [`generated`].
 //!
 //! # Two shapes, for two kinds of list

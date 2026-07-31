@@ -554,7 +554,7 @@ pub static PEPPOL_MIME_CODES: &[&str] = &[
     "text/csv",
 ];
 
-/// BT-21 — UNCL 4451. The **union** over CEN's UBL, CII and EDIFACT bindings, which froze different UNTDID directory revisions; see `xtask/src/main.rs`.
+/// BT-21 — UNCL 4451. The **union** over CEN's UBL, CII and EDIFACT bindings, which froze different UNTDID directory revisions; see `xtask/`.
 ///
 /// Source: `BR-CL-08`, CEN validation artefacts `validation-1.3.16`. 401 values.
 /// Sorted, so [`lookup`](super::contains) can binary-search it.

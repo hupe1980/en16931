@@ -83,7 +83,7 @@ fn assert_table_matches(xml: &str, name: &str, rule: &str, table: &[&str]) {
         found,
         "{name} does not match any list in {rule}.\n  \
          committed: {} values\n  artefact:  {:?} values\n  \
-         Regenerate with `python3 codegen/generate.py` and review the diff.",
+         Regenerate with `cargo xtask codegen` and review the diff.",
         table.len(),
         lists.iter().map(Vec::len).collect::<Vec<_>>()
     );
@@ -373,7 +373,7 @@ fn the_profile_rule_sets_cover_their_artefacts() {
 /// The syntax-rule count this crate quotes is the one the artefacts carry.
 ///
 /// `README.md`, `lib.rs` and the design notes all name a figure for the rules that
-/// belong to the format crates, and a number repeated in three documents and
+/// belong to `en16931-formats`, and a number repeated in three documents and
 /// checked in none is how it came to be **1 315**: the sum omitted `UBL-DT-*`
 /// while including `CII-DT-*`.
 #[test]
@@ -420,7 +420,7 @@ fn the_syntax_rule_count_is_measured() {
         eprintln!("skipping: artefacts not present");
         return;
     }
-    eprintln!("syntax rules (the format crates' job): {}", ids.len());
+    eprintln!("syntax rules (`en16931-formats`' job): {}", ids.len());
     assert_eq!(
         ids.len(),
         1339,

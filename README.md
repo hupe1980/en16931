@@ -3,7 +3,7 @@
 **The EN 16931 semantic data model and its business rules, as Rust types.**
 
 `billing` proves an invoice is *arithmetically* correct. This crate proves it is
-*legally meaningful* — and hands a typed proof of that to the format crates.
+*legally meaningful* — and hands a typed proof of that to the syntax layer.
 
 ```text
    ┌──────────────┐   ┌─────────────┐
@@ -759,43 +759,25 @@ decoration.
 
 ---
 
-## 🧭 Where this is going
-
-```text
-        ┌──────────────┐                       ┌──────────────────────┐
-        │   billing    │                       │  inbound documents   │
-        │ calculations │                       │  UBL / CII / EDIFACT │
-        └──────┬───────┘                       └──────────┬───────────┘
-               │  adapter (optional feature)              │
-               └──────────────┬───────────────────────────┘
-                              ▼
-                    ┌─────────────────────┐
-                    │      en16931        │  ← this crate
-                    │  semantic model     │
-                    │  validation engine  │
-                    │  proof of validity  │
-                    └──────────┬──────────┘
-                              ▼
-                    ┌─────────────────────┐
-                    │  en16931-formats    │
-                    │   UBL · CII · PDF   │
-                    └─────────────────────┘
-```
+## 🧭 The other crate
 
 [`en16931-formats`](https://github.com/hupe1980/en16931-formats) carries the
-syntax layer — the UBL 2.1 and CII bindings, the 1 339 syntax rules, the
-XRechnung CIUS, and ZUGFeRD / Factur-X hybrid PDFs — behind features, so a
-consumer that wants UBL does not compile a PDF parser.
+syntax layer — the UBL 2.1 and CII bindings in both directions, the 1 339 syntax
+rules, the XRechnung CIUS, and ZUGFeRD / Factur-X hybrid PDFs — behind features,
+so a consumer that wants UBL does not compile a PDF parser. It is what parses an
+inbound document into the `Invoice` these rules run against, and what turns a
+`Validated<P>` back into bytes.
 
-**One crate, not three.** XRechnung is carried in UBL *and* CII, and every
-ZUGFeRD payload is CII: separate crates would each need a CII binding, and two
-bindings drift. Cargo features already express which syntax a consumer wants.
+**One crate there, not three.** XRechnung is carried in UBL *and* CII, and every
+ZUGFeRD payload is CII: a crate per format would need the CII binding twice, and
+two bindings drift. Cargo features already express which syntax a consumer wants.
 
 **But it is a separate crate from this one, and that boundary is load-bearing.**
 It depends on `en16931`, so rustc forbids the reverse: "the semantic rules do not
-depend on a syntax" is enforced rather than asked for. The practical payoff is
-below — this crate's graph is **10 crates** and builds for `wasm32`, where
-adding a PDF parser would make it 56 and break the target outright.
+depend on a syntax" is enforced rather than promised. The payoff is measurable —
+this crate's graph is **10 crates** and builds for `wasm32`; adding an XML parser
+would end the first claim and a PDF parser takes it to **56 crates** and breaks
+the target outright.
 
 ---
 
@@ -988,8 +970,9 @@ to some lengths not to have.
 ## 🏷️ Code lists — 4 887 values, generated and re-verified
 
 Eighteen lists, from UNCL 5305's ten VAT categories to UN/ECE Rec 20's 2 162
-unit codes. All generated from the pinned CEN artefacts by `codegen/generate.py`, all
-re-checked against them by `tests/codelists.rs`.
+unit codes. All generated from the pinned CEN artefacts by `cargo xtask codegen`, all
+re-checked against them by `tests/codelists.rs`, and all re-derived in CI by
+`cargo xtask check` so they cannot drift from the artefacts they came from.
 
 The generator refuses to guess. `BR-CL-01`'s test is a *disjunction* carrying two
 different lists, so the table declares which branch it wants and the generator
@@ -1054,35 +1037,65 @@ it would have been wrong in both directions.
 
 ---
 
-## Getting the specifications
+## 🚀 Examples
 
 ```sh
-cargo xtask fetch          # → spec/, gitignored, ~138 MB
-cargo test               # …and the conformance suites become live
-```
-
-Fetches the CEN validation artefacts (pinned at `validation-1.3.16`), Peppol BIS
-Billing 3.0, the KoSIT XRechnung rules — **and EN 16931-1 itself**, whose full
-English text ÚNMS SR publishes as an open PDF. `spec/README.md` lists the other
-routes, including DIN Media's free German PDFs of Parts 1 and 2.
-
-`spec/` is gitignored on purpose: the CEN artefacts are EUPL-1.2 (reciprocal) and
-this crate is MIT OR Apache-2.0..
-
----
-
-## Development
-
-```sh
-cargo test --all-features        # 155 tests, incl. the conformance corpus
-cargo clippy --all-features --all-targets -- -D warnings
-cargo check --target wasm32-unknown-unknown --all-features
-python3 codegen/generate.py     # regenerate code lists; review the diff
+cargo run --example validate_an_invoice                    # build one, validate, read the report
+cargo run --example profiles_and_proofs                    # every profile, and the typed proof
+cargo run --example report_formats --features serde,svrl   # JSON and SVRL output
 ```
 
 ---
 
-## Licence
+## 🧰 Development
+
+[`just`](https://just.systems) is the task runner; `just` on its own lists every
+recipe. There are **no shell scripts** — fetching and generating are `cargo
+xtask` subcommands, so they are compiled, type-checked and linted like the rest
+of the crate and behave the same on every platform CI uses.
+
+```sh
+cargo xtask fetch        # → spec/ (gitignored, ~136 MB); the suites become live
+cargo xtask codegen      # regenerate src/codes/generated.rs; review the diff
+cargo xtask check        # fail if the committed file no longer matches
+just ci                  # everything CI runs, locally
+```
+
+### The artefacts
+
+`spec/` is **not committed**: the CEN artefacts are EUPL-1.2, a reciprocal
+licence, and keeping them out is what keeps this crate `MIT OR Apache-2.0` —
+which is also why `deny.toml`'s allow-list does not mention EUPL.
+
+The fetch pulls four repositories and nothing else: the CEN validation artefacts
+(pinned), Peppol BIS Billing 3.0, and KoSIT's XRechnung Schematron and validator
+configuration. It does **not** fetch specification PDFs — including EN 16931-1
+itself, whose full English text ÚNMS SR publishes openly. Reading the standard
+is a research task, not a build step; `spec/README.md` lists the routes.
+
+Sources are pinned by **fully-qualified ref**, and that is not pedantry:
+`eInvoicing-EN16931` publishes `validation-1.3.16` as both a tag *and* a branch
+pointing at different commits, and `git clone --branch` prefers the branch — so
+two clones of the same "pin" produced different trees and different code lists.
+
+### The code lists are generated, not written
+
+`src/codes/generated.rs` holds **4 887 values across 18 tables**. The generator
+**fails rather than guesses**: a Schematron `test` is a program, not a data
+structure, and `BR-CL-01` alone carries two different lists in one disjunctive
+expression — 50 invoice type codes and 13 credit-note ones. An extractor that
+reads the first and stops is confidently wrong. So every table declares how its
+list is selected, and a rule that changes shape stops the build.
+
+It also *proves* claims made in comments elsewhere: that Peppol's `UNCL5189`
+really is identical to the CEN table, and that the three CEN bindings' UNCL 4451
+lists (381 / 383 / 401 codes) really are nested — so taking their union is
+directory drift and not a divergence being papered over. `cargo xtask check`
+runs in CI, so none of it can quietly rot.
+
+---
+
+## ⚖️ Licence
 
 MIT OR Apache-2.0, at your option.
 

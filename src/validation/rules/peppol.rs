@@ -849,7 +849,7 @@ macro_rules! mirror_rule {
      |$inv:ident, $f:ident| $body:block) => {
         #[doc = $text]
         #[doc = ""]
-        #[doc = concat!("Checks the same list as `", $mirrors, "`; `codegen/generate.py` fails")]
+        #[doc = concat!("Checks the same list as `", $mirrors, "`; `cargo xtask codegen` fails")]
         #[doc = "if the two ever diverge, so this doc cannot rot."]
         pub static $konst: Rule = Rule {
             id: RuleId::new($id),

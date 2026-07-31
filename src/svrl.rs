@@ -7,7 +7,7 @@
 //! [§2](https://docs.rs/en16931) says no UBL, no CII, no namespaces, no XML
 //! parser — and it still holds. The purpose of that invariant is that this crate
 //! never learns a *syntax binding*: it must not know that BT-1 is
-//! `cbc:ID`, because knowing that is the format crates' job and the reason they
+//! `cbc:ID`, because knowing that is `en16931-formats`' job and the reason they
 //! can exist separately.
 //!
 //! SVRL is not an invoice syntax. It is a **report** format, and emitting one

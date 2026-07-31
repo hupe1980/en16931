@@ -627,7 +627,7 @@ fn generate() -> Result<(String, Vec<String>), String> {
     parts.push(rust_slice(
         "NOTE_SUBJECT_CODES",
         "BT-21 — UNCL 4451. The **union** over CEN's UBL, CII and EDIFACT bindings, which \
-         froze different UNTDID directory revisions; see `xtask/src/main.rs`.",
+         froze different UNTDID directory revisions; see `xtask/`.",
         "BR-CL-08",
         &notes,
     ));
