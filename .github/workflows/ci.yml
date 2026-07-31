@@ -121,7 +121,7 @@ jobs:
         id: msrv
         run: |
           V=$(cargo metadata --no-deps --format-version 1 \
-            | python3 -c "import sys,json;print(next(p['rust_version'] for p in json.load(sys.stdin)['packages'] if p['rust_version']))")
+            | python3 -c "import sys,json,os;m=json.load(sys.stdin);r=os.path.realpath('Cargo.toml');print(next(p['rust_version'] for p in m['packages'] if os.path.realpath(p['manifest_path'])==r))")
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "MSRV is $V"
       - uses: dtolnay/rust-toolchain@master
@@ -193,12 +193,26 @@ jobs:
         run: cargo deny --all-features check
 
   # ── Semver ──────────────────────────────────────────────────────────────────
-  # Catches API changes that are breaking for the declared version bump. It is a
-  # linter, not a prover: behavioural breakage is invisible to it and is covered
-  # by the round-trip and conformance suites instead.
+  # Needs a published baseline to diff against, so it is a no-op until the first
+  # release — and switches itself on when that happens, rather than waiting for
+  # someone to remember. It is a linter, not a prover: behavioural breakage is
+  # invisible to it and is covered by the suites instead.
   semver:
     name: Semver compatibility
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Is this crate on crates.io yet?
+        id: published
+        run: |
+          NAME=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c "import sys,json,os;m=json.load(sys.stdin);r=os.path.realpath('Cargo.toml');print(next(p['name'] for p in m['packages'] if os.path.realpath(p['manifest_path'])==r))")
+          if curl -sfL "https://crates.io/api/v1/crates/$NAME" -o /dev/null; then
+            echo "yes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "yes=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$NAME is not published yet — no baseline to compare against"
+          fi
       - uses: obi1kenobi/cargo-semver-checks-action@v2
+        if: steps.published.outputs.yes == 'true'
