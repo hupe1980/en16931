@@ -41,9 +41,10 @@ how 486 unread documents stay green.
 | `just codegen-check` | fail if a generated table drifted from the artefacts |
 | `just bench` | the criterion benchmarks |
 | `just site` | build this site with [Zola](https://www.getzola.org) |
+| `just tracked` | fail if a source file is gitignored, or missing from git |
 | `just ci` | all of the above that CI runs |
 
-Two of those are less obvious than they look.
+Three of those are less obvious than they look.
 
 **`just deps`** measures the dependency-graph sizes the documentation quotes.
 They had already drifted once — the ZUGFeRD graph was documented as 56 in three
@@ -51,6 +52,22 @@ places and 57 in two, and it is 57. A number repeated in five files is a number
 nobody rechecks, so it is checked here instead. Raising a limit is a decision,
 not a chore: the small graph is why `en16931` reaches `wasm32`, and why the PDF
 parser is behind a non-default feature.
+
+**`just tracked`** is the one CI cannot run. `.gitignore` once carried a bare
+filename for a local working note, and a bare pattern matches at *any depth* —
+on a case-insensitive filesystem, which is the default on macOS, in any case
+too. It matched a documentation page whose name happened to collide, and that
+page was silently untracked: it existed locally, the site built locally, and CI
+failed on a broken link to a page that had never been pushed.
+
+`git status` does not list an ignored file, so nothing pointed at the cause; the
+working tree looked clean because the file was invisible, not because it was
+committed. CI cannot catch it either — a checkout only ever has the tracked
+files, so the missing one is not there to notice. The check has to run where the
+file exists.
+
+The fix is to anchor an ignore pattern (`/NOTES.md`, not `NOTES.md`) and to have
+something assert it.
 
 **`just wasm`** builds `-p en16931`, never `--workspace`. The formats crate pulls
 a PDF parser that does not build for that target and is not meant to; a

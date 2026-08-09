@@ -41,11 +41,21 @@ target
 /spec/
 
 
-# Custom 
-# Concept/design documents — local working notes, not part of the crate.
-CONCEPT.md
-XRECHNUNG.md
-ZUGFERD.md
+# Local working notes, kept out of the repository.
+#
+# Anchored to the root, which matters. These were once bare filenames, and a bare
+# pattern matches at *any* depth; on a case-insensitive filesystem, the default
+# on macOS, it also matches a different case. One of them collided with a
+# documentation page, which was then silently untracked: it existed locally, the
+# site built locally, and CI failed on a broken link to a page that had never
+# been pushed. `just tracked` now asserts this cannot recur.
+#
+# `git status` does not list an ignored file, so nothing pointed at the cause.
+/NOTES.md
+/notes/
+# Correspondence drafted for another project's maintainers. Written here because
+# this is where the evidence is; not part of this repository's documentation.
+/FEEDBACK_*.md
 .DS_Store
 # Python bytecode from codegen/
 __pycache__/

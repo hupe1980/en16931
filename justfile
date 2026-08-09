@@ -144,6 +144,51 @@ deps:
       exit 1
     }
 
+# ── Is anything the build needs invisible to git? ─────────────────────────────
+
+# Fail if a source file is gitignored, or is tracked but should not be.
+#
+# This exists because of a bug that cost a green local build and a red CI one.
+# `.gitignore` carried a bare filename for a local working note — and a bare
+# pattern matches at **any depth**, on a case-insensitive filesystem in **any
+# case**. It matched a documentation page whose name collided, and that page was
+# silently untracked: it existed here, the site built here, and CI failed on a
+# broken link to a page that had never been pushed.
+#
+# The reason nobody saw it is the sharp bit: `git status` does not list an
+# ignored file. The working tree looked clean because the file was invisible,
+# not because it was committed. Anchoring the patterns fixed that instance; this
+# recipe is what makes the next one impossible.
+#
+# CI cannot catch this — it only ever has the tracked files, so the missing one
+# simply is not there to notice. It has to run where the file exists.
+[doc("Fail if a source file is gitignored, or is missing from git.")]
+tracked:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    fail=0
+    # Everything under these is source; `site/public/` and `spec/` are not.
+    for dir in site crates xtask; do
+      while IFS= read -r -d '' f; do
+        case "$f" in site/public/*) continue;; esac
+        if reason=$(git check-ignore -v "$f" 2>/dev/null); then
+          echo "  ignored but needed: $f"
+          echo "      by $reason"
+          fail=1
+        elif ! git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
+          echo "  untracked: $f"
+          fail=1
+        fi
+      done < <(find "$dir" -type f -not -path '*/.git/*' -print0)
+    done
+    test "$fail" = 0 || {
+      echo
+      echo "A file the build reads is not in the repository. An ignored file does"
+      echo "not appear in \`git status\`, so this is the only place it shows up."
+      exit 1
+    }
+    echo "  every source file under site/, crates/ and xtask/ is tracked ✓"
+
 # ── Generated code ────────────────────────────────────────────────────────────
 
 # Regenerate everything derived from the artefacts, in both crates.
@@ -198,7 +243,7 @@ site-serve:
 # full check resolves every external URL, which turns someone else's outage into
 # a red build here.
 [doc("Fail on a broken internal link.")]
-site-check:
+site-check: tracked
     zola --root site check --skip-external-links
 
 # Re-render the Open Graph card from its SVG source.
@@ -233,5 +278,5 @@ publish-dry:
     cargo publish --workspace --dry-run
 
 # ── Everything CI runs, locally ───────────────────────────────────────────────
-ci: fmt-check lint doc test-artefacts test-no-features codegen-check wasm deps
+ci: fmt-check lint doc test-artefacts test-no-features codegen-check wasm deps tracked
     @echo "✓ all green"

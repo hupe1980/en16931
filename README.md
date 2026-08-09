@@ -90,6 +90,7 @@ just test-all        # every crate, every feature
 just ci              # everything CI runs, locally
 just codegen-check   # fail if any generated table drifted from the artefacts
 just wasm            # en16931 still builds for wasm32
+just tracked         # fail if a source file is gitignored, or missing from git
 just site-serve      # the documentation site (Zola, in ./site/) with live reload
 ```
 
