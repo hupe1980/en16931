@@ -1,0 +1,201 @@
+{%- set page_title = page.title | default(value = section.title | default(value = config.title)) -%}
+{%- set page_desc = page.description | default(value = section.description | default(value = config.description)) -%}
+{%- set current = page.permalink | default(value = section.permalink | default(value = config.base_url)) -%}
+<!DOCTYPE html>
+<html lang="{{ config.default_language }}" prefix="og: https://ogp.me/ns#">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+{#- The title is the one thing a search result shows first. Section and page
+    titles get the project appended; the landing page does not, because
+    "en16931 · en16931" reads like a mistake. -#}
+{% block head_title %}<title>{% if page_title == config.title %}{{ config.title }} — the European e-invoice in Rust{% else %}{{ page_title }} · {{ config.title }}{% endif %}</title>{% endblock head_title %}
+<meta name="description" content="{{ page_desc }}">
+{# A 404 has no canonical URL worth declaring and must not be indexed. #}
+{% block head_indexing %}<link rel="canonical" href="{{ current | safe }}">{% endblock head_indexing %}
+
+<meta property="og:type" content="{% if page.title %}article{% else %}website{% endif %}">
+<meta property="og:site_name" content="{{ config.title }}">
+<meta property="og:title" content="{{ page_title }}">
+<meta property="og:description" content="{{ page_desc }}">
+<meta property="og:url" content="{{ current | safe }}">
+{#- PNG, not the SVG it is generated from: X, LinkedIn and Slack all refuse
+    to render an SVG card, and silently fall back to no image at all. -#}
+<meta property="og:image" content="{{ get_url(path='social-card.png', trailing_slash=false) | safe }}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="en16931 — the European e-invoice, as Rust types.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="{{ get_url(path='social-card.png', trailing_slash=false) | safe }}">
+<meta name="twitter:title" content="{{ page_title }}">
+<meta name="twitter:description" content="{{ page_desc }}">
+
+<link rel="icon" href="{{ get_url(path='favicon.svg', trailing_slash=false) | safe }}" type="image/svg+xml">
+<link rel="alternate" type="application/atom+xml" title="{{ config.title }}" href="{{ get_url(path='atom.xml', trailing_slash=false) | safe }}">
+<link rel="stylesheet" href="{{ get_url(path='style.css', trailing_slash=false) | safe }}">
+{#- Zola emits these two from `[markdown.highlighting]`; the media queries are
+    what make code blocks follow the reader's system theme like the rest. -#}
+<link rel="stylesheet" href="{{ get_url(path='giallo-light.css', trailing_slash=false) | safe }}" media="(prefers-color-scheme: light)">
+<link rel="stylesheet" href="{{ get_url(path='giallo-dark.css', trailing_slash=false) | safe }}" media="(prefers-color-scheme: dark)">
+
+{#- Structured data. `SoftwareSourceCode` is the accurate type for a library —
+    `SoftwareApplication` describes something a person installs and runs, which
+    is the CLI and not the crates. Both are declared, related to each other. -#}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "SoftwareSourceCode",
+      "name": "en16931",
+      "description": {{ config.description | json_encode | safe }},
+      "codeRepository": "{{ config.extra.repo }}",
+      "programmingLanguage": "Rust",
+      "license": "https://spdx.org/licenses/MIT.html",
+      "url": "{{ config.base_url | safe }}",
+      "keywords": "EN 16931, e-invoicing, XRechnung, Peppol, ZUGFeRD, Factur-X, UBL, UN/CEFACT CII, Rust"
+    },
+    {
+      "@type": "SoftwareApplication",
+      "name": "en16931-cli",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Linux, macOS, Windows",
+      "description": "Validate, convert, compare and inspect European e-invoices from the command line.",
+      "url": "{{ get_url(path='@/docs/cli.md') | safe }}",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" }
+    }
+    {%- if page.title %},
+    {
+      "@type": "TechArticle",
+      "headline": {{ page.title | json_encode | safe }},
+      "description": {{ page_desc | json_encode | safe }},
+      "url": "{{ current | safe }}",
+      "isPartOf": { "@type": "WebSite", "name": "{{ config.title }}", "url": "{{ config.base_url | safe }}" }
+    }
+    {%- endif %}
+  ]
+}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="wrap topbar-inner">
+    <a class="brand" href="{{ config.base_url | safe }}">
+      <span class="flag" aria-hidden="true">🇪🇺</span>
+      <span>en16931</span>
+    </a>
+    <nav aria-label="Main">
+      <a href="{{ get_url(path='@/docs/_index.md') | safe }}">Docs</a>
+      <a href="{{ get_url(path='@/docs/cli.md') | safe }}">CLI</a>
+      <a href="{{ config.extra.docs_rs }}">API</a>
+      <a href="{{ config.extra.repo }}">GitHub</a>
+    </nav>
+
+    {#- The index is ~500 KB, so it is fetched on first focus rather than on
+        every page load. Without JavaScript the box never appears, and nothing
+        else on the page depends on it. -#}
+    <div class="search" hidden>
+      <input type="search" id="q" placeholder="Search…  /" autocomplete="off"
+             aria-label="Search the documentation" aria-controls="results">
+      <div id="results" role="listbox" hidden></div>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+{% block content %}{% endblock content %}
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <p>
+      <strong>en16931</strong> · MIT OR Apache-2.0 ·
+      <a href="{{ config.extra.repo }}">source</a> ·
+      <a href="{{ config.extra.docs_rs }}">API docs</a> ·
+      <a href="{{ get_url(path='atom.xml', trailing_slash=false) | safe }}">feed</a>
+    </p>
+    <p class="attribution">
+      An implementation of the EN 16931-1 semantic data model; © CEN, used under
+      the 2018 CEN–EC licence agreement. This site is not affiliated with CEN,
+      OpenPeppol or KoSIT.
+    </p>
+  </div>
+</footer>
+
+<script>
+// Client-side search over Zola's elasticlunr index.
+//
+// Both scripts are fetched on the first focus of the box, not on page load: the
+// index alone is about 500 KB, and a reader who never searches should never pay
+// for it. Until then the box is inert but present, so `/` has somewhere to go.
+(function () {
+  var box = document.querySelector('.search');
+  var q = document.getElementById('q');
+  var out = document.getElementById('results');
+  if (!box || !q || !out) return;
+  box.hidden = false;
+
+  var base = {{ config.base_url | json_encode | safe }};
+  var index = null, loading = null;
+
+  function load() {
+    if (loading) return loading;
+    loading = Promise.all([
+      inject(base + '/elasticlunr.min.js'),
+      inject(base + '/search_index.en.js')
+    ]).then(function () {
+      index = elasticlunr.Index.load(window.searchIndex);
+    });
+    return loading;
+  }
+
+  function inject(src) {
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = src; s.onload = resolve; s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+
+  function render(hits) {
+    out.innerHTML = '';
+    if (!hits.length) { out.hidden = true; return; }
+    hits.slice(0, 8).forEach(function (hit) {
+      var d = hit.doc;
+      var a = document.createElement('a');
+      a.href = d.id;
+      a.setAttribute('role', 'option');
+      a.innerHTML = '<strong></strong><span></span>';
+      a.firstChild.textContent = d.title;
+      a.lastChild.textContent = (d.body || '').slice(0, 110).trim() + '…';
+      out.appendChild(a);
+    });
+    out.hidden = false;
+  }
+
+  function run() {
+    var term = q.value.trim();
+    if (term.length < 2) { out.hidden = true; return; }
+    load().then(function () {
+      render(index.search(term, { bool: 'AND', expand: true }));
+    });
+  }
+
+  q.addEventListener('focus', load);
+  q.addEventListener('input', run);
+  q.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { q.value = ''; out.hidden = true; q.blur(); }
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === '/' && document.activeElement !== q) { e.preventDefault(); q.focus(); }
+  });
+  document.addEventListener('click', function (e) {
+    if (!box.contains(e.target)) out.hidden = true;
+  });
+})();
+</script>
+</body>
+</html>

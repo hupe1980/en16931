@@ -61,20 +61,16 @@ use crate::validation::{Finding, Severity, Source, ValidationReport};
 /// Bump it — do not reshape [`Report`] silently — when a field changes meaning
 /// or disappears. Consumers are expected to reject a version they do not know.
 ///
-/// **`/2` because `/1` shipped.** `en16931` 0.1.0 is on crates.io and its
-/// [`Entry`] had no [`hint`](Entry::hint) field, so a consumer that parsed `/1`
-/// from that release and one that parses `/1` from this one would be reading
-/// two different shapes under one version string. That is the single thing a
-/// schema version exists to prevent.
-///
-/// The addition is *additive* — a `/1` reader ignoring an unknown key still
-/// works — and the version moved anyway. A consumer is entitled to reject a
-/// version it did not agree to, which is only meaningful if additions are
-/// visible.
+/// **Every version here was earned.** `/1` shipped in `en16931` 0.1.0 without
+/// [`Entry::hint`]; `/2` added it; `/3` adds [`Report::artefacts`]. Each is an
+/// *additive* change that a previous reader would survive by ignoring an
+/// unknown key — and the version moved every time anyway, because a consumer is
+/// entitled to reject a version it did not agree to, which is only meaningful
+/// if additions are visible.
 ///
 /// Not frozen until 1.0: the promise before then is that it changes
 /// deliberately and visibly, not that it has stopped changing.
-pub const SCHEMA: &str = "en16931-report/2";
+pub const SCHEMA: &str = "en16931-report/3";
 
 /// A validation report in a shape safe to store, diff and send elsewhere.
 ///
@@ -96,6 +92,15 @@ pub struct Report {
     pub rules_checked: usize,
     /// The CEN attribution notice. A licence condition, not metadata.
     pub attribution: Cow<'static, str>,
+    /// The authority releases the rules that ran were verified against.
+    ///
+    /// One entry per authority, because a profile's rules come from more than
+    /// one: an XRechnung report's `BR-*` are CEN's, its `BR-DE-*` are KoSIT's
+    /// Schematron release, its severities are KoSIT's *validator configuration*
+    /// release — a separate cadence — and 31 of its rules are OpenPeppol's. A
+    /// stored report naming only the CEN revision beside a `BR-DE-15` finding
+    /// is citing the wrong authority.
+    pub artefacts: Vec<Artefact>,
     /// Rules the caller asked to skip, and which were therefore **not checked**.
     ///
     /// Empty on an ordinary run. Non-empty means `valid` is a weaker claim than
@@ -104,6 +109,22 @@ pub struct Report {
     pub suppressed: Vec<String>,
     /// One entry per finding, most severe first.
     pub findings: Vec<Entry>,
+}
+
+/// One authority release a report's rules were verified against.
+///
+/// Owned `String`s, unlike the `&'static str` the profile carries: a report is
+/// read back from storage, and a borrowed field cannot come out of a buffer.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Artefact {
+    /// The authority, as it calls itself — `CEN`, `KoSIT`, `OpenPeppol`.
+    pub authority: String,
+    /// The repository, without the host, so the ref can be fetched.
+    pub repo: String,
+    /// The release tag, verbatim.
+    pub git_ref: String,
 }
 
 /// One finding, shaped like SVRL's `failed-assert`.
@@ -162,6 +183,15 @@ impl Report {
             edition: Cow::Borrowed(report.edition().designation()),
             rules_checked: report.rules_checked(),
             attribution: Cow::Borrowed(crate::ATTRIBUTION),
+            artefacts: report
+                .artefacts()
+                .iter()
+                .map(|a| Artefact {
+                    authority: a.authority.to_owned(),
+                    repo: a.repo.to_owned(),
+                    git_ref: a.git_ref.to_owned(),
+                })
+                .collect(),
             suppressed: report.suppressed().to_vec(),
             findings: report.findings().iter().map(Entry::of).collect(),
         }

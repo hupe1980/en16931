@@ -1,11 +1,11 @@
 //! How long validation takes, measured rather than asserted.
 //!
-//! the design notes claims this crate is "µs, not ms, and no JVM" against the
+//! `README.md` claims this crate is "µs, not ms, and no JVM" against the
 //! Schematron-driven tools. That is a performance claim made in a document that
 //! spends a section on the cost of unverified claims, so it needs a number.
 //!
-//! The target from §12.5: **a typical 5-line invoice through the full core rule
-//! set in well under 100 µs.**
+//! The target: **a typical 5-line invoice through the full core rule set in well
+//! under 100 µs.**
 //!
 //! Run with `cargo bench`. The interesting comparisons are:
 //!

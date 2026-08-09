@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="wrap doc with-aside">
+  <article>
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="{{ config.base_url | safe }}">Home</a> ›
+      <a href="{{ get_url(path='@/docs/_index.md') | safe }}">Docs</a> ›
+      <span aria-current="page">{{ page.title }}</span>
+    </nav>
+    <h1>{{ page.title }}</h1>
+    <p class="lede">{{ page.description }}</p>
+    {{ page.content | safe }}
+  </article>
+
+  <aside aria-label="On this page">
+    {% if page.toc %}
+    <h2>On this page</h2>
+    <ol>
+      {% for h in page.toc %}
+      <li><a href="{{ h.permalink | safe }}">{{ h.title }}</a>
+        {% if h.children %}
+        <ol>{% for c in h.children %}<li><a href="{{ c.permalink | safe }}">{{ c.title }}</a></li>{% endfor %}</ol>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+    {% endif %}
+    <p class="aside-links">
+      <a href="{{ config.extra.docs_rs }}">API reference ↗</a><br>
+      <a href="{{ config.extra.repo }}">Source ↗</a>
+    </p>
+  </aside>
+</div>
+{% endblock content %}

@@ -16,7 +16,7 @@
 //! Schematron; `en16931-formats` needs the *preprocessed* Schematron, the only
 //! form in which a rule's context is fully resolved rather than a `$Variable`,
 //! and every published UBL and CII instance, because its element-order tables
-//! are derived from 320 and 170 documents respectively. A table derived from
+//! are derived from 319 and 167 documents respectively. A table derived from
 //! three examples is a guess with a large sample size written on it.
 //!
 //! Earlier versions of this also pulled `phive-rules` — 3.6 GB in full,
@@ -41,11 +41,28 @@
 //!
 //! # Pinning
 //!
-//! The CEN artefacts are pinned to a tag, so regenerating a table is a
-//! reviewable diff rather than a moving target. Bump [`CEN_REF`] deliberately,
-//! and update `en16931::ARTEFACT_VERSION` to match —
-//! `crates/en16931/tests/artefact_pin.rs` checks that they agree, along with the
-//! revision stamped into every generated table.
+//! **Every source is pinned to a release tag.** Regenerating a table is then a
+//! reviewable diff rather than a moving target, and two contributors cloning
+//! six months apart get the same corpus and the same verdicts.
+//!
+//! Three of the four used to track `master`, and that was wrong for a reason
+//! sharper than reproducibility. An authority's `master` is its *next* release:
+//! at the time this was fixed, KoSIT's `validator-configuration` branch carried
+//! two `customLevel` overrides — `CII-SR-465` and `CII-SR-466` — that appear in
+//! no published release. This crate's central claim is that it reports rules at
+//! **the severities the authorities publish**, and it was reading severities
+//! nobody had published yet. A moving pin does not merely make the build
+//! irreproducible; it silently changes what the crate is claiming to implement.
+//!
+//! KoSIT states the correspondence in its own changelog — schematron `v2.5.0`
+//! says *"compatible with XRechnung 3.0.x"*, which is the CIUS this crate ships
+//! — so the pins name a version, not just a commit. Bump one deliberately, and
+//! read the changelog first: a KoSIT release that moves to XRechnung 4.0 is a
+//! new profile here, not a newer pin on the old one.
+//!
+//! For [`CEN_REF`] there is a second constraint: `en16931::ARTEFACT_VERSION`
+//! and the revision stamped into every generated table must agree with it, and
+//! `crates/en16931/tests/artefact_pin.rs` checks all three.
 //!
 //! **One pin, for both crates.** Split across two repositories this was two
 //! constants and a comment asking that they be kept equal; a workspace makes it
@@ -64,6 +81,18 @@ use crate::root;
 /// `crates/en16931/tests/artefact_pin.rs` asserts all three.
 pub const CEN_REF: &str = "validation-1.3.16";
 
+/// OpenPeppol's release, and the source of `PEPPOL-EN16931-*`.
+pub const PEPPOL_REF: &str = "v3.0.20";
+
+/// KoSIT's Schematron release. Its own changelog states which XRechnung version
+/// each release is compatible with; `v2.5.0` says **XRechnung 3.0.x**, which is
+/// the CIUS this crate ships.
+pub const KOSIT_SCHEMATRON_REF: &str = "v2.5.0";
+
+/// KoSIT's validator configuration release — `scenarios.xml`, and therefore the
+/// published severity overrides, plus the mutation corpus.
+pub const KOSIT_CONFIG_REF: &str = "v2026-01-31";
+
 /// Which kind of ref a source is pinned to.
 ///
 /// This distinction is not pedantry. `eInvoicing-EN16931` publishes
@@ -76,9 +105,13 @@ pub const CEN_REF: &str = "validation-1.3.16";
 /// Naming the ref kind makes the pin unambiguous, and fetching the
 /// fully-qualified ref makes git agree.
 enum Ref {
-    /// A release tag. The right pin for anything that must not move.
+    /// A release tag. The right pin for anything that must not move — which,
+    /// here, is everything.
     Tag(&'static str),
-    /// A moving branch, for sources with no releases.
+    /// A moving branch. Kept for a source that ever stops publishing releases;
+    /// nothing uses it today, and adding a use is a decision worth arguing for
+    /// rather than a default worth drifting into.
+    #[expect(dead_code, reason = "every source is tagged; see the module header")]
     Branch(&'static str),
 }
 
@@ -116,26 +149,26 @@ static REPOS: &[Repo] = &[
         url: "https://github.com/ConnectingEurope/eInvoicing-EN16931.git",
         reference: Ref::Tag(CEN_REF),
         purpose: "CEN/TC 434 — the abstract model, code lists and per-rule test corpus, \
-                  the preprocessed Schematron behind the prohibition tables, and 490 \
+                  the preprocessed Schematron behind the prohibition tables, and 486 \
                   published UBL and CII instances behind the element-order tables.",
     },
     Repo {
         name: "peppol-bis-invoice-3",
         url: "https://github.com/OpenPEPPOL/peppol-bis-invoice-3.git",
-        reference: Ref::Branch("master"),
+        reference: Ref::Tag(PEPPOL_REF),
         purpose: "Peppol BIS Billing 3.0 — PEPPOL-EN16931-*, the national rule sets, and \
                   the widest real-world sample of UBL in the corpus suite.",
     },
     Repo {
         name: "xrechnung-schematron",
         url: "https://github.com/itplr-kosit/xrechnung-schematron.git",
-        reference: Ref::Branch("master"),
+        reference: Ref::Tag(KOSIT_SCHEMATRON_REF),
         purpose: "KoSIT — the XRechnung Schematron, BR-DE-*.",
     },
     Repo {
         name: "validator-configuration-xrechnung",
         url: "https://github.com/itplr-kosit/validator-configuration-xrechnung.git",
-        reference: Ref::Branch("master"),
+        reference: Ref::Tag(KOSIT_CONFIG_REF),
         purpose: "KoSIT — validator scenarios and the mutation test instances.",
     },
 ];

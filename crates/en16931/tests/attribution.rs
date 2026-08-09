@@ -5,11 +5,11 @@
 //! condition* that the derivative carries a statement, visible to users, that it
 //! is an implementation of the semantic data model.
 //!
-//! the design notes spells out where it has to appear: the crate
-//! documentation, `README.md`, and every validation report. All three were
-//! there and **none of them was checked**, which is a strange thing to leave to
-//! chance — every other invariant in this crate has a test, and this is the one
-//! whose loss forfeits the right to ship at all.
+//! It has to appear in three places: the crate documentation, `README.md`, and
+//! every validation report. All three were there and **none of them was
+//! checked**, which is a strange thing to leave to chance — every other
+//! invariant in this crate has a test, and this is the one whose loss forfeits
+//! the right to ship at all.
 //!
 //! Reformatting the `Display` impl, or trimming the README, would have silently
 //! dropped it. Nothing else in the build would have noticed.
@@ -25,7 +25,7 @@ fn flat(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// The three places §13.2 requires, checked against one source of truth.
+/// All three places, checked against one source of truth.
 #[test]
 fn attribution_is_carried_everywhere_it_is_required() {
     // 1. Every validation report a user ever sees.

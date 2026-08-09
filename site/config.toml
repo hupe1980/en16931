@@ -1,0 +1,48 @@
+# Zola configuration — https://www.getzola.org/documentation/getting-started/configuration/
+#
+# The site is built by `.github/workflows/site.yml` and served from GitHub
+# Pages, so `base_url` is the project page and every generated URL — canonical
+# links, the sitemap, the feed, Open Graph — derives from it. Getting it wrong
+# does not break the build; it silently makes every canonical link point at a
+# page that does not exist, which is the one SEO error that is invisible locally.
+base_url = "https://hupe1980.github.io/en16931"
+title = "en16931"
+description = "The EN 16931 European e-invoice as Rust types: 317 business rules, UBL 2.1 and UN/CEFACT CII in both directions, XRechnung, Peppol BIS Billing 3.0 and ZUGFeRD / Factur-X."
+default_language = "en"
+author = "hupe1980"
+
+compile_sass = true
+build_search_index = true
+generate_feeds = true
+feed_filenames = ["atom.xml"]
+
+[markdown]
+smart_punctuation = true
+render_emoji = false
+
+# Two stylesheets rather than an inline theme, so the page can follow the
+# reader's system setting: `base.html` loads each behind a `prefers-color-scheme`
+# media query. An inline theme would pick one and be wrong for half the readers.
+[markdown.highlighting]
+error_on_missing_language = true
+# Class-based, with a light and a dark theme, so the page follows the reader's
+# system setting. Inline hex colours would pick one and be wrong for half of them.
+style = "class"
+light_theme = "github-light"
+dark_theme = "github-dark"
+
+
+[search]
+include_title = true
+include_description = true
+include_path = true
+include_content = true
+
+[extra]
+# Everything the templates need that is not Zola's own. Kept here rather than
+# hard-coded in the templates so a fork changes one file.
+repo = "https://github.com/hupe1980/en16931"
+docs_rs = "https://docs.rs/en16931"
+crates_io = "https://crates.io/crates/en16931"
+edition = "EN 16931-1:2017+A1:2019"
+artefacts = "validation-1.3.16"

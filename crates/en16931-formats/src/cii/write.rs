@@ -52,6 +52,22 @@ fn date(x: &mut Xml, wrapper: &str, d: Date) {
     });
 }
 
+/// BT-149 with BT-150, and **no `unitCode` when BT-150 is absent**.
+///
+/// Writing `unitCode=""` instead made the reader hand back `Some("")`, which
+/// `PEPPOL-EN16931-R130` compares against BT-130 and rejects — a fatal finding
+/// created by the round trip, on six of the published CII instances.
+fn basis_quantity(x: &mut Xml, p: &en16931::invoice::PriceDetails) {
+    let Some(q) = p.base_quantity else { return };
+    let unit = p
+        .base_quantity_code
+        .as_ref()
+        .map(Code::as_str)
+        .filter(|u| !u.is_empty());
+    let attrs: Vec<(&str, &str)> = unit.map(|u| ("unitCode", u)).into_iter().collect();
+    x.leaf("ram:BasisQuantity", &attrs, &q.to_string());
+}
+
 /// The `ram:ChargeIndicator` wrapper, which is how CII tells an allowance from
 /// a charge — the same job UBL's `cbc:ChargeIndicator` does one level up.
 fn charge_indicator(x: &mut Xml, is_charge: bool) {
@@ -133,10 +149,54 @@ pub fn write(inv: &Invoice) -> Written {
         }
     });
 
+    // CII has **one** document element where UBL has two, so the credit-note
+    // distinction lives entirely in BT-3. A model that says "credit note" while
+    // carrying an invoice type code therefore cannot be written down here — the
+    // reader on the far side has nothing but BT-3 to go on and will read it back
+    // as an invoice.
+    //
+    // That is a property of the syntax, not a bug, and it is exactly why UBL's
+    // `<CreditNote>` root exists. What would be a bug is losing it in silence:
+    // KoSIT ships negative instances of precisely this shape.
+    if matches!(inv.kind, DocumentKind::CreditNote)
+        && !inv
+            .type_code
+            .as_ref()
+            .is_some_and(|c| c.is_in(en16931::codes::generated::CREDIT_NOTE_TYPE_CODES))
+    {
+        x.dropped(format!(
+            "the document is a credit note and BT-3 is {}, which is not a UNTDID 1001 \
+             credit-note code — CII carries the distinction in BT-3 alone, so it reads \
+             back as an invoice (BR-CL-01 reports the same disagreement on the model)",
+            inv.type_code
+                .as_ref()
+                .map_or("absent".to_owned(), |c| format!("{:?}", c.as_str()))
+        ));
+    }
+
+    // BG-DEX-01 and BG-DEX-09 are the XRechnung Extension's, and this binding
+    // does not write them. KoSIT ships a CII Extension scenario, so this is a
+    // gap rather than an impossibility — named here so it cannot be mistaken for
+    // an invoice that never carried the data.
+    if !inv.extensions.sub_invoice_lines.is_empty() {
+        x.dropped(
+            "BG-DEX-01 SUB INVOICE LINE — the CII binding does not write the XRechnung \
+             Extension groups yet; use UBL, where it does"
+                .to_owned(),
+        );
+    }
+    if !inv.extensions.third_party_payments.is_empty() {
+        x.dropped(
+            "BG-DEX-09 THIRD PARTY PAYMENT — the CII binding does not write the XRechnung \
+             Extension groups yet; use UBL, where it does"
+                .to_owned(),
+        );
+    }
+
     // ---- 3. the transaction ---------------------------------------------
     x.group_required("rsm:SupplyChainTradeTransaction", |x| {
-        for l in &inv.lines {
-            line(x, l, ccy);
+        for (i, l) in inv.lines.iter().enumerate() {
+            line(x, l, i, ccy);
         }
         agreement(x, inv);
         delivery(x, inv);
@@ -459,7 +519,7 @@ fn settlement(x: &mut Xml, inv: &Invoice, ccy: &str) {
             });
         }
         if let Some(p) = &inv.invoicing_period {
-            period(x, "ram:BillingSpecifiedPeriod", p);
+            period(x, "ram:BillingSpecifiedPeriod", p, "BG-14");
         }
         for (a, is_charge) in inv
             .allowances
@@ -553,7 +613,17 @@ fn settlement(x: &mut Xml, inv: &Invoice, ccy: &str) {
     });
 }
 
-fn period(x: &mut Xml, wrapper: &str, p: &Period) {
+fn period(x: &mut Xml, wrapper: &str, p: &Period, what: &str) {
+    // See the UBL writer's twin: a pruned empty group is right for the document
+    // and loses the model's distinction between "absent" and "present and
+    // empty", which `BR-CO-19` / `BR-CO-20` are about. Reported, not silent.
+    if p.start.is_none() && p.end.is_none() {
+        x.dropped(format!(
+            "{what} is present with neither a start nor an end date, which \
+             {wrapper} cannot express (BR-CO-19 / BR-CO-20 report it on the model)"
+        ));
+        return;
+    }
     x.group(wrapper, |x| {
         if let Some(s) = p.start {
             date(x, "ram:StartDateTime", s);
@@ -616,7 +686,7 @@ fn payment_means(x: &mut Xml, p: &PaymentInstructions) {
 // lines
 // ---------------------------------------------------------------------------
 
-fn line(x: &mut Xml, l: &InvoiceLine, ccy: &str) {
+fn line(x: &mut Xml, l: &InvoiceLine, i: usize, ccy: &str) {
     let _ = ccy;
     x.group("ram:IncludedSupplyChainTradeLineItem", |x| {
         x.group("ram:AssociatedDocumentLineDocument", |x| {
@@ -680,10 +750,7 @@ fn line(x: &mut Xml, l: &InvoiceLine, ccy: &str) {
             if let Some(g) = l.price.gross_price {
                 x.group("ram:GrossPriceProductTradePrice", |x| {
                     x.leaf("ram:ChargeAmount", &[], &g.to_string());
-                    if let Some(q) = l.price.base_quantity {
-                        let unit = l.price.base_quantity_code.as_ref().map_or("", Code::as_str);
-                        x.leaf("ram:BasisQuantity", &[("unitCode", unit)], &q.to_string());
-                    }
+                    basis_quantity(x, &l.price);
                     if let Some(d) = l.price.price_discount {
                         x.group("ram:AppliedTradeAllowanceCharge", |x| {
                             charge_indicator(x, false);
@@ -691,13 +758,20 @@ fn line(x: &mut Xml, l: &InvoiceLine, ccy: &str) {
                         });
                     }
                 });
+            } else if l.price.price_discount.is_some() {
+                // CII nests BT-147 **inside** the gross-price aggregate, so a
+                // discount stated without a gross price has nowhere to go. UBL
+                // can carry it; CII cannot. No table sees that, because it is a
+                // property of the content model rather than of a prohibition —
+                // so the writer says so itself.
+                x.dropped(format!(
+                    "BG-25[{i}]/BT-147 (ram:AppliedTradeAllowanceCharge needs \
+                     ram:GrossPriceProductTradePrice, and BT-148 is absent)"
+                ));
             }
             x.group("ram:NetPriceProductTradePrice", |x| {
                 x.leaf("ram:ChargeAmount", &[], &l.price.net_price.to_string());
-                if let Some(q) = l.price.base_quantity {
-                    let unit = l.price.base_quantity_code.as_ref().map_or("", Code::as_str);
-                    x.leaf("ram:BasisQuantity", &[("unitCode", unit)], &q.to_string());
-                }
+                basis_quantity(x, &l.price);
             });
         });
         x.group("ram:SpecifiedLineTradeDelivery", |x| {
@@ -716,7 +790,7 @@ fn line(x: &mut Xml, l: &InvoiceLine, ccy: &str) {
                 }
             });
             if let Some(p) = &l.period {
-                period(x, "ram:BillingSpecifiedPeriod", p);
+                period(x, "ram:BillingSpecifiedPeriod", p, "BG-26");
             }
             for (a, is_charge) in l
                 .allowances

@@ -66,11 +66,34 @@ macro_rules! by_type {
 
 // ── Addresses and parties ─────────────────────────────────────────────────────
 
+/// Whether a postal address carries nothing at all.
+///
+/// The group exists in a document when *any* of its terms does, so all seven are
+/// consulted — not the four an earlier version happened to list. An address with
+/// only a subdivision (BT-39) or only a third address line (BT-162, added by
+/// A1:2019) is a present BG-5, invalid for want of BT-40, and `BR-09` is the
+/// rule that says so. Reporting `BR-08` there as well would blame the group for
+/// the missing field.
+///
+/// Whitespace counts as absent, as it does everywhere else in this module: a
+/// `Some("  ")` is what a careless mapping produces, not an address line.
+fn address_is_empty(a: &crate::invoice::PostalAddress) -> bool {
+    let blank = |v: &Option<String>| v.as_deref().is_none_or(|s| s.trim().is_empty());
+    a.country
+        .as_ref()
+        .is_none_or(crate::invoice::Code::is_blank)
+        && blank(&a.city)
+        && blank(&a.post_code)
+        && blank(&a.line1)
+        && blank(&a.line2)
+        && blank(&a.line3)
+        && blank(&a.subdivision)
+}
+
 rule!(BR_08, "BR-08", Fatal, Both, terms: [],
 "An Invoice shall contain the Seller postal address.",
 |inv, f| {
-    let a = &inv.seller.address;
-    if a.country.is_none() && a.city.is_none() && a.line1.is_none() && a.post_code.is_none() {
+    if address_is_empty(&inv.seller.address) {
         f.at(Path::group(Group::Seller));
     }
 });
@@ -78,8 +101,7 @@ rule!(BR_08, "BR-08", Fatal, Both, terms: [],
 rule!(BR_10, "BR-10", Fatal, Both, terms: [],
 "An Invoice shall contain the Buyer postal address (BG-8).",
 |inv, f| {
-    let a = &inv.buyer.address;
-    if a.country.is_none() && a.city.is_none() && a.line1.is_none() && a.post_code.is_none() {
+    if address_is_empty(&inv.buyer.address) {
         f.at(Path::group(Group::Buyer));
     }
 });
@@ -129,7 +151,7 @@ terms: [bt::SELLER_VAT_ID, bt::BUYER_VAT_ID, BtId(63)],
             inv.tax_representative
                 .as_ref()
                 .and_then(|t| t.vat_identifier.as_deref()),
-            Path::term(BtId(63)),
+            Path::group_term(Group::TaxRepresentative, BtId(63)),
         ),
     ] {
         if vat.is_some_and(|id| !ok(id)) {
@@ -138,8 +160,11 @@ terms: [bt::SELLER_VAT_ID, bt::BUYER_VAT_ID, BtId(63)],
     }
 });
 
+// BT-29 and BT-30 are named as well as BT-31: the rule is a disjunction over
+// all three, and `touching(BtId(29))` returning nothing for the one rule that
+// requires BT-29 makes the index lie about its own registry.
 rule!(BR_CO_26, "BR-CO-26", Fatal, Both,
-terms: [bt::SELLER_VAT_ID],
+terms: [BtId(29), BtId(30), bt::SELLER_VAT_ID],
 "In order for the buyer to automatically identify a supplier, the Seller identifier (BT-29), \
  the Seller legal registration identifier (BT-30) and/or the Seller VAT identifier (BT-31) \
  shall be present.",
@@ -602,12 +627,16 @@ rule!(BR_17, "BR-17", Fatal, Both, terms: [BtId(59)],
 "The Payee name (BT-59) shall be provided in the Invoice, if the Payee (BG-10) is different \
  from the Seller (BG-4).",
 |inv, f| {
-    // "different from the Seller" is the condition the standard names, so a
-    // payee whose name simply repeats the seller's is not a finding.
+    // The artefact binds this to the *presence of the group* (`cac:PayeeParty`),
+    // not to a comparison with BG-4: a syntax carries a payee only when there is
+    // one to carry, so "different from the Seller" is the standard's prose for a
+    // condition the document has already answered by the time a validator sees
+    // it. A payee whose name happens to repeat the seller's is still a payee and
+    // still needs BT-59.
     if let Some(p) = &inv.payee
         && p.name.as_deref().is_none_or(str::is_empty)
     {
-        f.at(Path::term(BtId(59)));
+        f.at(Path::group_term(Group::Payee, BtId(59)));
     }
 });
 
@@ -618,7 +647,7 @@ rule!(BR_18, "BR-18", Fatal, Both, terms: [BtId(62)],
     if let Some(r) = &inv.tax_representative
         && r.name.as_deref().is_none_or(str::is_empty)
     {
-        f.at(Path::term(BtId(62)));
+        f.at(Path::group_term(Group::TaxRepresentative, BtId(62)));
     }
 });
 
@@ -626,12 +655,15 @@ rule!(BR_19, "BR-19", Fatal, Both, terms: [],
 "The Seller tax representative postal address (BG-12) shall be provided in the Invoice, if \
  the Seller (BG-4) has a Seller tax representative party (BG-11).",
 |inv, f| {
-    if let Some(r) = &inv.tax_representative {
-        let a = &r.address;
-        if a.country.is_none() && a.city.is_none() && a.line1.is_none() && a.post_code.is_none()
-        {
-            f.at(Path::term(BtId(62)));
-        }
+    // BG-12, the address — not BT-62, which is the *name* and belongs to
+    // `BR-18`. Both rules pointed at BT-62, so a tax representative with neither
+    // said "the name is missing" twice and never mentioned the address at all.
+    if inv
+        .tax_representative
+        .as_ref()
+        .is_some_and(|r| address_is_empty(&r.address))
+    {
+        f.at(Path::group(Group::TaxRepresentative));
     }
 });
 
@@ -644,7 +676,7 @@ rule!(BR_20, "BR-20", Fatal, Both, terms: [BtId(69)],
         .as_ref()
         .is_some_and(|r| r.address.country.is_none())
     {
-        f.at(Path::term(BtId(69)));
+        f.at(Path::group_term(Group::TaxRepresentative, BtId(69)));
     }
 });
 
@@ -657,7 +689,7 @@ rule!(BR_56, "BR-56", Fatal, Both, terms: [BtId(63)],
         .as_ref()
         .is_some_and(|r| r.vat_identifier.as_deref().is_none_or(str::is_empty))
     {
-        f.at(Path::term(BtId(63)));
+        f.at(Path::group_term(Group::TaxRepresentative, BtId(63)));
     }
 });
 
@@ -884,38 +916,73 @@ rule!(BR_CL_26, "BR-CL-26", Fatal, ArtefactOnly, terms: [],
     }
 });
 
-rule!(BR_CL_10, "BR-CL-10", Fatal, ArtefactOnly, terms: [],
+rule!(BR_CL_10, "BR-CL-10", Fatal, ArtefactOnly, terms: [BtId(29), BtId(46), BtId(60)],
 "Any identifier identification scheme identifier MUST be coded using one of the ISO 6523 ICD \
  list.",
 |inv, f| {
-    // `BR-CL-10`'s own test also admits the literal `SEPA`, but only on a
-    // party identification under the supplier or the payee — a contextual
-    // extension the flat ICD table deliberately does not carry.
+    // The artefact's context is `cac:PartyIdentification/cbc:ID[@schemeID]` —
+    // **any** party's, so BT-29, BT-46 *and* the payee's BT-60. The literal
+    // `SEPA` is admitted on top of the ICD list, and its own test scopes that to
+    //
+    // ```xpath
+    // (ancestor::cac:AccountingSupplierParty) or (ancestor::cac:PayeeParty)
+    // ```
+    //
+    // — the seller and the payee, and not the buyer. This rule used to check the
+    // seller and the buyer, admit `SEPA` on both, and never look at the payee:
+    // a buyer identifier schemed `SEPA` passed and a payee identifier schemed
+    // anything at all passed. Both are false negatives on a fatal rule.
     const SEPA: &str = "SEPA";
-    for (party, group) in [(&inv.seller, Group::Seller), (&inv.buyer, Group::Buyer)] {
-        for id in &party.identifiers {
-            if id.scheme().is_some_and(|s| {
-                s != SEPA && !crate::codes::contains(lists::ICD_SCHEMES, s)
-            }) {
+    let bad = |scheme: &str, sepa_ok: bool| {
+        !(crate::codes::contains(lists::ICD_SCHEMES, scheme) || (sepa_ok && scheme == SEPA))
+    };
+    for (group, ids, sepa_ok) in [
+        (Group::Seller, &inv.seller.identifiers[..], true),
+        (Group::Buyer, &inv.buyer.identifiers[..], false),
+    ] {
+        for id in ids {
+            if id.scheme().is_some_and(|s| bad(s, sepa_ok)) {
                 f.at(Path::group(group));
             }
         }
     }
+    if inv
+        .payee
+        .as_ref()
+        .and_then(|p| p.identifier.as_ref())
+        .and_then(crate::Identifier::scheme)
+        .is_some_and(|s| bad(s, true))
+    {
+        f.at(Path::group_term(Group::Payee, BtId(60)));
+    }
 });
 
-rule!(BR_CL_11, "BR-CL-11", Fatal, ArtefactOnly, terms: [],
+rule!(BR_CL_11, "BR-CL-11", Fatal, ArtefactOnly, terms: [BtId(30), BtId(47), BtId(61)],
 "Any registration identifier identification scheme identifier MUST be coded using one of the \
  ISO 6523 ICD list.",
 |inv, f| {
+    // `cac:PartyLegalEntity/cbc:CompanyID[@schemeID]`, again on **any** party:
+    // BT-30, BT-47 and the payee's BT-61. No `SEPA` carve-out here — that one
+    // belongs to `BR-CL-10`'s context alone.
+    let bad = |s: &str| !crate::codes::contains(lists::ICD_SCHEMES, s);
     for (party, group) in [(&inv.seller, Group::Seller), (&inv.buyer, Group::Buyer)] {
         if party
             .legal_registration
             .as_ref()
             .and_then(crate::Identifier::scheme)
-            .is_some_and(|s| !crate::codes::contains(lists::ICD_SCHEMES, s))
+            .is_some_and(bad)
         {
             f.at(Path::group(group));
         }
+    }
+    if inv
+        .payee
+        .as_ref()
+        .and_then(|p| p.legal_registration.as_ref())
+        .and_then(crate::Identifier::scheme)
+        .is_some_and(bad)
+    {
+        f.at(Path::group_term(Group::Payee, BtId(61)));
     }
 });
 

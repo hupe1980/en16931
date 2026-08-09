@@ -59,24 +59,33 @@
 //! the artefacts on any machine that has them, so it is measured rather than
 //! claimed.
 //!
-//! Of the **316** rules registered across every shipped profile:
+//! Of the **317** rules registered across every shipped profile:
 //!
 //! | | | |
 //! |---|---:|---|
 //! | retired by the types | 53 | no state can make them fire — `BT-112` is not an `Option` |
 //! | undecidable | 4 | `BR-CO-05`…`-08`; **CEN's own binding is `value="true()"`** |
-//! | checkable | 259 | **every one exercised by its own failing fixture** |
+//! | checkable | 260 | **every one exercised by its own failing fixture** |
 //!
 //! And the profile rule sets are complete against *their* authorities too,
 //! asserted the same way:
 //!
 //! | [`profiles`] | Rules run | Artefact coverage |
 //! |---|---:|---|
-//! | EN 16931 core | 225 | 223 / 223 CEN syntax-independent |
-//! | XRechnung 3.0 | 280 | **55 / 55** KoSIT asserts + **21 / 21** merged Peppol |
-//! | XRechnung 3.0 CVD | 287 | + all 8 Clean Vehicles Directive rules |
-//! | XRechnung 3.0 Extension | 289 | + all 14 `BR-DEX-*` |
-//! | Peppol BIS Billing 3.0 | 271 | **46 / 46** `PEPPOL-EN16931-*` |
+//! | EN 16931 core | 227 | 223 / 223 CEN syntax-independent |
+//! | XRechnung 3.0 | 282 | **55 / 55** KoSIT asserts + **21 / 21** merged Peppol |
+//! | XRechnung 3.0 CVD | 290 | + all 8 Clean Vehicles Directive rules |
+//! | XRechnung 3.0 Extension | 296 | + all 14 `BR-DEX-*` |
+//! | Peppol BIS Billing 3.0 | 273 | **46 / 46** `PEPPOL-EN16931-*` |
+//!
+//! …and at the severities those authorities publish. KoSIT re-levels nine CEN
+//! rules across its three scenarios — `BR-CL-23` to *warning* even for the plain
+//! CIUS, because CEN's unit-code table lags UN/ECE's — and
+//! [`Profile::levels`] carries all nine, checked against
+//! `scenarios.xml` by `tests/codelists.rs`. Reporting them as fatal, which this
+//! crate did, rejects invoices the German reference validator accepts.
+//!
+//! [`Profile::levels`]: validation::profile::Profile::levels
 //!
 //! And the rules agree with the authorities' **own conformance suites**, not
 //! only with their rule lists: **100 %** agreement on every assertion run —
@@ -103,9 +112,9 @@
 //!
 //! [`Profile::missing_terms`]: validation::profile::Profile::missing_terms
 //!
-//! A five-line invoice validates in **1.5 µs** through the core rules and under
-//! 5 µs through XRechnung's 280; `proptest` properties assert validation never
-//! panics, is deterministic, and never cites an unresolvable rule id.
+//! A five-line invoice validates in about **2 µs** through the core rules and
+//! under 7 µs through XRechnung's 280; `proptest` properties assert validation
+//! never panics, is deterministic, and never cites an unresolvable rule id.
 //!
 //! Out of scope, deliberately and named rather than quietly dropped: the 1 339
 //! *syntax* rules (`UBL-*`, `CII-*`) belong to `en16931-formats`, and Peppol's

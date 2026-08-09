@@ -172,6 +172,22 @@ pub fn to_svrl(report: &ValidationReport) -> String {
     comment(crate::ATTRIBUTION, &mut out);
     out.push('\n');
 
+    // Which authority releases these verdicts were checked against. SVRL has no
+    // element for provenance — `schemaVersion` names the *standard*, not the
+    // artefact revision — so it goes in a comment, where a consumer that does
+    // not care ignores it and one debugging a disagreement between two
+    // validators finds the first thing worth comparing.
+    if !report.artefacts().is_empty() {
+        let refs: Vec<String> = report
+            .artefacts()
+            .iter()
+            .map(|a| format!("{} {} {}", a.authority, a.repo, a.git_ref))
+            .collect();
+        out.push_str("  ");
+        comment(&format!("verified against: {}", refs.join("; ")), &mut out);
+        out.push('\n');
+    }
+
     out.push_str("  <svrl:active-pattern name=\"");
     escape(report.profile().unwrap_or("EN 16931"), &mut out);
     out.push_str("\"/>\n");

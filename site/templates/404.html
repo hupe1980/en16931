@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block head_title %}<title>Page not found · {{ config.title }}</title>{% endblock head_title %}
+{% block head_indexing %}<meta name="robots" content="noindex">{% endblock head_indexing %}
+{% block content %}
+{#- A 404 on a documentation site is almost always a moved page or a guessed
+    URL, so the useful thing is not an apology — it is the table of contents. -#}
+<div class="wrap doc">
+  <article>
+    <p class="eyebrow">404</p>
+    <h1>That page is not here.</h1>
+    <p class="lede">
+      A link went stale, or the URL was guessed. Everything the site has is below.
+    </p>
+
+    <div class="cards">
+      {% set docs = get_section(path="docs/_index.md") %}
+      {% for p in docs.pages %}
+      <a class="card" href="{{ p.permalink | safe }}">
+        <h3>{{ p.title }}</h3>
+        <p>{{ p.description }}</p>
+      </a>
+      {% endfor %}
+    </div>
+
+    <p style="margin-top:2rem">
+      Looking for the API reference? That is
+      <a href="{{ config.extra.docs_rs }}">docs.rs</a>. Looking for the source?
+      <a href="{{ config.extra.repo }}">GitHub</a>.
+    </p>
+  </article>
+</div>
+{% endblock content %}

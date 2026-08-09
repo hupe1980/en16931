@@ -338,14 +338,16 @@ pub fn check_taxable_amount(inv: &Invoice, p: CategoryProfile, f: &mut Findings<
             .filter(|a| matches(&a.vat))
             .map(|a| a.amount);
 
+        // `continue`, not `return`: an overflow in one group must not silence
+        // the rule for the groups after it.
         let (Ok(pos), Ok(neg)) = (
             InvoiceAmount::checked_sum(lines.chain(charges)),
             InvoiceAmount::checked_sum(allowances),
         ) else {
-            return;
+            continue;
         };
         let Ok(expected) = pos.checked_sub(neg) else {
-            return;
+            continue;
         };
 
         // ±1.00, as the artefacts write it — and on absolute values, so a credit
@@ -378,7 +380,7 @@ pub fn check_tax_amount(inv: &Invoice, p: CategoryProfile, f: &mut Findings<'_>)
                 let rate = entry.rate.map_or(Decimal::ZERO, Percentage::into_decimal);
                 let base = entry.taxable_amount.into_decimal().abs();
                 let Some(exact) = base.checked_mul(rate).map(|v| v / Decimal::ONE_HUNDRED) else {
-                    return;
+                    continue;
                 };
                 let expected = exact.round_dp(2);
                 let stated = entry.tax_amount.into_decimal().abs();

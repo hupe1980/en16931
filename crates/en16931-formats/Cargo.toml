@@ -40,8 +40,6 @@ cii = ["dep:roxmltree"]
 ## and one that does not build for `wasm32-unknown-unknown`. Nobody reading a
 ## UBL invoice should pay for a PDF parser.
 zugferd = ["dep:lopdf", "cii"]
-## Render the visible invoice under a corporate design. **Not yet implemented.**
-render = ["zugferd"]
 ## `serde` on this crate's own public types.
 serde = ["dep:serde", "en16931/serde"]
 

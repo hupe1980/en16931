@@ -1,0 +1,250 @@
+// en16931 — the site's whole stylesheet.
+//
+// One file, no framework, no webfont, no external request. That is not
+// minimalism for its own sake: a documentation page that renders before the
+// network settles is the difference between reading and waiting, and every
+// third-party asset is one more thing that can outlive its CDN.
+//
+// Colours are declared as tokens on bare `:root` and redefined once for dark,
+// so the page follows the reader's system setting and never half-does it.
+
+:root {
+  --bg: #ffffff;
+  --bg-soft: #f6f7f9;
+  --bg-code: #f4f5f7;
+  --fg: #16181d;
+  --fg-soft: #545a66;
+  --line: #e2e5ea;
+  --accent: #1d4ed8;
+  --accent-soft: #eff4ff;
+  --eu: #003399;
+  --radius: 10px;
+  --wrap: 74rem;
+  --measure: 42rem;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1116;
+    --bg-soft: #151a21;
+    --bg-code: #161b22;
+    --fg: #e7eaf0;
+    --fg-soft: #9aa4b2;
+    --line: #262c36;
+    --accent: #7aa2ff;
+    --accent-soft: #17203a;
+    --eu: #7aa2ff;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 400 1rem/1.65 var(--sans);
+  text-rendering: optimizeLegibility;
+}
+
+.wrap { max-width: var(--wrap); margin-inline: auto; padding-inline: 1.25rem; }
+
+.skip {
+  position: absolute; left: -9999px;
+  &:focus {
+    left: 1rem; top: 1rem; z-index: 10; padding: .6rem 1rem;
+    background: var(--accent); color: #fff; border-radius: var(--radius);
+  }
+}
+
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+
+// ── header ──────────────────────────────────────────────────────────────────
+
+.topbar {
+  border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; z-index: 5;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(8px);
+}
+.topbar-inner { display: flex; align-items: center; gap: 1.5rem; height: 3.5rem; }
+.brand {
+  font-weight: 700; letter-spacing: -.01em; color: var(--fg); text-decoration: none;
+  display: inline-flex; align-items: center; gap: .5rem;
+}
+.brand .flag { font-size: 1.1rem; }
+.topbar nav { margin-left: auto; display: flex; gap: 1.25rem; flex-wrap: wrap; }
+.topbar nav a { color: var(--fg-soft); text-decoration: none; font-size: .94rem; }
+.topbar nav a:hover { color: var(--fg); }
+
+// ── search ──────────────────────────────────────────────────────────────────
+
+.search { position: relative; }
+.search input {
+  font: inherit; font-size: .9rem; width: 11rem;
+  padding: .4rem .7rem; border-radius: var(--radius);
+  border: 1px solid var(--line); background: var(--bg-soft); color: var(--fg);
+  &:focus { outline: 2px solid var(--accent); outline-offset: 1px; width: 15rem; }
+}
+#results {
+  position: absolute; right: 0; top: calc(100% + .5rem); z-index: 6;
+  width: min(28rem, 90vw); max-height: 24rem; overflow-y: auto;
+  background: var(--bg); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: 0 10px 30px rgb(0 0 0 / .18);
+  a {
+    display: block; padding: .6rem .85rem; text-decoration: none; color: inherit;
+    border-bottom: 1px solid var(--line);
+    &:last-child { border-bottom: 0; }
+    &:hover, &:focus { background: var(--accent-soft); }
+    strong { display: block; font-size: .92rem; color: var(--accent); }
+    span { display: block; font-size: .82rem; color: var(--fg-soft); }
+  }
+}
+// Below the fold of a phone header there is no room; the docs index is the
+// navigation there, and it is one tap away.
+@media (max-width: 44rem) { .search { display: none; } }
+
+// ── hero ────────────────────────────────────────────────────────────────────
+
+.hero {
+  padding: clamp(3rem, 9vw, 6rem) 0 clamp(2rem, 5vw, 3.5rem);
+  background:
+    radial-gradient(60rem 26rem at 50% -8rem, var(--accent-soft), transparent 70%);
+  border-bottom: 1px solid var(--line);
+}
+.eyebrow {
+  margin: 0 0 1rem; color: var(--fg-soft);
+  font-size: .82rem; letter-spacing: .08em; text-transform: uppercase; font-weight: 600;
+}
+.hero h1 {
+  margin: 0 0 1rem;
+  font-size: clamp(2.1rem, 6vw, 3.6rem); line-height: 1.08;
+  letter-spacing: -.03em; font-weight: 800;
+}
+.lede { color: var(--fg-soft); font-size: 1.12rem; max-width: var(--measure); margin: 0 0 1.75rem; }
+
+.cta { display: flex; gap: .75rem; flex-wrap: wrap; margin-bottom: 1.75rem; }
+.button {
+  display: inline-block; padding: .7rem 1.3rem; border-radius: var(--radius);
+  border: 1px solid var(--line); color: var(--fg); text-decoration: none; font-weight: 600;
+  background: var(--bg);
+}
+.button:hover { border-color: var(--accent); }
+.button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.install {
+  display: flex; align-items: center; gap: .75rem; flex-wrap: wrap;
+  font-size: .95rem; color: var(--fg-soft);
+  code {
+    background: var(--bg-code); border: 1px solid var(--line);
+    padding: .45rem .8rem; border-radius: var(--radius); color: var(--fg);
+  }
+}
+
+// ── content ─────────────────────────────────────────────────────────────────
+
+.band { padding-block: clamp(2rem, 5vw, 3.25rem); }
+
+.stats {
+  display: grid; gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+}
+.stat {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 1.1rem 1.2rem; background: var(--bg-soft);
+  .n { display: block; font-size: 1.7rem; font-weight: 800; letter-spacing: -.02em; }
+  .k { display: block; color: var(--fg-soft); font-size: .9rem; margin-top: .15rem; }
+}
+
+.cards {
+  display: grid; gap: 1rem; margin-top: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+}
+.card {
+  display: block; padding: 1.2rem; border: 1px solid var(--line);
+  border-radius: var(--radius); text-decoration: none; color: inherit; background: var(--bg-soft);
+  h3 { margin: 0 0 .4rem; font-size: 1.05rem; color: var(--accent); }
+  p { margin: 0; color: var(--fg-soft); font-size: .94rem; }
+  &:hover { border-color: var(--accent); }
+}
+
+.doc { padding-block: 2.5rem 4rem; }
+.doc article { min-width: 0; }
+.doc h1 { font-size: clamp(1.9rem, 4.5vw, 2.6rem); letter-spacing: -.025em; margin: 0 0 .5rem; }
+.doc h2 {
+  font-size: 1.45rem; letter-spacing: -.015em; margin: 2.5rem 0 .75rem;
+  padding-top: .75rem; border-top: 1px solid var(--line);
+}
+.doc h3 { font-size: 1.1rem; margin: 1.75rem 0 .5rem; }
+.doc p, .doc li { max-width: var(--measure); }
+.doc h2 + p, .doc h3 + p { margin-top: 0; }
+
+.with-aside { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3rem; }
+@media (min-width: 60rem) {
+  .with-aside { grid-template-columns: minmax(0, 1fr) 15rem; }
+  aside { position: sticky; top: 5rem; align-self: start; font-size: .9rem; }
+}
+aside h2 {
+  font-size: .78rem; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--fg-soft); margin: 0 0 .6rem; border: 0; padding: 0;
+}
+aside ol { list-style: none; margin: 0; padding: 0; }
+aside ol ol { padding-left: .9rem; }
+aside li { margin: .3rem 0; }
+aside a { color: var(--fg-soft); text-decoration: none; }
+aside a:hover { color: var(--accent); }
+.aside-links { margin-top: 1.5rem; color: var(--fg-soft); }
+
+.crumbs { font-size: .88rem; color: var(--fg-soft); margin-bottom: 1rem; }
+.crumbs a { color: var(--fg-soft); }
+
+// ── prose furniture ─────────────────────────────────────────────────────────
+
+code {
+  font-family: var(--mono); font-size: .9em;
+  background: var(--bg-code); padding: .12em .35em; border-radius: 5px;
+}
+pre {
+  background: var(--bg-code); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 1rem 1.1rem;
+  overflow-x: auto; font-size: .88rem; line-height: 1.55;
+  code { background: none; padding: 0; }
+}
+
+blockquote {
+  margin: 1.5rem 0; padding: .1rem 1.2rem;
+  border-left: 3px solid var(--accent); color: var(--fg-soft);
+  background: var(--bg-soft); border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+// Tables carry most of this project's comparisons, so they get real attention:
+// they scroll inside their own box rather than pushing the page sideways.
+.table-scroll, table { display: block; max-width: 100%; overflow-x: auto; }
+table { border-collapse: collapse; margin: 1.25rem 0; font-size: .93rem; }
+th, td { border-bottom: 1px solid var(--line); padding: .55rem .8rem; text-align: left; vertical-align: top; }
+th { font-weight: 700; white-space: nowrap; }
+tbody tr:hover { background: var(--bg-soft); }
+
+hr { border: 0; border-top: 1px solid var(--line); margin: 2.5rem 0; }
+
+.footer {
+  border-top: 1px solid var(--line); padding-block: 2rem 3rem;
+  color: var(--fg-soft); font-size: .9rem;
+  p { max-width: 52rem; }
+}
+.attribution { font-size: .82rem; }
+
+// A pill for the "this is measured, not claimed" notes the project leans on.
+.note {
+  border: 1px solid var(--line); border-left: 3px solid var(--accent);
+  background: var(--bg-soft); border-radius: 0 var(--radius) var(--radius) 0;
+  padding: .9rem 1.1rem; margin: 1.5rem 0;
+  p:last-child { margin-bottom: 0; }
+  p:first-child { margin-top: 0; }
+}

@@ -989,23 +989,49 @@ pub mod extension {
         }
     });
 
-    dex!(BR_DEX_04, "BR-DEX-04", Fatal, terms: [BtId(29), BtId(46)],
+    dex!(BR_DEX_04, "BR-DEX-04", Fatal, terms: [BtId(29), BtId(46), BtId(60)],
     "Any scheme identifier in cac:PartyIdentification MUST be coded using one of the ISO 6523 ICD \
      list, extended by the DiGA codes.",
     |inv, f| {
-        for (g, party) in [(Group::Seller, &inv.seller), (Group::Buyer, &inv.buyer)] {
-            for id in &party.identifiers {
-                if id.scheme().is_some_and(|s| !icd_or_diga(s)) {
+        // It replaces `BR-CL-10`, so it inherits that rule's context *and* its
+        // `SEPA` carve-out — KoSIT's assertion keeps the clause verbatim:
+        //
+        // ```xpath
+        // … or (contains(' SEPA ', …) and ((ancestor::cac:AccountingSupplierParty)
+        //                               or (ancestor::cac:PayeeParty)))
+        // ```
+        //
+        // Dropping it would make the Extension *narrower* than the CIUS it
+        // extends, which is the one thing §4.3 says an Extension does not do.
+        let ok = |scheme: &str, sepa_ok: bool| icd_or_diga(scheme) || (sepa_ok && scheme == "SEPA");
+        for (g, ids, sepa_ok) in [
+            (Group::Seller, &inv.seller.identifiers[..], true),
+            (Group::Buyer, &inv.buyer.identifiers[..], false),
+        ] {
+            for id in ids {
+                if id.scheme().is_some_and(|s| !ok(s, sepa_ok)) {
                     f.at(Path::group(g));
                 }
             }
         }
+        if inv
+            .payee
+            .as_ref()
+            .and_then(|p| p.identifier.as_ref())
+            .and_then(crate::Identifier::scheme)
+            .is_some_and(|s| !ok(s, true))
+        {
+            f.at(Path::group_term(Group::Payee, BtId(60)));
+        }
     });
 
-    dex!(BR_DEX_05, "BR-DEX-05", Fatal, terms: [BtId(30), BtId(47)],
+    dex!(BR_DEX_05, "BR-DEX-05", Fatal, terms: [BtId(30), BtId(47), BtId(61)],
     "Any scheme identifier in cac:PartyLegalEntity MUST be coded using one of the ISO 6523 ICD \
      list, extended by the DiGA codes.",
     |inv, f| {
+        // `BR-CL-11`'s context, with the DiGA codes added: any party's legal
+        // entity, the payee's included. No `SEPA` clause here — that one belongs
+        // to `BR-DEX-04`'s context alone.
         for (g, party) in [(Group::Seller, &inv.seller), (Group::Buyer, &inv.buyer)] {
             if party
                 .legal_registration
@@ -1015,6 +1041,15 @@ pub mod extension {
             {
                 f.at(Path::group(g));
             }
+        }
+        if inv
+            .payee
+            .as_ref()
+            .and_then(|p| p.legal_registration.as_ref())
+            .and_then(crate::Identifier::scheme)
+            .is_some_and(|s| !icd_or_diga(s))
+        {
+            f.at(Path::group_term(Group::Payee, BtId(61)));
         }
     });
 

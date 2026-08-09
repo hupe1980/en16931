@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="hero">
+  <div class="wrap">
+    <p class="eyebrow">EN 16931 · XRechnung · Peppol BIS 3.0 · ZUGFeRD / Factur-X</p>
+    <h1>The European e-invoice,<br>as Rust types.</h1>
+    <p class="lede">{{ section.extra.lede }}</p>
+    <div class="cta">
+      <a class="button primary" href="{{ get_url(path='@/docs/getting-started.md') | safe }}">Get started</a>
+      <a class="button" href="{{ config.extra.repo }}">GitHub</a>
+    </div>
+    <div class="install">
+      <code>cargo add en16931</code>
+      <span class="sep">or</span>
+      <code>cargo install en16931-cli</code>
+    </div>
+  </div>
+</section>
+
+<section class="wrap band">
+  <div class="stats">
+    {% for s in section.extra.stats %}
+    <div class="stat">
+      <span class="n">{{ s.n }}</span>
+      <span class="k">{{ s.k }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="wrap band">
+  {{ section.content | safe }}
+</section>
+
+<section class="wrap band">
+  <h2>Where to go next</h2>
+  <div class="cards">
+    {% set docs = get_section(path="docs/_index.md") %}
+    {% for p in docs.pages %}
+    <a class="card" href="{{ p.permalink | safe }}">
+      <h3>{{ p.title }}</h3>
+      <p>{{ p.description }}</p>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+
+{% endblock content %}

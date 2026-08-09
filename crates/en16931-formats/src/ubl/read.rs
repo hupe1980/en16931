@@ -65,6 +65,22 @@ fn kid<'a, 'i>(n: roxmltree::Node<'a, 'i>, want: &str) -> Option<roxmltree::Node
     kids(n).find(|c| name(*c) == want)
 }
 
+/// `None` for an empty string.
+///
+/// An empty element is an **absent** term, not a term whose value is the empty
+/// string: `<cbc:BuyerReference/>` says nothing, and `Some("")` claims it says
+/// something blank. The two spellings behave the same under every rule — they
+/// all test `is_none_or(str::is_empty)` — and differ everywhere else: in a
+/// `match` on `Option`, in what gets written back out, and in whether the two
+/// syntaxes agree with each other on the same document.
+///
+/// This reader was already inconsistent with *itself*: [`text`] returns `None`
+/// because `roxmltree` gives an empty element no text node, while the dozen call
+/// sites that read an element's own text returned `Some("")`.
+fn non_empty(s: String) -> Option<String> {
+    (!s.is_empty()).then_some(s)
+}
+
 /// Trimmed text content of a direct child.
 fn text(n: roxmltree::Node<'_, '_>, want: &str) -> Option<String> {
     kid(n, want)
@@ -139,9 +155,9 @@ impl Reader {
         // by which `TaxTotal` carries subtotals. Both need a second pass.
         for c in kids(root) {
             match name(c) {
-                "CustomizationID" => inv.specification_id = Some(own_text(c)),
-                "ProfileID" => inv.business_process = Some(own_text(c)),
-                "ID" => inv.number = Some(own_text(c)),
+                "CustomizationID" => inv.specification_id = non_empty(own_text(c)),
+                "ProfileID" => inv.business_process = non_empty(own_text(c)),
+                "ID" => inv.number = non_empty(own_text(c)),
                 "IssueDate" => {
                     if is_malformed(root, "IssueDate", |t| Date::parse(t).ok()) {
                         self.malformed.push("IssueDate".to_owned());
@@ -156,8 +172,8 @@ impl Reader {
                 "TaxPointDate" => inv.vat_point_date = date(root, "TaxPointDate"),
                 "DocumentCurrencyCode" => inv.currency = Some(Code::new(own_text(c))),
                 "TaxCurrencyCode" => inv.vat_accounting_currency = Some(Code::new(own_text(c))),
-                "AccountingCost" => inv.accounting_reference = Some(own_text(c)),
-                "BuyerReference" => inv.buyer_reference = Some(own_text(c)),
+                "AccountingCost" => inv.accounting_reference = non_empty(own_text(c)),
+                "BuyerReference" => inv.buyer_reference = non_empty(own_text(c)),
                 "InvoicePeriod" => {
                     // BT-8 rides inside `cac:InvoicePeriod` in UBL, so an
                     // `InvoicePeriod` carrying *only* a `DescriptionCode` is
@@ -270,17 +286,35 @@ impl Reader {
         }
         // BT-90 lives on the *seller* in UBL — `cac:PartyIdentification` with
         // `schemeID="SEPA"` — while the model puts it in BG-19, where the rule
-        // that needs it is. `BR-DE-30` cannot be checked without this hop.
-        let sepa = inv
-            .seller
-            .identifiers
-            .iter()
-            .find(|id| id.scheme() == Some("SEPA"))
-            .map(|id| id.content().to_owned());
-        if let Some(PaymentMeans::DirectDebit(dd)) =
-            inv.payment.as_mut().and_then(|p| p.means.as_mut())
-        {
-            dd.creditor_identifier = sepa;
+        // that needs it is. `BR-DE-30` cannot be checked without this hop, and
+        // `super::write` performs it in reverse.
+        //
+        // **Moved, not copied.** A `schemeID="SEPA"` party identification is not
+        // a BT-29 that happens to have an unusual scheme; it is the UBL binding's
+        // home for BT-90, which is why `BR-CL-10` admits `SEPA` there and only
+        // under the supplier or the payee. Leaving it in `identifiers` as well
+        // made the term arrive twice, and a document that crossed into UBL and
+        // back grew a seller identifier each time.
+        //
+        // Only when there is a BG-19 to move it into: without one the model has
+        // nowhere else to put it, and dropping it would be worse than leaving it
+        // where `BR-CL-10` still accepts it.
+        let has_direct_debit = matches!(
+            inv.payment.as_ref().and_then(|p| p.means.as_ref()),
+            Some(PaymentMeans::DirectDebit(_))
+        );
+        if has_direct_debit {
+            let sepa = inv
+                .seller
+                .identifiers
+                .iter()
+                .position(|id| id.scheme() == Some("SEPA"))
+                .map(|i| inv.seller.identifiers.remove(i).content().to_owned());
+            if let Some(PaymentMeans::DirectDebit(dd)) =
+                inv.payment.as_mut().and_then(|p| p.means.as_mut())
+            {
+                dd.creditor_identifier = sepa;
+            }
         }
 
         // Resolve BT-110 / BT-111 now that BT-5 and BT-6 are known.
@@ -326,12 +360,12 @@ impl Reader {
         let mut a = PostalAddress::default();
         for c in kids(n) {
             match name(c) {
-                "StreetName" => a.line1 = Some(own_text(c)),
-                "AdditionalStreetName" => a.line2 = Some(own_text(c)),
+                "StreetName" => a.line1 = non_empty(own_text(c)),
+                "AdditionalStreetName" => a.line2 = non_empty(own_text(c)),
                 "AddressLine" => a.line3 = text(c, "Line"),
-                "CityName" => a.city = Some(own_text(c)),
-                "PostalZone" => a.post_code = Some(own_text(c)),
-                "CountrySubentity" => a.subdivision = Some(own_text(c)),
+                "CityName" => a.city = non_empty(own_text(c)),
+                "PostalZone" => a.post_code = non_empty(own_text(c)),
+                "CountrySubentity" => a.subdivision = non_empty(own_text(c)),
                 "Country" => a.country = code(c, "IdentificationCode"),
                 _ => self.skip("PostalAddress", c),
             }
@@ -477,7 +511,7 @@ impl Reader {
         for c in kids(n) {
             match name(c) {
                 "ID" | "Percent" | "TaxScheme" => {}
-                "TaxExemptionReason" => reason = Some(own_text(c)),
+                "TaxExemptionReason" => reason = non_empty(own_text(c)),
                 "TaxExemptionReasonCode" => reason_code = Some(Code::new(own_text(c))),
                 _ => self.skip("TaxCategory", c),
             }
@@ -706,8 +740,12 @@ impl Reader {
             price_discount: None,
             gross_price: None,
             base_quantity: decimal(n, "BaseQuantity").map(Quantity::new),
+            // An empty `unitCode` is an absent BT-150, not a BT-150 whose value
+            // is the empty string. The difference is a fatal
+            // `PEPPOL-EN16931-R130`, which compares BT-150 against BT-130.
             base_quantity_code: kid(n, "BaseQuantity")
                 .and_then(|q| q.attribute("unitCode"))
+                .filter(|u| !u.trim().is_empty())
                 .map(Code::new),
         };
         for c in kids(n) {

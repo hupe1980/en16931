@@ -14,11 +14,11 @@
 //! [`super::order`]'s, derived from 320 authority instances, and `tests/order.rs`
 //! asserts the output against it.
 //!
-//! **Elements that must not appear.** 1 220 of the 1 339 syntax rules say some
+//! **Elements that must not appear.** 1 218 of the 1 339 syntax rules say some
 //! UBL element "shall not be used". A writer that only knows the EN 16931
 //! subset cannot violate them — which is a claim, so `tests/subset.rs` walks
 //! every element name this module can emit and checks it against the allowed
-//! set. That converts 1 220 rules from "we believe we comply" into an
+//! set. That converts 1 218 rules from "we believe we comply" into an
 //! assertion, and it is the reason the writer is enumerated rather than
 //! reflective.
 //!
@@ -81,6 +81,15 @@ pub struct Written {
 /// [`Invoice::kind`], because UBL has two roots where CII has one.
 #[must_use]
 pub fn write(inv: &Invoice) -> Written {
+    write_waiving(inv, &[])
+}
+
+/// As [`fn@write`], permitting the named prohibitions.
+///
+/// `waived` comes from the target profile's declared extension capability — see
+/// [`crate::ubl::write_for`]. Core EN 16931 waives nothing, so the extension
+/// groups are dropped and reported exactly as any other out-of-subset element.
+pub(crate) fn write_waiving(inv: &Invoice, waived: &'static [&'static str]) -> Written {
     let credit = matches!(inv.kind, DocumentKind::CreditNote);
     let (root, ns) = if credit {
         ("CreditNote", NS_CREDIT_NOTE)
@@ -97,7 +106,8 @@ pub fn write(inv: &Invoice) -> Written {
             ("xmlns:cbc".to_owned(), NS_CBC.to_owned()),
         ],
         &RULES,
-    );
+    )
+    .waiving(waived);
 
     // ---- header, in the order `super::order` derived --------------------
     opt(
@@ -156,6 +166,7 @@ pub fn write(inv: &Invoice) -> Written {
             "cac:InvoicePeriod",
             p,
             inv.vat_point_date_code.as_ref(),
+            "BG-14",
         );
     }
     if let Some(r) = &inv.purchase_order_reference {
@@ -220,8 +231,18 @@ pub fn write(inv: &Invoice) -> Written {
         inv.project_reference.as_ref(),
     );
 
-    party(&mut x, "cac:AccountingSupplierParty", &inv.seller);
-    party(&mut x, "cac:AccountingCustomerParty", &inv.buyer);
+    // BT-90 rides on the seller in UBL; see `party`.
+    let sepa_creditor = match inv.payment.as_ref().and_then(|p| p.means.as_ref()) {
+        Some(PaymentMeans::DirectDebit(d)) => d.creditor_identifier.as_deref(),
+        _ => None,
+    };
+    party(
+        &mut x,
+        "cac:AccountingSupplierParty",
+        &inv.seller,
+        sepa_creditor,
+    );
+    party(&mut x, "cac:AccountingCustomerParty", &inv.buyer, None);
     if let Some(p) = &inv.payee {
         x.group("cac:PayeeParty", |x| {
             if let Some(i) = &p.identifier {
@@ -270,6 +291,21 @@ pub fn write(inv: &Invoice) -> Written {
                 });
             }
         });
+    }
+    // A BG-19 whose only populated term is BT-90 has no group to live in: UBL
+    // carries BT-90 on the *seller*, and `cac:PaymentMandate` with no children is
+    // pruned — so the direct debit's *presence* is lost even though its data is
+    // not. Named, because `BR-DE-30` and `BR-DE-31` are about that group.
+    if let Some(PaymentMeans::DirectDebit(d)) = inv.payment.as_ref().and_then(|p| p.means.as_ref())
+        && d.mandate_reference.is_none()
+        && d.debited_account.is_none()
+    {
+        x.dropped(
+            "BG-19 DIRECT DEBIT carries only BT-90, which UBL puts on the seller — \
+             cac:PaymentMandate has nothing to hold, so the group does not survive \
+             (BR-DE-30 / BR-DE-31 report the missing terms on the model)"
+                .to_owned(),
+        );
     }
     if let Some(p) = &inv.payment {
         payment_means(&mut x, p);
@@ -331,6 +367,38 @@ pub fn write(inv: &Invoice) -> Written {
         });
     }
 
+    // BG-DEX-09, the XRechnung Extension's third-party payment. `UBL-CR-470`
+    // forbids `cac:PrepaidPayment` in core EN 16931, so this is emitted and the
+    // serialiser decides: dropped and reported for a core document, kept for a
+    // profile that declares the group. It used to be neither written nor
+    // reported, which lost the data in silence — and this is the very data
+    // `EN-EXT-01` exists to warn about, because in Germany losing it is a §14c
+    // Abs. 1 UStG liability.
+    for (i, p) in inv.extensions.third_party_payments.iter().enumerate() {
+        // All three terms absent is a group with no children, which the
+        // serialiser prunes — correctly, since `<cac:PrepaidPayment/>` asserts
+        // nothing. `BR-DEX-10` … `-12` are about exactly that document, and
+        // KoSIT ships a negative instance of it, so the loss is named.
+        if p.payment_type.is_none() && p.amount.is_none() && p.description.is_none() {
+            x.dropped(format!(
+                "BG-DEX-09[{i}] is present and empty, which cac:PrepaidPayment \
+                 cannot express (BR-DEX-10 … -12 report it on the model)"
+            ));
+            continue;
+        }
+        x.group("cac:PrepaidPayment", |x| {
+            if let Some(t) = &p.payment_type {
+                x.leaf("cbc:ID", &[], t);
+            }
+            if let Some(a) = p.amount {
+                x.leaf("cbc:PaidAmount", &[("currencyID", ccy)], &amt(a));
+            }
+            if let Some(d) = &p.description {
+                x.leaf("cbc:InstructionID", &[], d);
+            }
+        });
+    }
+
     // ---- totals ---------------------------------------------------------
     let t = &inv.totals;
     x.group("cac:LegalMonetaryTotal", |x| {
@@ -364,8 +432,8 @@ pub fn write(inv: &Invoice) -> Written {
         x.leaf("cbc:PayableAmount", &[("currencyID", ccy)], &amt(t.due));
     });
 
-    for l in &inv.lines {
-        line(&mut x, l, credit, ccy);
+    for (i, l) in inv.lines.iter().enumerate() {
+        line(&mut x, l, i, inv.extensions.sub_lines(i), credit, ccy);
     }
 
     let (xml, dropped) = x.finish();
@@ -400,7 +468,19 @@ fn doc_ref(x: &mut Xml, name: &str, r: Option<&DocumentReference>) {
     }
 }
 
-fn period(x: &mut Xml, name: &str, p: &Period, code: Option<&Code>) {
+fn period(x: &mut Xml, name: &str, p: &Period, code: Option<&Code>, what: &str) {
+    // A group with no children is pruned by the serialiser, which is right —
+    // `<cac:InvoicePeriod/>` asserts nothing. But the *model* distinguishes an
+    // absent BG-14 from a present-and-empty one, and `BR-CO-19` / `BR-CO-20`
+    // exist for exactly the second case. So the loss is reported rather than
+    // left for a reader to notice that a finding stopped firing.
+    if p.start.is_none() && p.end.is_none() && code.is_none() {
+        x.dropped(format!(
+            "{what} is present with neither a start nor an end date, which \
+             {name} cannot express (BR-CO-19 / BR-CO-20 report it on the model)"
+        ));
+        return;
+    }
     x.group(name, |x| {
         if let Some(s) = p.start {
             x.leaf("cbc:StartDate", &[], &s.to_string());
@@ -473,7 +553,22 @@ fn address_body(x: &mut Xml, a: &PostalAddress) {
     }
 }
 
-fn party(x: &mut Xml, wrapper: &str, p: &Party) {
+/// A party, and — for the seller only — BT-90.
+///
+/// # The hop back
+///
+/// UBL has no element for BT-90 inside BG-19. It carries the bank-assigned
+/// creditor identifier as a **seller** `cac:PartyIdentification` with
+/// `schemeID="SEPA"`, which is the one place `BR-CL-10` admits a scheme outside
+/// ISO 6523 — and only under the supplier or the payee.
+///
+/// `super::read` already hops it the other way, into BG-19 where `BR-DE-30` can
+/// see it. This writer did not hop it back, so **every direct-debit invoice
+/// written as UBL lost BT-90 in silence** and failed `BR-DE-30` at the
+/// counterparty. A reader and a writer that disagree about where a term lives is
+/// exactly the asymmetry `tests/cross_syntax.rs` exists to find: CII keeps BT-90
+/// in BG-19, so the loss only shows when a document crosses.
+fn party(x: &mut Xml, wrapper: &str, p: &Party, sepa_creditor: Option<&str>) {
     x.group(wrapper, |x| {
         x.group("cac:Party", |x| {
             if let Some(e) = &p.electronic_address {
@@ -481,6 +576,18 @@ fn party(x: &mut Xml, wrapper: &str, p: &Party) {
             }
             for i in &p.identifiers {
                 x.group("cac:PartyIdentification", |x| ident(x, "cbc:ID", i));
+            }
+            if let Some(c) = sepa_creditor.filter(|c| !c.trim().is_empty()) {
+                // Not duplicated if the caller already carries it as BT-29.
+                let already = p
+                    .identifiers
+                    .iter()
+                    .any(|i| i.scheme() == Some("SEPA") && i.content() == c);
+                if !already {
+                    x.group("cac:PartyIdentification", |x| {
+                        x.leaf("cbc:ID", &[("schemeID", "SEPA")], c);
+                    });
+                }
             }
             if let Some(n) = &p.trading_name {
                 x.group("cac:PartyName", |x| x.leaf("cbc:Name", &[], n));
@@ -650,7 +757,14 @@ fn line_allowance(x: &mut Xml, a: &LineAllowanceCharge, is_charge: bool, ccy: &s
     });
 }
 
-fn line(x: &mut Xml, l: &InvoiceLine, credit: bool, ccy: &str) {
+fn line(
+    x: &mut Xml,
+    l: &InvoiceLine,
+    i: usize,
+    subs: &[en16931::SubInvoiceLine],
+    credit: bool,
+    ccy: &str,
+) {
     let root = if credit {
         "cac:CreditNoteLine"
     } else {
@@ -680,7 +794,7 @@ fn line(x: &mut Xml, l: &InvoiceLine, credit: bool, ccy: &str) {
             x.leaf("cbc:AccountingCost", &[], a);
         }
         if let Some(p) = &l.period {
-            period(x, "cac:InvoicePeriod", p, None);
+            period(x, "cac:InvoicePeriod", p, None, "BG-26");
         }
         if let Some(o) = &l.order_line_reference {
             x.group("cac:OrderLineReference", |x| {
@@ -702,7 +816,45 @@ fn line(x: &mut Xml, l: &InvoiceLine, credit: bool, ccy: &str) {
             line_allowance(x, a, c, ccy);
         }
         item(x, &l.item, &l.vat);
-        price(x, &l.price, ccy);
+        price(x, &l.price, i, ccy);
+        // BG-DEX-01, and recursively. `UBL-CR-646` forbids `cac:SubInvoiceLine`
+        // in core EN 16931 — that rule was among the 131 the extractor could
+        // not read until it learned `(cac:InvoiceLine|cac:CreditNoteLine)/x`,
+        // which is why emitting this was silently fine before and is now
+        // correctly dropped-and-reported for a core document.
+        for s in subs {
+            sub_line(x, s, i, credit, ccy);
+        }
+    });
+}
+
+/// One `cac:SubInvoiceLine`, with its own children beneath it.
+fn sub_line(x: &mut Xml, s: &en16931::SubInvoiceLine, i: usize, credit: bool, ccy: &str) {
+    x.group("cac:SubInvoiceLine", |x| {
+        x.leaf("cbc:ID", &[], &s.line.id);
+        if let Some(n) = &s.line.note {
+            x.leaf("cbc:Note", &[], n);
+        }
+        let qty_name = if credit {
+            "cbc:CreditedQuantity"
+        } else {
+            "cbc:InvoicedQuantity"
+        };
+        x.leaf(
+            qty_name,
+            &[("unitCode", s.line.unit_code.as_str())],
+            &s.line.quantity.to_string(),
+        );
+        x.leaf(
+            "cbc:LineExtensionAmount",
+            &[("currencyID", ccy)],
+            &amt(s.line.net_amount),
+        );
+        item(x, &s.line.item, &s.line.vat);
+        price(x, &s.line.price, i, ccy);
+        for child in &s.children {
+            sub_line(x, child, i, credit, ccy);
+        }
     });
 }
 
@@ -756,7 +908,18 @@ fn item(x: &mut Xml, i: &Item, vat: &LineVat) {
     });
 }
 
-fn price(x: &mut Xml, p: &PriceDetails, ccy: &str) {
+fn price(x: &mut Xml, p: &PriceDetails, i: usize, ccy: &str) {
+    // UBL makes `cbc:Amount` mandatory inside `cac:AllowanceCharge`, so BT-148
+    // cannot be stated without BT-147. A gross price with no discount therefore
+    // reads back as a discount of zero — the same figure `R046` computes, and
+    // still a change to the model, so it is named.
+    if p.price_discount.is_none() && p.gross_price.is_some() {
+        x.dropped(format!(
+            "BG-25[{i}]/BT-147 is absent and BT-148 is present; UBL requires \
+             cac:Price/cac:AllowanceCharge/cbc:Amount, so it is written as 0.00 and \
+             reads back as a stated zero discount"
+        ));
+    }
     x.group("cac:Price", |x| {
         x.leaf(
             "cbc:PriceAmount",
@@ -764,16 +927,50 @@ fn price(x: &mut Xml, p: &PriceDetails, ccy: &str) {
             &p.net_price.to_string(),
         );
         if let Some(q) = p.base_quantity {
-            let unit = p.base_quantity_code.as_ref().map_or("", Code::as_str);
-            x.leaf("cbc:BaseQuantity", &[("unitCode", unit)], &q.to_string());
+            // **No `unitCode` when BT-150 is absent**, rather than an empty one.
+            //
+            // It used to write `unitCode=""`, and the cost of that was not
+            // cosmetic: the reader read it back as `Some("")`, and
+            // `PEPPOL-EN16931-R130` — *"unit code of price base quantity MUST be
+            // the same as invoiced quantity"* — then fired on a document that
+            // had been perfectly valid before the round trip. A writer that
+            // introduces a fatal finding by writing what it just read is the
+            // worst kind of bug, because both documents look right.
+            //
+            // Omitting the attribute is what 29 of the published instances do,
+            // `unitCode` is optional on UBL's `QuantityType`, and no `UBL-DT-*`
+            // rule requires it here.
+            let unit = p
+                .base_quantity_code
+                .as_ref()
+                .map(Code::as_str)
+                .filter(|u| !u.is_empty());
+            let attrs: Vec<(&str, &str)> = unit.map(|u| ("unitCode", u)).into_iter().collect();
+            x.leaf("cbc:BaseQuantity", &attrs, &q.to_string());
         }
-        // BT-147 is expressed as an allowance on the price, whose base is the
-        // gross price BT-148. Neither has an element of its own.
-        if let (Some(d), Some(g)) = (p.price_discount, p.gross_price) {
+        // BT-147 and BT-148 share one price-level allowance: `cbc:Amount` is the
+        // discount and `cbc:BaseAmount` the gross price. Neither has an element
+        // of its own, and UBL makes `cbc:Amount` mandatory inside the group.
+        //
+        // Written whenever **either** is present. Requiring both lost BT-147 on
+        // seven of the published instances — a discount stated without a gross
+        // price is ordinary, and `PEPPOL-EN16931-R046` only has anything to say
+        // when the gross price is there.
+        if p.price_discount.is_some() || p.gross_price.is_some() {
             x.group("cac:AllowanceCharge", |x| {
                 x.leaf("cbc:ChargeIndicator", &[], "false");
-                x.leaf("cbc:Amount", &[("currencyID", ccy)], &d.to_string());
-                x.leaf("cbc:BaseAmount", &[("currencyID", ccy)], &g.to_string());
+                // A gross price with no discount means they are equal, which is
+                // `R046` with a discount of zero — so zero is what it says
+                // rather than what it omits. UBL makes `cbc:Amount` mandatory
+                // inside the group, so there is no way to state one without the
+                // other; the model's `None` therefore reads back as `Some(0)`,
+                // and that is a change worth naming even though it means the
+                // same thing.
+                let discount = p.price_discount.unwrap_or(en16931::UnitPriceAmount::ZERO);
+                x.leaf("cbc:Amount", &[("currencyID", ccy)], &discount.to_string());
+                if let Some(g) = p.gross_price {
+                    x.leaf("cbc:BaseAmount", &[("currencyID", ccy)], &g.to_string());
+                }
             });
         }
     });

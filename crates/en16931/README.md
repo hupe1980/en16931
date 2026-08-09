@@ -49,11 +49,16 @@ breaks `wasm32` outright.
 >
 > | Profile | Rules run | Coverage of its authority's artefact |
 > |---|---:|---|
-> | EN 16931 core | 225 | **223 / 223** CEN syntax-independent |
-> | XRechnung 3.0 | 280 | **55 / 55** KoSIT asserts + **21 / 21** merged Peppol |
-> | XRechnung 3.0 CVD | 287 | **+ 8 / 8** Clean Vehicles Directive |
-> | XRechnung 3.0 Extension | 289 | **+ 14 / 14** `BR-DEX-*` |
-> | Peppol BIS Billing 3.0 | 271 | **46 / 46** `PEPPOL-EN16931-*` |
+> | EN 16931 core | 227 | **223 / 223** CEN syntax-independent |
+> | XRechnung 3.0 | 282 | **55 / 55** KoSIT asserts + **21 / 21** merged Peppol |
+> | XRechnung 3.0 CVD | 290 | **+ 8 / 8** Clean Vehicles Directive |
+> | XRechnung 3.0 Extension | 296 | **+ 14 / 14** `BR-DEX-*` |
+> | Peppol BIS Billing 3.0 | 273 | **46 / 46** `PEPPOL-EN16931-*` |
+>
+> …and at the **severities those authorities publish**, which is a separate
+> claim and one this crate got wrong until it was measured. KoSIT's validator
+> configuration re-levels nine CEN rules across its three scenarios — see
+> [severity is the authority's, not ours](#️-severity-is-the-authoritys-not-ours).
 >
 > And — the part that matters — **the rules agree with the authorities' own
 > conformance suites**, not just with their rule lists:
@@ -67,8 +72,8 @@ breaks `wasm32` outright.
 > The totals move — two of those three suites are pinned to a moving upstream
 > branch — so the agreement is asserted exactly and the coverage as a floor.
 >
-> 316 rules registered; 53 retired by the type system, 4 undecidable (CEN binds
-> them to `true()` too), and **every one of the remaining 259 exercised by its
+> 317 rules registered; 53 retired by the type system, 4 undecidable (CEN binds
+> them to `true()` too), and **every one of the remaining 260 exercised by its
 > own failing fixture**. Plus the ten semantic data types, eighteen generated
 > code lists, the typed `Validated<P>` proof, the standard's own Annex A worked
 > examples — **and the `billing` adapter**.
@@ -80,6 +85,16 @@ breaks `wasm32` outright.
 > that reject a withdrawn EAS scheme at the map and name its successor, and a
 > [**pre-flight**](#-pre-flight--which-fields-will-this-profile-ask-me-for) that
 > says which fields a profile will ask for before the data is fetched.
+>
+> **Four** of those 317 are this crate's own, namespaced `EN-*` so they can never
+> be mistaken for CEN's:
+>
+> | | |
+> |---|---|
+> | `EN-CURRENCY-01` | BT-5 is `XXX`, ISO 4217 for *no currency*. `BR-CL-04` accepts it because it is a real code, so an unconfigured document validates as an invoice denominated in nothing. |
+> | `EN-EXT-01` | the target profile cannot represent extension data the invoice carries — §14c Abs. 1 UStG, [below](#the-14c-hole). |
+> | `EN-EXT-02` | a sub-line group keyed to a BG-25 line that does not exist, which every consumer skips and no writer emits. |
+> | `EN-SEPA-01` | BT-90 does not look like a SEPA Creditor Identifier. `BR-DE-30` requires it to be *present* and no rule anywhere checks that it is well formed. |
 >
 > Out of scope and named rather than dropped: the 1 339 *syntax* rules
 > (`UBL-*`, `CII-*`) belong to
@@ -146,13 +161,23 @@ question they ask. [`DocumentKind`](src/invoice.rs) is now an explicit field —
 which is also what both syntaxes carry, and it makes `BR-CL-01` exact rather
 than permissive.
 
-### The 13 divergences are declared, not ignored
+### The 11 divergences are declared, not ignored
 
-All from one cause: UBL can carry a group that is present and empty —
-`<cac:PostalAddress/>` — and this model cannot. An address with no fields *is*
-an absent address; there is no third state. Adding one would put a syntax
-artefact in every consumer's way to satisfy six test cases. The table is
-asserted exactly, so it can only shrink.
+Two causes, both the same shape — UBL can write down a state this model does not
+have.
+
+**Nine cases**: a group that is present and empty. `<cac:PostalAddress/>`,
+`<cac:BillingReference/>`, `<cac:InvoicePeriod/>`. An address with no fields *is*
+an absent address here; there is no third state, and adding one would put a
+syntax artefact in every consumer's way to satisfy nine test cases.
+
+**Two cases**: two `cac:TaxTotal` elements in the same currency with different
+amounts. BT-110 is one field, so the contradiction cannot be written down, and
+`BR-CO-15` is then satisfied by whichever value was read. Peppol's `R053` catches
+it, and it is a syntax rule about element counts.
+
+The table is asserted exactly — by file and by rule — so it can only shrink, and
+a divergence that starts agreeing fails the build as loudly as a new one.
 
 ---
 
@@ -163,16 +188,17 @@ is **XML in, Schematron out**. You cannot ask them anything until you have
 serialised a document, so the loop is *build → serialise → validate → parse the
 error → guess which field it meant*.
 
-This crate validates the **model**. A finding points at `lines[3]` BT-151, not at
+This crate validates the **model**. A finding points at `BG-25[2]/BT-151`, not at
 an XPath, and you can check an invoice you are still assembling.
 
 That buys four things nothing XML-first can offer:
 
 1. **Whole rule families become unrepresentable.** All 21 `BR-DEC-*` rules die
-   to a two-decimal type, and 15 more presence rules die to non-`Option` fields —
-   **36 rules retired by the type system**, not by a predicate. They stay in the
-   registry so `explain` works and a report can say they were checked.
-2. **A proof that survives the call boundary.** `Validated<XRechnung>` will mean a
+   to a two-decimal type, and presence and cardinality rules die to non-`Option`
+   fields and enums — **53 rules retired by the type system**, not by a
+   predicate. They stay in the registry so `explain` works and a report can say
+   they were checked.
+2. **A proof that survives the call boundary.** `Validated<XRechnung>` means a
    serialiser physically cannot be handed an unchecked invoice.
 3. **Cross-edition answers.** *"Valid today, and still valid under XRechnung
    4.0?"* is one call, not two pipelines.
@@ -186,12 +212,18 @@ release — and why the crate reports its own coverage rather than implying it:
 
 ```text
 conformance corpus
-  registered:            149
-  retired by the types:   36  (no state can make them fire)
-  checkable:             113
-  exercised by a case:   113  (100% of checkable)
+  registered:            317
+  retired by the types:   53  (no state can make them fire)
+  undecidable:             4  (CEN binds them to true() too)
+  checkable:             260
+  exercised by a case:   260  (100% of checkable)
   declared uncovered:      0
 ```
+
+Those five figures are not typed into this file. A test reads them back out of
+it — and out of every other README, `lib.rs` and documentation page — and
+compares each against the value the code produces. Three of them had been wrong
+here for several releases, which is what the test is for.
 
 **A rule nobody has seen fire may be inverted, unreachable, or checking the
 wrong field — and the suite would be green either way.** So every registered rule
@@ -631,20 +663,78 @@ standardised home — and `EN-EXT-01` **warns** when the target profile cannot
 represent it:
 
 ```text
-EN 16931 validation — 225 rule(s) checked, 1 finding(s), valid
+EN 16931 validation — 227 rule(s) checked, 1 finding(s), valid
   [EN-EXT-01] BT-113 — This invoice carries extension data that the target
   profile cannot represent. […] In Germany that is a §14c Abs. 1 UStG liability.
 ```
 
 Not fatal: the invoice *is* lawful. But not silent either.
 
-### Three conversions that are not copies
+### The BT-20 newline — a trap that moved upstream
+
+The newest of the seam's traps, and the smallest: one character.
+
+`billing` 0.12 gained structured payment terms, and rendered BT-20 including
+Germany's Skonto micro-syntax — without a terminator:
+
+```text
+Zahlbar innerhalb 30 Tagen ohne Abzug.
+#SKONTO#TAGE=10#PROZENT=2.00#
+```
+
+`BR-DE-18` has **two** halves, and the second hides inside the same assertion as
+the first:
+
+```xpath
+every $line in …tokenize(., '(\r?\n)')[starts-with(normalize-space(.), '#')]
+  satisfies matches(normalize-space($line), $XR-SKONTO-REGEX)
+        and matches(…tokenize(., '#.+#')[last()], '^\s*\n')
+```
+
+Everything after the **last** `#…#` must begin with a newline. The rendering
+above ends at the `#`, so `tokenize(…)[last()]` is the empty string and every
+German invoice carrying a Skonto fails.
+
+The adapter appended the newline for one release. **`billing` 0.13 does it
+upstream**, which is the right place: the `#SKONTO#…#` syntax has no core
+EN 16931 form, so a rendering that omits the terminator is valid nowhere at all.
+
+What is left here is a *guard*, not a fix — idempotent, and paired with
+`billing_renders_bt_20_with_the_terminator_br_de_18_needs`, which asserts the
+**upstream** behaviour rather than the adapter's output. Asserting the output
+alone would pass just as well against an upstream regression and an adapter
+quietly papering over it, which is exactly the state these two crates were in a
+release ago.
+
+### Four conversions that are not copies
 
 | | |
 |---|---|
 | **Rates** | `billing` stores `0.19` because that is what you multiply by; EN 16931 stores `19`, what you print. Converted once, here. |
 | **Signs** | `billing` models a return as `Sign::Credit` with a *non-negative* quantity. EN 16931 puts the sign on **BT-129** and forbids a negative BT-146 (BR-27) — Annex A.1.6. A negative unit price gets flipped onto the quantity rather than dropped. |
 | **Precision** | Refused, never rounded — and the error names the fix (`.amount_scale(AmountScale::EN16931)`) rather than the symptom. |
+| **The document kind** | `DocumentKind::is_credit_note()`, not BT-3. `81` is on *both* UNTDID 1001 lists, and `en16931-formats` picks the UBL document element from the kind — so deriving it from the code would put a credit note inside `<ubl:Invoice>`. |
+
+### What crosses
+
+BT-1, BT-2, BT-3, BT-5, BT-6, BT-9, BT-20, BT-21, BT-22, BT-29, BT-46, BT-111,
+BG-1, BG-14, BG-20, BG-21, BG-22, BG-23, BG-25 and ZUGFeRD's `BG-X-45` — plus the
+document kind, which is not a business term and decides the root element.
+
+Two of those pairs are worth naming:
+
+* **BT-6 and BT-111 cross together.** `BR-53` makes the second mandatory whenever
+  the first is present, so mapping only the currency would manufacture a finding
+  out of a complete document.
+* **BT-29 and BT-46 are merged, not overwritten.** The caller's `Party` carries
+  master data; the document carries the party code the billing run was keyed on —
+  an MP-ID in the energy market, a GLN in retail. EN 16931 makes both repeatable
+  precisely because a party has more than one identity. The scheme is compared
+  alongside the value, because the same digits under `0088` and under `0293` are
+  two registries saying two different things.
+
+`meta.period_label` and `meta.labels` do not cross: display text and arbitrary
+key/value pairs, with no business term at all.
 
 Units are resolved from `Quantity::code` first, falling back to a small
 `UnitResolver` table. An unresolvable label is an **error**: guessing produces an
@@ -689,15 +779,18 @@ Every `Restriction` variant is by construction a narrowing, so a profile that
 tried to *loosen* something cannot be expressed. Loosening is an **Extension**
 (§4.3, CEN/TR 16931-5) — a different mechanism.
 
-**Validation widens for free.** §4.4.4 says an instance complying with a
-conformant CIUS *"can still be received and processed by a party who is not
-supporting the CIUS"*. So the proof converts, infallibly:
+**Validation widens for free — from a *conformant* CIUS.** §4.4.4 says an
+instance complying with one *"can still be received and processed by a party who
+is not supporting the CIUS"*. So the proof converts, infallibly:
 
 ```rust,ignore
-let proof: Validated<XRechnung> = Validated::new(invoice)?;
-serialise_xrechnung(&proof);        // demands the CIUS proof
+let proof: Validated<PeppolBis3> = Validated::new(invoice)?;
+serialise_peppol(&proof);           // demands the CIUS proof
 accepts_core(proof.widen());        // §4.4.4 — free, no re-validation
 ```
+
+Peppol BIS Billing 3.0 is the one shipped CIUS this holds for, and the reason it
+is not XRechnung is the next section.
 
 ### Enums retire rules too
 
@@ -803,9 +896,65 @@ need **not** be core-valid, so there is deliberately no
 §4.3's word for a *CIUS* — but `BR-TMP-CVD-01` checks BT-158's scheme against
 UNTDID 7143 **plus `CVD`**, and `CVD` is not in UNTDID 7143. So a conforming CVD
 invoice violates core `BR-CL-13`, which a CIUS may not cause. This crate follows
-the behaviour rather than the label: `BR-CL-13` suppressed, `BR-TMP-CVD-01` in
-its place. Reporting `BR-CL-13` on every CVD invoice would be a false positive
-on a document KoSIT accepts.
+the behaviour rather than the label. Reporting `BR-CL-13` as fatal on every CVD
+invoice would be a false positive on a document KoSIT accepts.
+
+---
+
+## ⚠️ Severity is the authority's, not ours
+
+A rule's *consequence* is not a property of the rule. It is a property of the
+rule **in a profile**, and the authorities publish it separately from their
+Schematron — which is why reading only the Schematron gets it wrong.
+
+KoSIT's validator configuration says so in as many words, once per scenario:
+
+```xml
+<!-- overwrites CEN severity level "fatal" for codelist values of BT-130 … -->
+<customLevel level="warning">BR-CL-23</customLevel>
+<!-- overwrites CEN severity level "fatal" to enable use of mime codes per BR-DEX-01 -->
+<customLevel level="information">BR-CL-24</customLevel>
+```
+
+Nine CEN rules are re-levelled across the three XRechnung scenarios, and
+`Profile::levels` carries all nine. `tests/codelists.rs` reads
+`scenarios.xml` out of `spec/` and asserts the mapping, so it is measured rather
+than transcribed from memory. Two consequences are worth stating outright.
+
+**This crate used to reject invoices Germany accepts.** `BR-CL-21` and
+`BR-CL-23` are code-list rules whose CEN tables lag the registries they track —
+ISO 6523 ICD and UN/ECE Rec 20/21. KoSIT reports both at *warning*, deliberately;
+this crate reported them as fatal, so a perfectly ordinary German invoice with a
+unit code CEN has not yet imported failed here and passed there. That is the
+worst direction for a validator to be wrong in, because it stops a document
+nobody else would have stopped.
+
+**A finding is re-levelled, never dropped.** The mechanism used to be
+`suppressed: &[&str]`, a list of rules to remove — which no authority does, and
+which cost the report the one line explaining why an unusual value is present and
+unobjected to. It also encouraged reconstructing the list from *"which rule does
+each `BR-DEX-*` widen?"*, and that reconstruction was wrong twice: it named
+`PEPPOL-EN16931-CL001`, which XRechnung's build does not merge in, so it removed
+nothing while CEN's `BR-CL-24` went on rejecting exactly the `application/xml`
+attachment `BR-DEX-01` exists to permit.
+
+**And XRechnung 3.0 is therefore not a conformant CIUS.** §4.4.2 forbids a CIUS
+to accept what the core model rejects, and relaxing `BR-CL-23` does exactly that.
+`Profile::is_conformant_cius()` computes this from the data rather than asserting
+it, and answers `false` for three of the five shipped profiles:
+
+| Profile | Conformant CIUS? | Because |
+|---|---|---|
+| EN 16931 | n/a | it *is* the core model |
+| XRechnung 3.0 | no | `BR-CL-21`, `BR-CL-23` → warning |
+| XRechnung 3.0 CVD | no | + `BR-CL-13` → information |
+| XRechnung 3.0 Extension | no | + six more, `BR-CO-16` among them |
+| Peppol BIS Billing 3.0 | **yes** | ships the flags it means, and no override file |
+
+So `Validated<XRechnung>` does **not** widen to `Validated<En16931>`, for the
+same reason `Validated<XRechnungCvd>` does not. Re-validate instead —
+`Validated::<En16931>::new(invoice)` is one line, and it is a line that can
+honestly fail.
 
 ---
 
@@ -884,24 +1033,28 @@ assert!(returned.is_negative());
 ### The proof has to be earned
 
 ```rust,ignore
-let proof: Validated<XRechnung> = Validated::new(invoice)?;
-let core: Validated<En16931>    = proof.widen();   // infallible — §4.4.4
+let proof: Validated<PeppolBis3> = Validated::new(invoice)?;
+let core: Validated<En16931>     = proof.widen();   // infallible — §4.4.4
 ```
 
 Widening is free *only* from a conformant CIUS, and `Profile::is_conformant_cius()`
-is the runtime witness. It answers `false` for two shipped profiles: the CVD
-variant and the Extension both **suppress** a core rule, so a document either
-accepts may violate the core model.
+is the runtime witness — computed from `Profile::levels`, not declared. It
+answers `false` for three shipped profiles, and each `false` closed a hole.
 
-That method used to return a constant `true`, with a test asserting it for every
-profile — a tautology that passed and was wrong about two of the five. It hid a
-real bug: `impl Underlies<XRechnungCvd> for En16931` existed, so
+`impl Underlies<XRechnungCvd> for En16931` existed once, so
 `Validated<XRechnungCvd>::widen::<En16931>()` compiled and produced a **proof of
 core-validity for an invoice violating `BR-CL-13`**. A serialiser trusting the
 core proof — the entire purpose of `Validated<P>` — would have been handed a
 document no core-only receiver can process.
 
-Both impls are gone, and `tests/robustness.rs` now asserts the surviving
+`impl Underlies<XRechnung> for En16931` was the same hole one layer up, and it
+survived the first fix because the argument stopped at the CVD variant. KoSIT
+relaxes `BR-CL-23` for *every* XRechnung scenario, so a unit code outside CEN's
+Rec 20 table leaves an invoice valid as an XRechnung and invalid as a core
+invoice — and the widening turned that into a proof of the opposite.
+`an_xrechnung_invoice_can_be_core_invalid` is the witness.
+
+All three impls are gone, and `tests/robustness.rs` asserts the surviving
 guarantee over arbitrary generated documents rather than one fixture: *if a
 conformant CIUS accepts it, core accepts it.*
 
@@ -910,16 +1063,20 @@ conformant CIUS accepts it, core accepts it.*
 ## ⚡ Measured, not asserted
 
 ```text
-validate/core/5                      1.47 µs      ← the 5-line invoice
-validate/core/1000                 132.9  µs      ← linear in line count
-profile/EN 16931/5                   2.30 µs
-profile/XRechnung 3.0/5              4.64 µs
-profile/XRechnung 3.0 Extension/5    5.95 µs
+validate/core/5                      1.94 µs      ← the 5-line invoice
+validate/core/1000                 130.2  µs      ← linear in line count
+profile/EN 16931/5                   1.76 µs
+profile/XRechnung 3.0/5              6.30 µs
+profile/XRechnung 3.0 Extension/5    5.09 µs
 ```
 
 `cargo bench`. The target was *"well under 100 µs for a typical 5-line invoice
-through the full core rule set"*; it is 1.5 µs, and profile validation — 280
-rules for XRechnung — is under 5.
+through the full core rule set"*; it is about 2 µs, and profile validation — 280
+rules for XRechnung — is a handful.
+
+The Extension being *faster* than the CIUS it extends is not a mistake: it runs
+fourteen more rules and its documents trip fewer of them, and at this scale the
+findings are a larger cost than the predicates.
 
 Writing the benchmark immediately found a defect it existed to catch:
 `Profile::validate` was **35 µs** on the same document the core rules took 1.5 µs
@@ -950,12 +1107,19 @@ assert_eq!(report.suppressed(), ["BR-DE-15"]);
 ```
 
 ```text
-XRechnung 3.0 validation (EN 16931-1:2017+A1:2019) — 279 rule(s) checked, 27 finding(s), INVALID
+XRechnung 3.0 validation (EN 16931-1:2017+A1:2019) — 280 rule(s) checked, 27 finding(s), INVALID
   ⚠ 1 rule(s) suppressed and NOT checked: BR-DE-15
 ```
 
 The suppressed ids are on the report, printed by `Display`, carried in the JSON,
-and `rules_checked` drops — so a stored report cannot overstate what ran.
+and `rules_checked` drops from 282 to 281 — so a stored report cannot overstate
+what ran.
+
+It drops by **one**, because one check was actually removed. It used to drop by
+`suppressed.len()`, which counted *requests*: asking to skip `BR-DE-15` against
+the bare core profile, or naming a rule that resolves to nothing, deducted from a
+count of checks that were never going to run. A number that can be wrong in the
+reassuring direction is worse than no number.
 
 **And a deviated run cannot produce a proof.** `Check::prove` refuses:
 
@@ -972,7 +1136,7 @@ decoration.
 
 ---
 
-## 🧭 The other crate
+## 🧭 The other crates
 
 [`en16931-formats`](../en16931-formats) carries the
 syntax layer — the UBL 2.1 and CII bindings in both directions, the 1 339 syntax
@@ -998,6 +1162,19 @@ demands the proof, so an unchecked invoice cannot be serialised. The other is
 back `Result<String, NotValid>` — for when the profile is a runtime choice, as it
 is whenever a counterparty's preferred CIUS comes out of a database. Neither can
 produce a document whose BT-24 disagrees with the rules that were run.
+
+**And [`en16931-cli`](../en16931-cli)**, if the question is about a file rather
+than about a type:
+
+```console
+$ en16931 validate rechnung.xml
+$ en16931 explain BR-CO-14
+```
+
+One binary, everything above turned on, and exit `0` / `1` / `2` for *valid* /
+*invalid* / *unreadable*. It may enable every feature precisely because nothing
+depends on it: the graph discipline in this README exists to protect a
+consumer's dependency tree, and a binary is in nobody's.
 
 ---
 
@@ -1040,18 +1217,28 @@ use en16931::{Report, Invoice, profiles};
 
 let report = profiles::XRECHNUNG.validate(&Invoice::default());
 let out = Report::of(&report);
-assert_eq!(out.schema, "en16931-report/2");
+assert_eq!(out.schema, "en16931-report/3");
 assert_eq!(out.profile.as_deref(), Some("XRechnung 3.0"));
 ```
 
 ```json
 {
-  "schema": "en16931-report/2",
+  "schema": "en16931-report/3",
   "valid": false,
   "profile": "XRechnung 3.0",
   "edition": "EN 16931-1:2017+A1:2019",
-  "rulesChecked": 280,
+  "rulesChecked": 282,
   "attribution": "implementation of the EN 16931-1 semantic data model; …",
+  "artefacts": [
+    { "authority": "CEN",        "repo": "ConnectingEurope/eInvoicing-EN16931",
+      "gitRef": "validation-1.3.16" },
+    { "authority": "KoSIT",      "repo": "itplr-kosit/xrechnung-schematron",
+      "gitRef": "v2.5.0" },
+    { "authority": "KoSIT",      "repo": "itplr-kosit/validator-configuration-xrechnung",
+      "gitRef": "v2026-01-31" },
+    { "authority": "OpenPeppol", "repo": "OpenPEPPOL/peppol-bis-invoice-3",
+      "gitRef": "v3.0.20" }
+  ],
   "findings": [
     { "rule": "BR-02", "severity": "fatal", "source": "standard+artefact",
       "location": "BT-1", "text": "An Invoice shall have an Invoice number (BT-1)." },
@@ -1075,10 +1262,21 @@ serialised document, and this crate's is a **business-term path**
 (`BG-25[2]/BT-151`). A crate holding the XML can map BT → XPath; the reverse is
 lossy, so the semantic form is the one worth storing.
 
-Two things travel with it that SVRL has no room for: the **provenance** of each
-rule — CEN's, a profile's, or this crate's — and which **profile and edition**
-produced the report. A stored report that cannot say what it was checked against
-is close to useless six months later.
+Three things travel with it that SVRL has no room for: the **provenance** of each
+rule — CEN's, a profile's, or this crate's — which **profile and edition**
+produced the report, and the **authority releases** those rules were verified
+against.
+
+That last one is per profile rather than per crate, and the reason is
+`BR-DE-15`. It is KoSIT's rule, it moves on KoSIT's release cadence, and a
+report stamped only `validation-1.3.16` beside it is naming CEN for something
+CEN never published. An XRechnung report cites four releases because its rules
+come from four: CEN's model, KoSIT's Schematron, KoSIT's *validator
+configuration* — a separate release that decides the severities — and
+OpenPeppol's, 31 of whose rules XRechnung merges in.
+
+A stored report that cannot say what it was checked against is close to useless
+six months later; one that says the wrong thing is worse.
 
 ---
 
@@ -1308,16 +1506,35 @@ and CI reads the number from `Cargo.toml` rather than repeating it.
 licence, and keeping them out is what keeps this crate `MIT OR Apache-2.0` —
 which is also why `deny.toml`'s allow-list does not mention EUPL.
 
-The fetch pulls four repositories and nothing else: the CEN validation artefacts
-(pinned), Peppol BIS Billing 3.0, and KoSIT's XRechnung Schematron and validator
-configuration. It does **not** fetch specification PDFs — including EN 16931-1
-itself, whose full English text ÚNMS SR publishes openly. Reading the standard
-is a research task, not a build step; `spec/README.md` lists the routes.
+The fetch pulls four repositories and nothing else: the CEN validation
+artefacts, Peppol BIS Billing 3.0, and KoSIT's XRechnung Schematron and
+validator configuration. It does **not** fetch specification PDFs — including
+EN 16931-1 itself, whose full English text ÚNMS SR publishes openly. Reading the
+standard is a research task, not a build step; `spec/README.md` lists the routes.
 
-Sources are pinned by **fully-qualified ref**, and that is not pedantry:
-`eInvoicing-EN16931` publishes `validation-1.3.16` as both a tag *and* a branch
-pointing at different commits, and `git clone --branch` prefers the branch — so
-two clones of the same "pin" produced different trees and different code lists.
+| | Pinned at |
+|---|---|
+| `ConnectingEurope/eInvoicing-EN16931` | `validation-1.3.16` |
+| `itplr-kosit/xrechnung-schematron` | `v2.5.0` — its changelog says *"compatible with XRechnung 3.0.x"* |
+| `itplr-kosit/validator-configuration-xrechnung` | `v2026-01-31` |
+| `OpenPEPPOL/peppol-bis-invoice-3` | `v3.0.20` |
+
+**All four are release tags, and three of them used not to be.** Tracking
+`master` is not merely irreproducible; an authority's `master` is its *next*
+release. When this was fixed, KoSIT's validator-configuration branch carried two
+`customLevel` overrides — `CII-SR-465`, `CII-SR-466` — that appear in no
+published release. A crate whose central claim is that it reports rules at the
+severities the authorities *publish* was reading severities nobody had published.
+
+Each profile declares which of these its rules were checked against, and that
+list travels in every report — see [above](#-a-report-you-can-store-diff-and-ship).
+`tests/artefact_pin.rs` asserts every declared ref is one `xtask` actually
+fetches, so a profile cannot cite a release the suites never ran on.
+
+Pins are **fully-qualified refs**, and that is not pedantry: `eInvoicing-EN16931`
+publishes `validation-1.3.16` as both a tag *and* a branch pointing at different
+commits, and `git clone --branch` prefers the branch — so two clones of the same
+"pin" produced different trees and different code lists.
 
 ### The code lists are generated, not written
 

@@ -23,6 +23,8 @@
 //! That is the same discipline the code-list generator applies to the artefacts:
 //! declare the expectation, and fail when reality diverges.
 
+mod common;
+
 use en16931::invoice::*;
 use en16931::profiles;
 use en16931::validation::Rule;
@@ -414,6 +416,17 @@ fn cases() -> Vec<Case> {
         reference: None,
         reference_date: None,
     })),
+    // A sub-line group keyed to a line index the invoice does not have. Every
+    // consumer iterates the lines and asks for *their* sub-lines, so this group
+    // is invisible to `BR-DEX-02`, invisible to `BR-DEX-03`, and never written.
+    case("EN-EXT-02", |i| {
+        let sub = en16931::SubInvoiceLine {
+            line: i.lines[0].clone(),
+            vat: Some(i.lines[0].vat.clone()),
+            children: vec![],
+        };
+        i.extensions.sub_invoice_lines.push((99, vec![sub]));
+    }),
 
     // ── VAT category families ─────────────────────────────────────────────
     case("BR-S-01", |i| i.vat_breakdown[0].category = Code::new("Z")),
@@ -1804,6 +1817,58 @@ fn coverage_is_complete_or_explicitly_declared() {
         100.0 * exercised as f64 / checkable as f64,
         checkable - exercised
     );
+
+    // These four are the split the prose quotes, and three of them were wrong
+    // in the README for several releases — it said 149 registered, 36 retired,
+    // 113 checkable, from a revision when that was true. They are computed
+    // here, so they are compared here.
+    common::docs::check(&[
+        common::docs::Claim {
+            what: "rules retired by the type system",
+            pattern: "<N> rules retired by the type system",
+            expected: by_type,
+        },
+        common::docs::Claim {
+            what: "rules retired by the type system",
+            pattern: "retired by the types:   <N>",
+            expected: by_type,
+        },
+        common::docs::Claim {
+            what: "rules retired by the type system",
+            pattern: "retired by the types | <N> ",
+            expected: by_type,
+        },
+        common::docs::Claim {
+            what: "undecidable rules",
+            pattern: "undecidable:             <N>",
+            expected: undecidable,
+        },
+        common::docs::Claim {
+            what: "undecidable rules",
+            pattern: "undecidable | <N> ",
+            expected: undecidable,
+        },
+        common::docs::Claim {
+            what: "checkable rules",
+            pattern: "checkable:             <N>",
+            expected: checkable,
+        },
+        common::docs::Claim {
+            what: "checkable rules",
+            pattern: "checkable | <N> ",
+            expected: checkable,
+        },
+        common::docs::Claim {
+            what: "rules exercised by a failing fixture",
+            pattern: "exercised by a case:   <N>",
+            expected: exercised,
+        },
+        common::docs::Claim {
+            what: "rules exercised by a failing fixture",
+            pattern: "remaining <N> exercised",
+            expected: exercised,
+        },
+    ]);
 }
 
 /// A case must not fire *other* rules than its own, or it proves less than it

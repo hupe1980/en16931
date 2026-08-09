@@ -57,8 +57,30 @@ fn own_text(n: Node<'_, '_>) -> String {
     n.text().unwrap_or_default().trim().to_owned()
 }
 
+/// Trimmed text of a direct child, or `None` when the element is absent **or
+/// empty**.
+///
+/// # Why empty is absent
+///
+/// `<ram:Description/>` is not a description whose value is the empty string;
+/// it is a description that is not there. The UBL reader has always said so —
+/// `roxmltree` gives an empty element no text node, so its `text()` yields
+/// `None` — and this one used to map the same element to `Some("")`.
+///
+/// Two readers of one model disagreeing about that is a real difference and not
+/// a cosmetic one. Rules mostly paper over it (`is_none_or(str::is_empty)` reads
+/// both the same way), but `Restriction::NotUsed` treats blank as absent, an
+/// empty `DocumentReference` serialises back out as an empty element, and a
+/// caller matching on `Option` sees two different documents. Nine of the
+/// published CII instances differ from their UBL crossing on this alone.
 fn text(n: Node<'_, '_>, want: &str) -> Option<String> {
-    kid(n, want).map(own_text)
+    kid(n, want).map(own_text).filter(|t| !t.is_empty())
+}
+
+/// `None` for an empty string, so the two sites that read an element's own text
+/// agree with [`text`] about what an empty element means.
+fn non_empty(s: String) -> Option<String> {
+    (!s.is_empty()).then_some(s)
 }
 
 fn code(n: Node<'_, '_>, want: &str) -> Option<Code> {
@@ -141,10 +163,24 @@ impl Reader {
                 other => self.unmapped.push_path("CrossIndustryInvoice", other),
             }
         }
-        // CII has one document element, so the kind comes from BT-3 alone.
-        // 381 is a credit note; 384 is a corrected invoice, which is still an
-        // invoice. Guessing wider than the standard would mis-route documents.
-        if inv.type_code.as_ref().is_some_and(|c| c.as_str() == "381") {
+        // CII has one document element, so the kind comes from BT-3 alone —
+        // and from the whole UNTDID 1001 credit-note list, not just `381`.
+        //
+        // Checking only `381` was wrong in a way the corpus could not show:
+        // every published CII credit note uses `381`, so nothing exercised
+        // `396` (factored credit note), `532` (forwarder's credit note) or `83`.
+        // Those read back as *invoices*, and `BR-CL-01` then checked them
+        // against the 50 invoice codes and reported a violation that is not one.
+        //
+        // `81` is on **both** lists. It is read as a credit note here, which is
+        // what `PEPPOL-EN16931-P0101` expects and what
+        // `rules::peppol::is_credit_note` already assumes — one reading, in two
+        // places, rather than two.
+        if inv
+            .type_code
+            .as_ref()
+            .is_some_and(|c| c.is_in(en16931::codes::generated::CREDIT_NOTE_TYPE_CODES))
+        {
             inv.kind = DocumentKind::CreditNote;
         }
         inv
@@ -167,7 +203,7 @@ impl Reader {
     fn document(&mut self, inv: &mut Invoice, n: Node<'_, '_>) {
         for c in kids(n) {
             match name(c) {
-                "ID" => inv.number = Some(own_text(c)),
+                "ID" => inv.number = non_empty(own_text(c)),
                 "TypeCode" => inv.type_code = Some(Code::new(own_text(c))),
                 "IssueDateTime" => inv.issue_date = self.date(n, "IssueDateTime"),
                 "IncludedNote" => {
@@ -201,7 +237,7 @@ impl Reader {
     fn agreement(&mut self, inv: &mut Invoice, n: Node<'_, '_>) {
         for c in kids(n) {
             match name(c) {
-                "BuyerReference" => inv.buyer_reference = Some(own_text(c)),
+                "BuyerReference" => inv.buyer_reference = non_empty(own_text(c)),
                 "SellerTradeParty" => inv.seller = self.party(c, true),
                 "BuyerTradeParty" => inv.buyer = self.party(c, false),
                 "SellerTaxRepresentativeTradeParty" => {
@@ -280,8 +316,8 @@ impl Reader {
                 // One business term across two elements: scheme-qualified goes
                 // to GlobalID, unqualified to ID. Merged back here.
                 "ID" | "GlobalID" => p.identifiers.push(identifier(c)),
-                "Name" => p.name = Some(own_text(c)),
-                "Description" if seller => p.additional_legal_information = Some(own_text(c)),
+                "Name" => p.name = non_empty(own_text(c)),
+                "Description" if seller => p.additional_legal_information = non_empty(own_text(c)),
                 "SpecifiedLegalOrganization" => {
                     p.legal_registration = kid(c, "ID").map(identifier);
                     p.trading_name = text(c, "TradingBusinessName");
@@ -303,9 +339,9 @@ impl Reader {
                     let Some(id) = kid(c, "ID") else { continue };
                     // `VA` is BT-31/BT-48; anything else is BT-32.
                     if id.attribute("schemeID") == Some("VA") {
-                        p.vat_identifier = Some(own_text(id));
+                        p.vat_identifier = non_empty(own_text(id));
                     } else {
-                        p.tax_registration = Some(own_text(id));
+                        p.tax_registration = non_empty(own_text(id));
                     }
                 }
                 other => self.unmapped.push_path("TradeParty", other),
@@ -326,13 +362,13 @@ impl Reader {
         let mut a = PostalAddress::default();
         for c in kids(n) {
             match name(c) {
-                "PostcodeCode" => a.post_code = Some(own_text(c)),
-                "LineOne" => a.line1 = Some(own_text(c)),
-                "LineTwo" => a.line2 = Some(own_text(c)),
-                "LineThree" => a.line3 = Some(own_text(c)),
-                "CityName" => a.city = Some(own_text(c)),
+                "PostcodeCode" => a.post_code = non_empty(own_text(c)),
+                "LineOne" => a.line1 = non_empty(own_text(c)),
+                "LineTwo" => a.line2 = non_empty(own_text(c)),
+                "LineThree" => a.line3 = non_empty(own_text(c)),
+                "CityName" => a.city = non_empty(own_text(c)),
                 "CountryID" => a.country = Some(Code::new(own_text(c))),
-                "CountrySubDivisionName" => a.subdivision = Some(own_text(c)),
+                "CountrySubDivisionName" => a.subdivision = non_empty(own_text(c)),
                 other => self.unmapped.push_path("PostalTradeAddress", other),
             }
         }
@@ -354,7 +390,7 @@ impl Reader {
                                 any = true;
                             }
                             "Name" => {
-                                d.party_name = Some(own_text(g));
+                                d.party_name = non_empty(own_text(g));
                                 any = true;
                             }
                             "PostalTradeAddress" => {
@@ -397,9 +433,9 @@ impl Reader {
         let mut mandate = None;
         for c in kids(n) {
             match name(c) {
-                "CreditorReferenceID" => creditor_id = Some(own_text(c)),
+                "CreditorReferenceID" => creditor_id = non_empty(own_text(c)),
                 "PaymentReference" => {
-                    payment.remittance_information = Some(own_text(c));
+                    payment.remittance_information = non_empty(own_text(c));
                     have_payment = true;
                 }
                 "TaxCurrencyCode" => inv.vat_accounting_currency = Some(Code::new(own_text(c))),
@@ -459,7 +495,17 @@ impl Reader {
                     }
                 }
                 "SpecifiedTradePaymentTerms" => {
-                    inv.payment_terms = text(c, "Description");
+                    // **Not trimmed**, exactly as the UBL reader does not trim
+                    // it. `BR-DE-18` requires the Skonto block to end with a
+                    // newline, so BT-20's trailing whitespace is load-bearing —
+                    // and XRechnung is carried in CII as well as UBL, with a
+                    // KoSIT scenario of its own. This reader used `own_text`,
+                    // which trims, so a CII XRechnung with a Skonto lost its
+                    // terminator and was rejected. 36 of the corpus documents
+                    // that survive UBL→CII conversion differ on this one field.
+                    inv.payment_terms = kid(c, "Description")
+                        .and_then(|d| d.text())
+                        .map(str::to_owned);
                     inv.due_date = self.date(c, "DueDateDateTime");
                     mandate = text(c, "DirectDebitMandateID");
                 }
@@ -506,7 +552,7 @@ impl Reader {
         for c in kids(n) {
             match name(c) {
                 "TypeCode" => p.means_code = Some(Code::new(own_text(c))),
-                "Information" => p.means_text = Some(own_text(c)),
+                "Information" => p.means_text = non_empty(own_text(c)),
                 "ApplicableTradeSettlementFinancialCard" => {
                     p.means = Some(PaymentMeans::Card(PaymentCard {
                         primary_account_number: text(c, "ID"),
@@ -544,8 +590,11 @@ impl Reader {
     fn totals(&mut self, inv: &mut Invoice, n: Node<'_, '_>) {
         let mut t = DocumentTotals::default();
         // Two `ram:TaxTotalAmount` elements may appear, told apart only by
-        // `@currencyID`: the second is BT-111, in the accounting currency.
+        // `@currencyID`: the second is BT-111, in the accounting currency. When
+        // BT-6 equals BT-5 they are the same element twice over, which is the
+        // case the match below exists for.
         let doc_ccy = inv.currency.as_ref().map(Code::as_str);
+        let tax_ccy = inv.vat_accounting_currency.as_ref().map(Code::as_str);
         for c in kids(n) {
             match name(c) {
                 "LineTotalAmount" => {
@@ -565,6 +614,18 @@ impl Reader {
                         self.malformed.push(format!("TaxTotalAmount: {raw:?}"));
                     }
                     match c.attribute("currencyID") {
+                        // BT-6 == BT-5 makes one element **both** totals, the
+                        // same case the UBL reader handles: `BR-53`'s binding is
+                        // satisfied by the document-currency total whenever the
+                        // two currencies coincide, so assigning it to only one
+                        // of them manufactures a `BR-53` finding on a document
+                        // CEN publishes as an example.
+                        Some(cur) if Some(cur) == tax_ccy => {
+                            if Some(cur) == doc_ccy && t.vat_total.is_none() {
+                                t.vat_total = parsed;
+                            }
+                            t.vat_total_accounting = parsed;
+                        }
                         Some(cur) if Some(cur) != doc_ccy => t.vat_total_accounting = parsed,
                         _ => t.vat_total = parsed,
                     }
@@ -656,8 +717,13 @@ impl Reader {
                                     .unwrap_or_default();
                                 l.price.base_quantity =
                                     decimal(g, "BasisQuantity").map(Quantity::new);
+                                // An empty `unitCode` is an absent BT-150, not a
+                                // BT-150 whose value is the empty string. The
+                                // difference is a fatal `PEPPOL-EN16931-R130`,
+                                // which compares BT-150 against BT-130.
                                 l.price.base_quantity_code = kid(g, "BasisQuantity")
                                     .and_then(|q| q.attribute("unitCode"))
+                                    .filter(|u| !u.trim().is_empty())
                                     .map(Code::new);
                             }
                             other => self
@@ -730,10 +796,10 @@ impl Reader {
         for c in kids(n) {
             match name(c) {
                 "GlobalID" => i.standard_identifier = Some(identifier(c)),
-                "SellerAssignedID" => i.seller_identifier = Some(own_text(c)),
-                "BuyerAssignedID" => i.buyer_identifier = Some(own_text(c)),
-                "Name" => i.name = Some(own_text(c)),
-                "Description" => i.description = Some(own_text(c)),
+                "SellerAssignedID" => i.seller_identifier = non_empty(own_text(c)),
+                "BuyerAssignedID" => i.buyer_identifier = non_empty(own_text(c)),
+                "Name" => i.name = non_empty(own_text(c)),
+                "Description" => i.description = non_empty(own_text(c)),
                 "ApplicableProductCharacteristic" => i.attributes.push(ItemAttribute {
                     name: text(c, "Description"),
                     value: text(c, "Value"),

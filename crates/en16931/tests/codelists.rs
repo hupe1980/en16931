@@ -376,10 +376,10 @@ fn the_profile_rule_sets_cover_their_artefacts() {
 
 /// The syntax-rule count this crate quotes is the one the artefacts carry.
 ///
-/// `README.md`, `lib.rs` and the design notes all name a figure for the rules that
-/// belong to `en16931-formats`, and a number repeated in three documents and
-/// checked in none is how it came to be **1 315**: the sum omitted `UBL-DT-*`
-/// while including `CII-DT-*`.
+/// `README.md`, `lib.rs` and the documentation site all name a figure for the
+/// rules that belong to `en16931-formats`, and a number repeated in three
+/// documents and checked in none is how it came to be **1 315**: the sum omitted
+/// `UBL-DT-*` while including `CII-DT-*`.
 #[test]
 fn the_syntax_rule_count_is_measured() {
     let Some(root) = common::spec_root() else {
@@ -527,4 +527,101 @@ fn cen_unit_tests_agree_with_our_dispositions() {
         "CEN's suite spells these BR-IG-01 / BR-IP-01; RuleId must alias them"
     );
     eprintln!("CEN unit-test instances: {} rules exercised", tested.len());
+}
+
+// ── Severity overrides, against the authority's own configuration ────────────
+
+/// KoSIT's validator configuration, relative to `spec/`.
+const XR_SCENARIOS: &str = "validator-configuration-xrechnung/scenarios.xml";
+
+/// Every `<customLevel>` in a named scenario, as `(rule id, level)`.
+fn custom_levels(xml: &str, scenario: &str) -> Vec<(String, String)> {
+    let doc = roxmltree::Document::parse(xml).expect("scenarios.xml is XML");
+    doc.descendants()
+        .filter(|n| n.tag_name().name() == "scenario")
+        .find(|n| {
+            n.children()
+                .find(|c| c.tag_name().name() == "name")
+                .and_then(|c| c.text())
+                .is_some_and(|t| t.trim() == scenario)
+        })
+        .into_iter()
+        .flat_map(|n| n.descendants().collect::<Vec<_>>())
+        .filter(|n| n.tag_name().name() == "customLevel")
+        .filter_map(|n| {
+            Some((
+                n.text()?.trim().to_owned(),
+                n.attribute("level")?.to_owned(),
+            ))
+        })
+        .collect()
+}
+
+/// The profiles' [`Profile::levels`] must be what KoSIT publishes — not a
+/// reconstruction of "which core rule does each `BR-DEX-*` widen?".
+///
+/// That reconstruction is what the crate used to carry, and it was wrong twice:
+/// it named `PEPPOL-EN16931-CL001`, a rule XRechnung's build does not merge in,
+/// where it meant CEN's `BR-CL-24`; and it omitted `BR-CL-21` and `BR-CL-23`
+/// entirely, so this crate reported as **fatal** two rules the German reference
+/// validator reports as warnings — rejecting documents KoSIT accepts.
+///
+/// So the mapping is measured against `scenarios.xml`, which is the file the
+/// validator actually loads.
+#[test]
+fn the_severity_overrides_are_kosits_own() {
+    let Some(root) = common::require("XRechnung severity overrides") else {
+        return;
+    };
+    let path = root.join(XR_SCENARIOS);
+    if !path.exists() {
+        eprintln!("note: {} absent — skipped", path.display());
+        return;
+    }
+    let xml = std::fs::read_to_string(&path).expect("read scenarios.xml");
+
+    // `UBL-CR-*` and `CII-SR-*` are syntax rules and belong to
+    // `en16931-formats`; this crate holds the syntax-independent set only.
+    let semantic =
+        |(id, level): &(String, String)| id.starts_with("BR-").then(|| (id.clone(), level.clone()));
+    let name = |s: &str| match s {
+        "warning" => en16931::Severity::Warning,
+        "information" => en16931::Severity::Info,
+        "error" => en16931::Severity::Fatal,
+        other => panic!("unknown customLevel {other:?}"),
+    };
+
+    for (scenario, profile) in [
+        (
+            "EN16931 XRechnung (UBL Invoice)",
+            &en16931::profiles::XRECHNUNG,
+        ),
+        (
+            "EN16931 XRechnung CVD (UBL Invoice)",
+            &en16931::profiles::XRECHNUNG_CVD,
+        ),
+        (
+            "EN16931 XRechnung Extension (UBL Invoice)",
+            &en16931::profiles::XRECHNUNG_EXTENSION,
+        ),
+    ] {
+        let mut want: Vec<_> = custom_levels(&xml, scenario)
+            .iter()
+            .filter_map(semantic)
+            .map(|(id, level)| (id, name(&level)))
+            .collect();
+        want.sort();
+        let mut got: Vec<_> = profile
+            .levels
+            .iter()
+            .map(|(id, level)| ((*id).to_owned(), *level))
+            .collect();
+        got.sort();
+        assert_eq!(
+            got, want,
+            "{} does not report what {scenario} configures",
+            profile.id
+        );
+    }
+    eprintln!("XRechnung severity overrides: checked against scenarios.xml");
 }

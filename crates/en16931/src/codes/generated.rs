@@ -591,3 +591,29 @@ pub static NOTE_SUBJECT_CODES: &[&str] = &[
     "RAH", "REG", "RET", "REV", "RQR", "SAF", "SIC", "SIN", "SLR", "SPA", "SPG", "SPH", "SPP",
     "SPT", "SRN", "SSR", "SUR", "TCA", "TDT", "TRA", "TRR", "TXD", "WHI", "ZZZ",
 ];
+
+/// Every generated code list, by the name it has in this module.
+///
+/// Generated alongside the tables, so it cannot omit one. `TABLES.len()`
+/// and the sum of the slice lengths are the two figures the documentation
+/// quotes, and `tests/documented_numbers.rs` reads them from here.
+pub static TABLES: &[(&str, &[&str])] = &[
+    ("ALLOWANCE_REASON_CODES", ALLOWANCE_REASON_CODES),
+    ("CHARGE_REASON_CODES", CHARGE_REASON_CODES),
+    ("COUNTRY_CODES", COUNTRY_CODES),
+    ("CREDIT_NOTE_TYPE_CODES", CREDIT_NOTE_TYPE_CODES),
+    ("CURRENCY_CODES", CURRENCY_CODES),
+    ("EAS_SCHEMES", EAS_SCHEMES),
+    ("ICD_SCHEMES", ICD_SCHEMES),
+    ("INVOICE_TYPE_CODES", INVOICE_TYPE_CODES),
+    ("ITEM_CLASSIFICATION_SCHEMES", ITEM_CLASSIFICATION_SCHEMES),
+    ("NOTE_SUBJECT_CODES", NOTE_SUBJECT_CODES),
+    ("PAYMENT_MEANS_CODES", PAYMENT_MEANS_CODES),
+    ("PEPPOL_EAS_SCHEMES", PEPPOL_EAS_SCHEMES),
+    ("PEPPOL_MIME_CODES", PEPPOL_MIME_CODES),
+    ("REFERENCE_QUALIFIERS", REFERENCE_QUALIFIERS),
+    ("UNIT_CODES", UNIT_CODES),
+    ("VATEX_CODES", VATEX_CODES),
+    ("VAT_CATEGORY_CODES", VAT_CATEGORY_CODES),
+    ("VAT_POINT_DATE_CODES", VAT_POINT_DATE_CODES),
+];

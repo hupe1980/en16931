@@ -14,10 +14,14 @@
 //! Source is the **preprocessed** artefact, where `<rule context="…">` is a
 //! fully resolved XPath rather than a `$Variable` reference.
 //!
-//! 447 element and 0 attribute prohibitions are represented.
-//! [`UNEXTRACTED`] = 75 are not: their context is conditional (a
-//! predicate, `ends-with(…)`, a wildcard) and selecting the elements it
-//! matches needs an XPath engine this crate does not have. That number is
+//! 447 of the artefact's 522 `not(…)` assertions are represented,
+//! as 447 element and 0 attribute rows — more rows than assertions,
+//! because an alternation like
+//! `(cac:InvoiceLine|cac:CreditNoteLine)/x` is one rule and two paths.
+//!
+//! [`UNEXTRACTED`] = 75 are not represented: their test is
+//! conditional (a predicate, `ends-with(…)`, a wildcard) and selecting what
+//! it matches needs an XPath engine this crate does not have. The number is
 //! public so a test reports "447 of 522 checked" rather than
 //! implying a clean sweep.
 
@@ -2226,9 +2230,12 @@ pub static FORBIDDEN_PATHS: &[(&str, &str, &str)] = &[
 /// `(rule id, attribute name)` — prohibited anywhere in the document.
 pub static FORBIDDEN_ATTRIBUTES: &[(&str, &str)] = &[];
 
-/// Prohibitions whose context this crate cannot evaluate, and which
+/// Prohibitions whose test this crate cannot evaluate, and which
 /// [`FORBIDDEN_PATHS`] therefore does **not** cover.
 pub const UNEXTRACTED: usize = 75;
 
-/// Every `CII-*` prohibition in the artefact, checkable or not.
+/// Every `CII-*` `not(…)` assertion in the artefact, checkable or not.
+///
+/// One per **assertion**. The tables above hold 447 rows, which is more,
+/// because one alternating rule expands to one row per branch.
 pub const TOTAL_PARAMS: usize = 522;

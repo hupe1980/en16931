@@ -38,6 +38,27 @@ fn meta() -> DocumentMeta {
     }
 }
 
+/// One standard-rated position — the smallest document that satisfies `billing`
+/// and leaves the header the thing under test.
+fn simple_document(meta: DocumentMeta) -> BillingDocument {
+    BillingDocument::builder()
+        .meta(meta)
+        .amount_scale(AmountScale::EN16931)
+        .positions(vec![
+            LineItem::flat_fee(
+                "Service",
+                Amount::parse("100.00000").unwrap(),
+                Currency::EUR,
+            )
+            .vat(BillingLineVat::new(TaxCategory::Standard, dec!(0.19)).unwrap())
+            .build()
+            .unwrap(),
+        ])
+        .extra_tax(FixedRateTax::new("MwSt", dec!(0.19)).unwrap().boxed())
+        .build()
+        .expect("a lawful billing document")
+}
+
 /// A metered utility invoice: consumption at a per-kWh price, a per-unit excise
 /// **inside** the taxable base, and VAT on the lot.
 ///
@@ -55,9 +76,13 @@ fn utility_document() -> BillingDocument {
             )
             .build()
             .unwrap(),
-            LineItem::flat_fee("Grundpreis", Amount::parse("8.50000").unwrap())
-                .build()
-                .unwrap(),
+            LineItem::flat_fee(
+                "Grundpreis",
+                Amount::parse("8.50000").unwrap(),
+                Currency::EUR,
+            )
+            .build()
+            .unwrap(),
         ])
         // A per-unit excise. EN 16931 calls this a BG-21 document level CHARGE,
         // not tax: it is part of the base VAT is charged on.
@@ -157,10 +182,14 @@ fn an_unconfigured_currency_is_refused_at_the_boundary() {
             ..Default::default() // Currency::XXX
         })
         .positions(vec![
-            LineItem::flat_fee("Service", Amount::parse("100.00000").unwrap())
-                .vat(BillingLineVat::new(TaxCategory::Standard, dec!(0.19)).unwrap())
-                .build()
-                .unwrap(),
+            LineItem::flat_fee(
+                "Service",
+                Amount::parse("100.00000").unwrap(),
+                Currency::EUR,
+            )
+            .vat(BillingLineVat::new(TaxCategory::Standard, dec!(0.19)).unwrap())
+            .build()
+            .unwrap(),
         ])
         .build()
         .unwrap();
@@ -392,9 +421,13 @@ fn itemised_advances_are_carried_not_dropped() {
         .meta(meta())
         .amount_scale(AmountScale::EN16931)
         .positions(vec![
-            LineItem::flat_fee("Jahresverbrauch", Amount::parse("1000.00000").unwrap())
-                .build()
-                .unwrap(),
+            LineItem::flat_fee(
+                "Jahresverbrauch",
+                Amount::parse("1000.00000").unwrap(),
+                Currency::EUR,
+            )
+            .build()
+            .unwrap(),
         ])
         .extra_tax(FixedRateTax::new("MwSt", dec!(0.19)).unwrap().boxed())
         .build()
@@ -442,4 +475,417 @@ fn itemised_advances_are_carried_not_dropped() {
         .build()
         .unwrap();
     assert!(!validate(&residual).has("EN-EXT-01"));
+}
+
+// ── The three terms `billing` 0.12 added ─────────────────────────────────────
+
+/// **Upstream still terminates BT-20**, so the adapter's guard stays inert.
+///
+/// `billing` ≤ 0.12 rendered the field and stopped at the closing `#`, and
+/// `BR-DE-18`'s second half requires everything after the last `#…#` to begin
+/// with a newline — so every German invoice carrying a Skonto was rejected. The
+/// adapter appended the newline for one release; 0.13 does it upstream, which is
+/// the right place, because the `#SKONTO#…#` syntax has no core EN 16931 form
+/// and a rendering without the terminator is valid nowhere.
+///
+/// This asserts the *upstream* behaviour rather than only the adapter's output.
+/// Checking the output alone would pass just as well against a `billing` that
+/// had regressed and an adapter quietly papering over it, which is exactly the
+/// state this pair of crates was in a release ago.
+#[test]
+fn billing_renders_bt_20_with_the_terminator_br_de_18_needs() {
+    use billing::terms::{EarlyPaymentDiscount, PaymentTerms};
+
+    let terms = PaymentTerms::text("Zahlbar innerhalb 30 Tagen ohne Abzug.")
+        .with_discount(EarlyPaymentDiscount::new(10, dec!(2.00)).expect("a lawful Skonto"));
+    let raw = terms.to_string();
+    assert!(
+        raw.ends_with('\n'),
+        "billing must terminate BT-20 itself; the adapter's guard is not a fix: {raw:?}"
+    );
+
+    // And the terminated form is what BR-DE-18 wants, checked against the rule
+    // rather than against the assumption that a newline is enough.
+    let mut inv = en16931::Invoice::default();
+    inv.payment_terms = Some(raw.clone());
+    assert!(
+        !profiles::XRECHNUNG.validate(&inv).has("BR-DE-18"),
+        "{raw:?}"
+    );
+
+    // Strip it, and the rule fires — so the assertion above is load-bearing.
+    inv.payment_terms = Some(raw.trim_end_matches('\n').to_owned());
+    assert!(profiles::XRECHNUNG.validate(&inv).has("BR-DE-18"));
+
+    // A prose-only BT-20 gets no terminator: `every … satisfies` is vacuously
+    // true when no line starts with `#`, so a newline there would be noise.
+    let prose = PaymentTerms::text("Zahlbar sofort ohne Abzug").to_string();
+    assert!(!prose.ends_with('\n'), "{prose:?}");
+}
+
+/// BT-20 crosses the seam intact, and satisfies `BR-DE-18` on the far side.
+#[test]
+fn payment_terms_cross_the_seam_in_a_form_br_de_18_accepts() {
+    use billing::terms::{EarlyPaymentDiscount, PaymentTerms};
+
+    let terms = PaymentTerms::text("Zahlbar innerhalb 30 Tagen ohne Abzug.")
+        .with_discount(EarlyPaymentDiscount::new(10, dec!(2.00)).expect("a lawful Skonto"));
+
+    let mut m = meta();
+    m.payment_terms = Some(terms);
+    let doc = BillingDocument::builder()
+        .meta(m)
+        .amount_scale(AmountScale::EN16931)
+        .positions(vec![
+            LineItem::flat_fee(
+                "Service",
+                Amount::parse("100.00000").unwrap(),
+                Currency::EUR,
+            )
+            .vat(BillingLineVat::new(TaxCategory::Standard, dec!(0.19)).unwrap())
+            .build()
+            .unwrap(),
+        ])
+        .extra_tax(FixedRateTax::new("MwSt", dec!(0.19)).unwrap().boxed())
+        .build()
+        .expect("a lawful billing document");
+
+    let inv = FromBilling::new(&doc)
+        .specification_id(profiles::XRECHNUNG.specification_id)
+        .seller(party("Seller GmbH", "DE"))
+        .buyer(party("Buyer GmbH", "DE"))
+        .build()
+        .expect("converts");
+
+    let bt20 = inv
+        .payment_terms
+        .as_deref()
+        .expect("BT-20 crossed the seam");
+    assert!(bt20.starts_with("Zahlbar innerhalb 30 Tagen"), "{bt20:?}");
+    assert!(bt20.contains("#SKONTO#TAGE=10#PROZENT=2.00#"), "{bt20:?}");
+    assert!(bt20.ends_with('\n'), "BR-DE-18's terminator: {bt20:?}");
+    assert!(
+        !profiles::XRECHNUNG.validate(&inv).has("BR-DE-18"),
+        "{}",
+        profiles::XRECHNUNG.validate(&inv)
+    );
+
+    // …and BT-20 is one of the two ways to satisfy BR-CO-25, so the invoice no
+    // longer depends on a due date to be payable.
+    let mut no_due = inv.clone();
+    no_due.due_date = None;
+    assert!(!en16931::validate(&no_due).has("BR-CO-25"));
+}
+
+/// Prose-only payment terms get no terminator, because there is nothing to
+/// terminate: `BR-DE-18` says nothing about a BT-20 with no `#` line in it.
+#[test]
+fn prose_only_payment_terms_are_passed_through_unchanged() {
+    use billing::terms::PaymentTerms;
+
+    let mut m = meta();
+    m.payment_terms = Some(PaymentTerms::text("Zahlbar sofort ohne Abzug"));
+    let doc = BillingDocument::builder()
+        .meta(m)
+        .amount_scale(AmountScale::EN16931)
+        .positions(vec![
+            LineItem::flat_fee(
+                "Service",
+                Amount::parse("100.00000").unwrap(),
+                Currency::EUR,
+            )
+            .vat(BillingLineVat::new(TaxCategory::Standard, dec!(0.19)).unwrap())
+            .build()
+            .unwrap(),
+        ])
+        .extra_tax(FixedRateTax::new("MwSt", dec!(0.19)).unwrap().boxed())
+        .build()
+        .unwrap();
+
+    let inv = FromBilling::new(&doc)
+        .specification_id(profiles::EN16931.specification_id)
+        .seller(party("Seller GmbH", "DE"))
+        .buyer(party("Buyer GmbH", "DE"))
+        .build()
+        .expect("converts");
+    assert_eq!(
+        inv.payment_terms.as_deref(),
+        Some("Zahlbar sofort ohne Abzug")
+    );
+}
+
+/// BT-6 and BT-111 cross together, or `BR-53` fires on a document that carries
+/// both.
+///
+/// The adapter used to map neither, so an invoice reporting VAT in a second
+/// currency lost that fact entirely. Mapping only the currency would have been
+/// worse: `BR-53` makes BT-111 mandatory whenever BT-6 is present, so a
+/// half-mapping manufactures a finding out of a complete document.
+#[test]
+fn the_vat_accounting_currency_and_its_total_cross_together() {
+    use billing::VatAccountingCurrency;
+
+    let doc = BillingDocument::builder()
+        .meta(meta())
+        .amount_scale(AmountScale::EN16931)
+        .positions(vec![
+            LineItem::flat_fee(
+                "Service",
+                Amount::parse("100.00000").unwrap(),
+                Currency::EUR,
+            )
+            .vat(BillingLineVat::new(TaxCategory::Standard, dec!(0.19)).unwrap())
+            .build()
+            .unwrap(),
+        ])
+        .extra_tax(FixedRateTax::new("MwSt", dec!(0.19)).unwrap().boxed())
+        .build()
+        .unwrap()
+        .with_vat_accounting_currency(
+            VatAccountingCurrency::converted(
+                Currency::new("PLN").unwrap(),
+                Amount::parse("19.00000").unwrap(),
+                dec!(4.30),
+                AmountScale::EN16931,
+            )
+            .expect("a lawful conversion"),
+        )
+        .expect("accepted");
+
+    let inv = FromBilling::new(&doc)
+        .specification_id(profiles::EN16931.specification_id)
+        .seller(party("Seller GmbH", "DE"))
+        .buyer(party("Buyer GmbH", "PL"))
+        .build()
+        .expect("converts");
+
+    assert_eq!(
+        inv.vat_accounting_currency.as_ref().map(Code::as_str),
+        Some("PLN"),
+        "BT-6"
+    );
+    assert_eq!(
+        inv.totals
+            .vat_total_accounting
+            .map(|a| a.to_string())
+            .as_deref(),
+        Some("81.70"),
+        "BT-111 — 19.00 EUR at 4.30"
+    );
+    let report = validate(&inv);
+    assert!(!report.has("BR-53"), "{report}");
+    // `PEPPOL-EN16931-R055`: BT-110 and BT-111 must share a sign.
+    assert!(
+        !profiles::PEPPOL_BIS_3
+            .validate(&inv)
+            .has("PEPPOL-EN16931-R055")
+    );
+}
+
+/// A `billing` credit note becomes an EN 16931 **credit note**, not an invoice
+/// carrying a credit note's BT-3.
+///
+/// The adapter used to leave `Invoice::kind` at its default, and the failure was
+/// not subtle once you looked: BT-3 = `381` is a credit-note code, so `BR-CL-01`
+/// fires on the invoice list; `BR-CO-25` runs when it must not; and
+/// `en16931-formats` picks the UBL document element from this field, so the
+/// document went out as `<ubl:Invoice>` with a credit note inside it.
+#[test]
+fn a_billing_credit_note_becomes_an_en16931_credit_note() {
+    use en16931::DocumentKind as EnKind;
+
+    let doc = BillingDocument::builder()
+        .meta(DocumentMeta {
+            kind: DocumentKind::CreditNote,
+            ..meta()
+        })
+        .amount_scale(AmountScale::EN16931)
+        .positions(vec![
+            LineItem::flat_fee(
+                "Gutschrift",
+                Amount::parse("100.00000").unwrap(),
+                Currency::EUR,
+            )
+            .vat(BillingLineVat::new(TaxCategory::Standard, dec!(0.19)).unwrap())
+            .build()
+            .unwrap(),
+        ])
+        .extra_tax(FixedRateTax::new("MwSt", dec!(0.19)).unwrap().boxed())
+        .build()
+        .unwrap();
+
+    let inv = FromBilling::new(&doc)
+        .specification_id(profiles::EN16931.specification_id)
+        .seller(party("Seller GmbH", "DE"))
+        .buyer(party("Buyer GmbH", "DE"))
+        .build()
+        .expect("converts");
+
+    assert_eq!(inv.kind, EnKind::CreditNote);
+    assert_eq!(inv.type_code.as_ref().map(Code::as_str), Some("381"));
+
+    let report = validate(&inv);
+    assert!(
+        !report.has("BR-CL-01"),
+        "381 is a credit-note code:\n{report}"
+    );
+    assert!(
+        !report.has("BR-CO-25"),
+        "BR-CO-25 must not fire on a credit note:\n{report}"
+    );
+
+    // …and every other kind stays an invoice.
+    for kind in [
+        DocumentKind::CommercialInvoice,
+        DocumentKind::PartialInvoice,
+        DocumentKind::CorrectedInvoice,
+    ] {
+        let d = BillingDocument::builder()
+            .meta(DocumentMeta { kind, ..meta() })
+            .amount_scale(AmountScale::EN16931)
+            .positions(vec![
+                LineItem::flat_fee(
+                    "Leistung",
+                    Amount::parse("100.00000").unwrap(),
+                    Currency::EUR,
+                )
+                .vat(BillingLineVat::new(TaxCategory::Standard, dec!(0.19)).unwrap())
+                .build()
+                .unwrap(),
+            ])
+            .extra_tax(FixedRateTax::new("MwSt", dec!(0.19)).unwrap().boxed())
+            .build()
+            .unwrap();
+        let i = FromBilling::new(&d)
+            .specification_id(profiles::EN16931.specification_id)
+            .seller(party("Seller GmbH", "DE"))
+            .buyer(party("Buyer GmbH", "DE"))
+            .build()
+            .expect("converts");
+        assert_eq!(i.kind, EnKind::Invoice, "{kind:?}");
+        assert!(!validate(&i).has("BR-CL-01"), "{kind:?}");
+    }
+}
+
+// ── What `billing` 0.13 made mappable ────────────────────────────────────────
+
+/// BG-1 crosses with **both** its terms, and repeats.
+///
+/// `billing` ≤ 0.12 held one uncoded string, so BT-21 could not cross at all and
+/// a second note had nowhere to go. BT-21 is not decoration: a reverse-charge
+/// sentence and a payment instruction are both free text, and only the subject
+/// code tells a routing system which is which.
+#[test]
+fn invoice_notes_cross_with_their_subject_codes() {
+    use billing::Note;
+
+    let mut m = meta();
+    m.notes = vec![
+        Note::coded("AAI", "Steuerschuldnerschaft des Leistungsempfängers"),
+        Note::new("Vielen Dank für Ihren Auftrag."),
+    ];
+    let doc = simple_document(m);
+
+    let inv = FromBilling::new(&doc)
+        .specification_id(profiles::EN16931.specification_id)
+        .seller(party("Seller GmbH", "DE"))
+        .buyer(party("Buyer GmbH", "DE"))
+        .build()
+        .expect("converts");
+
+    assert_eq!(inv.notes.len(), 2, "BG-1 is 0..n");
+    assert_eq!(
+        inv.notes[0].subject_code.as_ref().map(Code::as_str),
+        Some("AAI"),
+        "BT-21"
+    );
+    assert_eq!(
+        inv.notes[0].note.as_deref(),
+        Some("Steuerschuldnerschaft des Leistungsempfängers"),
+        "BT-22"
+    );
+    assert_eq!(inv.notes[1].subject_code, None, "uncoded is still lawful");
+
+    // `AAI` is in UNCL 4451, so `BR-CL-08` has nothing to say.
+    assert!(!validate(&inv).has("BR-CL-08"), "{}", validate(&inv));
+
+    // …and a code outside the list is a finding rather than a silent pass.
+    let mut bad = inv.clone();
+    bad.notes[0].subject_code = Some(Code::new("ZZZZ"));
+    assert!(validate(&bad).has("BR-CL-08"));
+}
+
+/// BT-29 and BT-46 cross, **merged** with whatever the caller's party carries.
+///
+/// They could not cross at all before 0.13: the field was a bare string
+/// documented as "MP-ID, GLN, BDEW code, or free-form", and which of those a
+/// value is decides the ISO 6523 scheme that `BR-CL-10` then checks. Guessing
+/// would have produced an invoice that validates and names the wrong registry.
+#[test]
+fn party_identifiers_cross_and_merge_rather_than_overwrite() {
+    use billing::PartyIdentifier;
+
+    let mut m = meta();
+    m.issuer_id = Some(PartyIdentifier::scheme("0088", "4012345000009")); // GLN
+    m.recipient_id = Some(PartyIdentifier::new("KND-4711")); // no registry
+    let doc = simple_document(m);
+
+    // The caller's party already carries an identifier of its own.
+    let mut seller = party("Seller GmbH", "DE");
+    seller.identifiers = vec![Identifier::schemed("DE-MASTER-1", "0204")];
+
+    let inv = FromBilling::new(&doc)
+        .specification_id(profiles::EN16931.specification_id)
+        .seller(seller)
+        .buyer(party("Buyer GmbH", "DE"))
+        .build()
+        .expect("converts");
+
+    // Both survive: master data and the document's own party code are different
+    // facts, and BT-29 repeats precisely because a party has more than one.
+    let seller_ids: Vec<_> = inv
+        .seller
+        .identifiers
+        .iter()
+        .map(|i| (i.content(), i.scheme()))
+        .collect();
+    assert_eq!(
+        seller_ids,
+        [
+            ("DE-MASTER-1", Some("0204")),
+            ("4012345000009", Some("0088"))
+        ]
+    );
+    assert_eq!(
+        inv.buyer
+            .identifiers
+            .iter()
+            .map(|i| (i.content(), i.scheme()))
+            .collect::<Vec<_>>(),
+        [("KND-4711", None)],
+        "a schemeless identifier is lawful — BR-CL-10 only constrains a scheme that is there"
+    );
+    assert!(!validate(&inv).has("BR-CL-10"), "{}", validate(&inv));
+
+    // Converting twice does not duplicate: the value *and* its scheme are
+    // compared, because the same digits under 0088 and under 0293 are two
+    // registries saying two different things.
+    let again = FromBilling::new(&doc)
+        .specification_id(profiles::EN16931.specification_id)
+        .seller(inv.seller.clone())
+        .buyer(inv.buyer.clone())
+        .build()
+        .expect("converts");
+    assert_eq!(again.seller.identifiers.len(), 2, "idempotent");
+
+    // A scheme outside ISO 6523 is reported, not swallowed.
+    let mut m = meta();
+    m.issuer_id = Some(PartyIdentifier::scheme("NOPE", "X"));
+    let bad = FromBilling::new(&simple_document(m))
+        .specification_id(profiles::EN16931.specification_id)
+        .seller(party("Seller GmbH", "DE"))
+        .buyer(party("Buyer GmbH", "DE"))
+        .build()
+        .expect("converts");
+    assert!(validate(&bad).has("BR-CL-10"));
 }

@@ -1,0 +1,58 @@
+[package]
+name        = "en16931-cli"
+description = """\
+The EN 16931 validator as a command. Validates UBL, CII and ZUGFeRD/Factur-X \
+PDFs against the core model, XRechnung and Peppol BIS Billing 3.0; converts \
+between the two syntaxes; compares two documents as invoices rather than as \
+XML; reports as text, JSON or SVRL.\
+"""
+keywords   = ["einvoice", "en16931", "xrechnung", "zugferd", "cli"]
+categories = ["command-line-utilities", "finance"]
+readme     = "README.md"
+
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+authors.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+
+# The package is `en16931-cli` and the command is `en16931`: the library owns
+# the crate name on crates.io, and nobody types `en16931-cli validate`.
+# `doc = false`: rustdoc writes a binary's docs to the same `en16931/index.html`
+# as the library's, and `cargo doc --workspace` then reports a filename
+# collision and silently keeps one of them. A binary has no API to document, so
+# the honest fix is not to ask for the page.
+[[bin]]
+name = "en16931"
+path = "src/main.rs"
+doc  = false
+
+[dependencies]
+# The libraries, with everything on — deliberately. A binary is not a dependency
+# of anything, so the graph-size arguments that shape the libraries' feature
+# flags do not apply here, and a validator that could not read the PDF you
+# handed it because of a compile-time flag would be a worse tool for no gain.
+#
+# The features are named at this use site rather than in
+# `[workspace.dependencies]`, so the libraries' own builds and their test
+# matrices are not widened by the command's appetite.
+en16931 = { workspace = true, features = ["serde", "svrl", "sepa"] }
+en16931-formats = { workspace = true, features = ["ubl", "cii", "zugferd", "serde"] }
+
+# Already in the graph through `en16931`, so naming it here adds no crate. It is
+# needed because `diff` has to compare *numbers* that serialise as strings:
+# `Percentage` renders "25.0" from UBL and "25" from CII, and the model holds
+# those to be one value — `rust_decimal` compares by value, `str` does not.
+rust_decimal = { workspace = true }
+clap        = { version = "4.6", features = ["derive", "wrap_help"] }
+serde_json  = "1"
+thiserror.workspace = true
+clap_complete = "4"
+clap_mangen = "0.2"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+roxmltree = "0.21"
+rust_decimal.workspace = true

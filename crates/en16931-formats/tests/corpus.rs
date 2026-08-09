@@ -14,7 +14,7 @@
 //!
 //! A skipped suite prints why. That is not enough on its own — nobody reads the
 //! stdout of a passing test, and this suite once reported four green tests
-//! having read zero of its 490 documents. So CI sets `EN16931_REQUIRE_SPEC=1`
+//! having read zero of its 486 documents. So CI sets `EN16931_REQUIRE_SPEC=1`
 //! and the skip becomes a failure; see `tests/common/mod.rs`.
 
 mod common;

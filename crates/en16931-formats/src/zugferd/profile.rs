@@ -31,7 +31,7 @@ pub enum Profile {
 /// caller may legitimately do, and a bare `false` invites being ignored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IsInvoice {
-    /// The document is an EN 16931 invoice; the 316 rules apply.
+    /// The document is an EN 16931 invoice; the 317 rules apply.
     Yes,
     /// The document is **not** an EN 16931 invoice, with the reason.
     No(&'static str),

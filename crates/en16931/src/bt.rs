@@ -52,6 +52,10 @@ pub enum Group {
     Seller,
     /// BG-7 BUYER (and BG-8 / BG-9 beneath it).
     Buyer,
+    /// BG-10 PAYEE.
+    Payee,
+    /// BG-11 SELLER TAX REPRESENTATIVE PARTY (and BG-12 beneath it).
+    TaxRepresentative,
     /// BG-13 DELIVERY INFORMATION.
     Delivery,
     /// BG-16 PAYMENT INSTRUCTIONS.
@@ -71,6 +75,28 @@ pub enum Group {
 }
 
 impl Group {
+    /// Every group, in BG order.
+    ///
+    /// Exists so a property of "all groups" can be *tested over all groups*
+    /// rather than over a list someone remembered to extend — which is how
+    /// [`Group::Attachment`] came to disagree with [`repeats`](Self::repeats)
+    /// unnoticed. `every_group_is_in_all` keeps this in step with the enum.
+    pub const ALL: &'static [Self] = &[
+        Self::Document,
+        Self::Seller,
+        Self::Buyer,
+        Self::Payee,
+        Self::TaxRepresentative,
+        Self::Delivery,
+        Self::Payment,
+        Self::DocumentAllowance,
+        Self::DocumentCharge,
+        Self::Totals,
+        Self::VatBreakdown,
+        Self::Attachment,
+        Self::Line,
+    ];
+
     /// The BG number, where the group has one.
     #[must_use]
     pub const fn bg(self) -> Option<BgId> {
@@ -78,6 +104,8 @@ impl Group {
             Self::Document => return None,
             Self::Seller => BgId(4),
             Self::Buyer => BgId(7),
+            Self::Payee => BgId(10),
+            Self::TaxRepresentative => BgId(11),
             Self::Delivery => BgId(13),
             Self::Payment => BgId(16),
             Self::DocumentAllowance => BgId(20),
@@ -91,11 +119,21 @@ impl Group {
 
     /// Whether this group may occur more than once, so a [`Path`] into it needs
     /// an index to be unambiguous.
+    ///
+    /// [`Group::Attachment`] is here because BG-24 is `0..n` and four rules —
+    /// `BR-DE-22`, `BR-DEX-01`, `PEPPOL-EN16931-CL001` and `BR-TMP-2` — already
+    /// emit `BG-24[i]`. It used to answer `false` while those paths were being
+    /// written, and the test below did not list it in either direction, so
+    /// neither half noticed the other.
     #[must_use]
     pub const fn repeats(self) -> bool {
         matches!(
             self,
-            Self::DocumentAllowance | Self::DocumentCharge | Self::VatBreakdown | Self::Line
+            Self::DocumentAllowance
+                | Self::DocumentCharge
+                | Self::VatBreakdown
+                | Self::Attachment
+                | Self::Line
         )
     }
 }
@@ -229,25 +267,50 @@ mod tests {
         );
     }
 
+    /// `Group::ALL` must list every variant, or every property asserted over it
+    /// is asserted over a subset.
+    ///
+    /// The `match` is what does the work: adding a variant without adding it to
+    /// `ALL` is then a compile error, not a test that keeps passing.
+    #[test]
+    fn every_group_is_in_all() {
+        for g in Group::ALL {
+            match g {
+                Group::Document
+                | Group::Seller
+                | Group::Buyer
+                | Group::Payee
+                | Group::TaxRepresentative
+                | Group::Delivery
+                | Group::Payment
+                | Group::DocumentAllowance
+                | Group::DocumentCharge
+                | Group::Totals
+                | Group::VatBreakdown
+                | Group::Attachment
+                | Group::Line => (),
+            }
+        }
+        assert_eq!(Group::ALL.len(), 13);
+        // BG numbers ascend, which is what makes the derived `Ord` on `Path`
+        // sort a report the way the standard reads.
+        let bgs: Vec<_> = Group::ALL.iter().filter_map(|g| g.bg()).collect();
+        assert!(bgs.windows(2).all(|w| w[0] < w[1]), "{bgs:?}");
+    }
+
     #[test]
     fn repeating_groups_are_exactly_the_ones_that_need_an_index() {
-        for g in [
+        const REPEATING: &[Group] = &[
             Group::DocumentAllowance,
             Group::DocumentCharge,
             Group::VatBreakdown,
+            Group::Attachment,
             Group::Line,
-        ] {
-            assert!(g.repeats(), "{g:?}");
-        }
-        for g in [
-            Group::Document,
-            Group::Seller,
-            Group::Buyer,
-            Group::Delivery,
-            Group::Payment,
-            Group::Totals,
-        ] {
-            assert!(!g.repeats(), "{g:?}");
+        ];
+        // Over *every* group, so a new one has to be classified rather than
+        // silently defaulting to "does not repeat".
+        for g in Group::ALL {
+            assert_eq!(g.repeats(), REPEATING.contains(g), "{g:?}");
         }
     }
 

@@ -107,6 +107,37 @@ pub enum Divergence {
     NoXmp,
 }
 
+impl std::fmt::Display for Divergence {
+    /// One sentence naming both halves of the disagreement.
+    ///
+    /// A diagnostic type with no `Display` is a diagnostic nobody prints: every
+    /// caller ends up with `{:?}`, which puts Rust syntax in front of an
+    /// operator. These are the sentences a person needs, so they live here
+    /// rather than being rewritten at each call site.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Profile { xmp, payload } => write!(
+                f,
+                "the PDF's XMP declares profile {xmp:?} and the payload's BT-24 says {payload:?} — \
+                 a receiver routing on the metadata and one routing on the invoice will disagree"
+            ),
+            Self::Filename { xmp, actual } => write!(
+                f,
+                "the PDF's XMP names the embedded file {xmp:?} and the attached file is {actual:?}"
+            ),
+            Self::Relationship { found, profile } => write!(
+                f,
+                "the invoice is attached as /AFRelationship /{found}, but {profile:?} carries the \
+                 invoice itself rather than accompanying one — /Data says the pages are the invoice"
+            ),
+            Self::NoXmp => f.write_str(
+                "the PDF carries no XMP invoice metadata; the payload was found by filename, and \
+                 a counterparty scanning metadata first will not see an e-invoice here",
+            ),
+        }
+    }
+}
+
 /// What extraction produced.
 #[derive(Debug, Clone)]
 #[non_exhaustive]

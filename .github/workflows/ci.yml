@@ -80,6 +80,13 @@ jobs:
         run: cargo clippy -p en16931 --all-targets --no-default-features --features svrl -- -D warnings
       - name: en16931 · serde only
         run: cargo clippy -p en16931 --all-targets --no-default-features --features serde -- -D warnings
+      # The calculation-engine seam. Its own combination, because `billing` is
+      # the only optional dependency that brings a whole domain model with it —
+      # and the adapter tracks its API, so a `cargo update` that moves `billing`
+      # must fail here rather than in `--all-features`, where the message would
+      # be buried under everything else.
+      - name: en16931 · billing adapter
+        run: cargo clippy -p en16931 --all-targets --no-default-features --features billing -- -D warnings
 
       # en16931-formats — the syntax bindings.
       - name: en16931-formats · ubl only (default)
@@ -90,6 +97,13 @@ jobs:
         run: cargo clippy -p en16931-formats --all-targets --no-default-features -- -D warnings
       - name: en16931-formats · zugferd (pulls in a PDF parser)
         run: cargo clippy -p en16931-formats --all-targets --features zugferd -- -D warnings
+
+      # en16931-cli — the command. It has no features of its own on purpose: a
+      # binary is in nobody's dependency graph, so it turns everything on and
+      # there is no combination to sweep. What is worth checking is that it
+      # still builds against the libraries' widest surface.
+      - name: en16931-cli
+        run: cargo clippy -p en16931-cli --all-targets -- -D warnings
 
       # The whole point of `en16931` is that it has no I/O and no XML. If it
       # stops building for wasm32, something was added that should not have been.
@@ -260,7 +274,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        crate: [en16931, en16931-formats]
+        crate: [en16931, en16931-cli, en16931-formats]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -273,6 +287,9 @@ jobs:
             echo "yes=false" >> "$GITHUB_OUTPUT"
             echo "::notice::${{ matrix.crate }} is not published yet — no baseline to compare against"
           fi
+      # `en16931-cli` exposes no library API, so semver-checks has nothing to
+      # compare — it is listed anyway so that adding one later is covered
+      # without anybody remembering to extend the matrix.
       - uses: obi1kenobi/cargo-semver-checks-action@v2
         if: steps.published.outputs.yes == 'true'
         with:

@@ -34,7 +34,7 @@ UN/CEFACT CII, XRechnung, and ZUGFeRD / Factur-X.
 ```
 
 `en16931` decides whether an invoice is **correct**. This crate decides what it
-looks like **on the wire**, and re-implements not one of the 316 rules.
+looks like **on the wire**, and re-implements not one of the 317 rules.
 
 ---
 
@@ -59,7 +59,7 @@ semantic rules do not depend on a syntax" is enforced rather than asked for, and
 | `ubl` | ✅ | 13 crates | UBL 2.1 `Invoice` / `CreditNote`, both directions |
 | `cii` | — | 13 crates | UN/CEFACT CII D16B, both directions |
 | `zugferd` | — | **57 crates** | ZUGFeRD / Factur-X hybrid PDFs |
-| `render` | — | + a typesetting engine | Corporate design — **not yet implemented** |
+| `serde` | — | + `serde` | `Serialize` / `Deserialize` on this crate's own types |
 
 `zugferd` is off by default and that matters: `lopdf` brings AES, ChaCha20,
 SHA-2, `getrandom` and `libc`, and the result does not build for
@@ -72,7 +72,7 @@ ordering. Only reading pulls in a parser.
 
 ## 🎯 The 91 % that costs a writer nothing
 
-CEN's artefacts carry **1 339** syntax rules. **1 220 of them (91 %)** say some
+CEN's artefacts carry **1 339** syntax rules. **1 218 of them (91 %)** say some
 element "shall not be used" — they fence off the parts of UBL 2.1 and CII D16B
 that EN 16931 does not use. That inverts the usual expectation:
 
@@ -85,6 +85,24 @@ Unreachability is a claim, so the serialiser enforces it against prohibitions
 extracted from CEN's own Schematron, and `tests/subset.rs` asserts the writer
 never needs that safety net.
 
+**1 111 of the 1 218 are represented** — 664 of UBL's 696 and 447 of CII's 522.
+The rest have a test an XPath engine is needed to evaluate (a predicate, a
+wildcard, `ends-with(name(), 'Amount')`), and they are *counted* rather than
+quietly omitted, so a test can report "1 111 of 1 218 checked" instead of
+implying a clean sweep.
+
+It was 1 045 until the extractor learned one shape:
+
+```xpath
+not((cac:InvoiceLine|cac:CreditNoteLine)/cac:SubInvoiceLine)
+```
+
+That is one rule about the two names UBL gives the same thing, and **131 of the
+163 UBL prohibitions the table was missing looked exactly like it**. Among them
+was `UBL-CR-646` — which is why the writer could emit `cac:SubInvoiceLine` into
+a core document with nothing to notice. More rows than assertions is the
+expected consequence: an alternation is one rule and two paths.
+
 ---
 
 ## 📐 The binding is data, not code
@@ -93,15 +111,15 @@ Two tables are **generated from the authorities' artefacts**, never transcribed:
 
 | Table | Source | Size |
 |---|---|---|
-| UBL element order | **320** published UBL instances — CEN unit tests, KoSIT mutation instances, OpenPeppol examples | 36 parents |
-| CII element order | **170** published CII instances | 38 parents |
-| UBL prohibitions | preprocessed `EN16931-UBL-validation` | 1 024 paths + 21 attributes |
+| UBL element order | **319** published UBL instances — CEN unit tests, KoSIT mutation instances, OpenPeppol examples | 36 parents |
+| CII element order | **167** published CII instances | 38 parents |
+| UBL prohibitions | preprocessed `EN16931-UBL-validation` | 1 548 paths + 21 attributes |
 | CII prohibitions | preprocessed `EN16931-CII-validation` | 447 paths |
 
 Both syntaxes' content models are XSD `sequence`s, so a document with exactly
 the right elements in the wrong order is **invalid** — and no Schematron rule
 says so, because ordering is the schema's job. The order is derived by topologically
-sorting the pairwise precedences observed across all 320 documents, taking the
+sorting the pairwise precedences observed across all 319 documents, taking the
 majority direction where they disagree (much of that corpus is deliberately
 invalid). Derivation reports **no unresolved conflicts**, and the generator
 exits non-zero if it ever does.
@@ -119,9 +137,9 @@ An earlier table dropped the context, and the writer duly discarded every
 path)`, taken from the **preprocessed** artefacts where contexts are fully
 resolved rather than `$Variable` references.
 
-Regenerate with `cargo xtask codegen`, `cargo xtask codegen` and
-`cargo xtask codegen`. Each exits non-zero rather than emitting a table it
-could not derive cleanly.
+Regenerate all four with `cargo xtask codegen`; `cargo xtask check` re-derives
+them and fails if a committed one differs. Each generator exits non-zero rather
+than emitting a table it could not derive cleanly.
 
 ---
 
@@ -227,7 +245,7 @@ no lines, so they cannot satisfy **BR-16**.
 
 ```rust
 match got.profile.is_en16931_invoice() {
-    IsInvoice::Yes     => { /* the 316 rules apply */ }
+    IsInvoice::Yes     => { /* the 317 rules apply */ }
     IsInvoice::No(why) => println!("not an invoice: {why}"),  // names BR-16
     IsInvoice::Unknown => { /* unrecognised — do not guess */ }
 }
@@ -292,21 +310,27 @@ position.
 with a toolchain that already guarantees conformance, take the payload from
 `cii::to_string_for` — which will not hand you XML until it has validated the
 model against the profile you name — and have that toolchain embed it. The half
-this crate can guarantee is the half it does. `render`, the visible-invoice
-feature, is downstream of the same problem and likewise unimplemented.
+this crate can guarantee is the half it does.
+
+There was a `render` feature declared for the visible half. It enabled nothing
+and gated nothing, and shipped in the table above for two releases; a feature
+that does not exist is worse documentation than an absence, so it is gone. This
+section is the answer it was standing in for.
 
 ---
 
 ## 🧪 What is tested
 
-**104 tests.**
+**114 tests.**
 
 | Suite | What it establishes |
 |---|---|
 | `roundtrip` | `Invoice → syntax → Invoice` is the identity **in both syntaxes**, reported per field — plus a test that UBL and CII agree with *each other* |
+| `fidelity` | the same property over the **486 published documents**, where a difference is a failure *unless the writer named it in `dropped`* |
+| `cross_syntax` | the stronger claim: read in one syntax, write in the **other**, read back — over the same 486, both directions |
 | `order` | Every element either writer emits is in schema sequence |
 | `subset` | Neither writer emits a forbidden element or attribute |
-| `corpus` | All **320** UBL and **170** CII published instances read; every unmapped element named |
+| `corpus` | All **319** UBL and **167** CII published instances read; every unmapped element named |
 | `zugferd` | Extraction, XMP, `/AFRelationship`, divergence, and the payload as a model — against PDFs built in the test |
 | `profile_scoped` | `to_string_for` refuses an invalid invoice in **both** syntaxes, and stamps BT-24 *before* the rules run rather than after |
 
@@ -320,11 +344,44 @@ ZUGFeRD's PDFs are built in the tests rather than checked in: a binary fixture i
 opaque, and pins one producer's output rather than the structure the
 specification describes.
 
-**Four real bugs came out of writing these rather than assuming:** BT-158's
-scheme is `@listID`, not `@schemeID` (well-formed, schema-valid, silently wrong);
-the reader handed back base64 text instead of decoded attachment bytes; BT-9 on a
-credit note was dropped without saying so; and `UBL-CR-244` forbids BT-33 on the
-customer.
+**Fourteen real bugs came out of writing these rather than assuming.** Four from the
+early suites: BT-158's scheme is `@listID`, not `@schemeID` (well-formed,
+schema-valid, silently wrong); the reader handed back base64 text instead of
+decoded attachment bytes; BT-9 on a credit note was dropped without saying so;
+and `UBL-CR-244` forbids BT-33 on the customer.
+
+Five more the moment `fidelity` ran the same property over documents this crate
+did not write. The `maximal()` fixture is *this crate's* idea of a complete
+invoice, so it can only catch a bug in a term someone thought to put in it:
+
+| | |
+|---|---|
+| `cbc:BaseQuantity unitCode=""` | BT-150 came back as `Some("")`, and **`PEPPOL-EN16931-R130` then fired** — a fatal finding manufactured by writing a document out and reading it back |
+| BT-147 required BT-148 | a price discount with no gross price was dropped, on seven instances |
+| `cac:SubInvoiceLine` | BG-DEX-01 was read and never written |
+| `cac:PrepaidPayment` | BG-DEX-09 likewise — the data `EN-EXT-01` exists to warn about losing |
+| empty `cac:InvoicePeriod` | dropped without a word, so `BR-CO-20` stopped firing on the rewrite |
+
+Every one of them produced a schema-valid document that the reader read without
+complaint. That is the class of bug a round trip catches and nothing else does.
+
+**Four more when `cross_syntax` made the documents change syntax.** A same-syntax
+round trip cannot see a binding that is *consistently* wrong — a writer and its
+own reader agreeing on a mistake round-trip perfectly. Crossing breaks the
+agreement:
+
+| | |
+|---|---|
+| **BT-90 was never written to UBL** | UBL carries the creditor identifier on the **seller** as `schemeID="SEPA"`, the one place `BR-CL-10` admits a non-ISO-6523 scheme. The reader hopped it into BG-19; the writer never hopped it back, so every direct-debit invoice written as UBL lost it and failed `BR-DE-30` at the counterparty |
+| **BT-20 was trimmed by the CII reader** | `BR-DE-18` needs the Skonto block to end with a newline, and XRechnung is carried in CII too — 36 documents |
+| **CII detected credit notes from `381` alone** | `396`, `532` and `83` read back as *invoices*, and `BR-CL-01` then reported a violation that is not one. Every published CII credit note uses `381`, so no corpus could show it |
+| **BT-111 vanished when BT-6 = BT-5** | one element is then both totals — which the UBL reader knew and the CII reader did not |
+
+Plus one the two readers simply disagreed about: an **empty element**.
+`<cbc:BuyerReference/>` is an absent term, not a term whose value is the empty
+string. Both readers said `None` through their `text()` helper and `Some("")`
+through the dozen call sites that read an element's own text — inconsistent with
+themselves, and with each other on nine documents.
 
 ---
 
@@ -334,6 +391,15 @@ customer.
 cargo run --example read_and_validate                       # inbound UBL → Invoice → verdict
 cargo run --example write_both_syntaxes --features cii      # one proof, two syntaxes
 cargo run --example zugferd_extract --features zugferd      # pull the invoice out of a PDF
+```
+
+…or without writing any Rust at all, since
+[`en16931-cli`](../en16931-cli) is this crate with a command around it:
+
+```sh
+en16931 inspect  rechnung.pdf            # what is this file?
+en16931 extract  rechnung.pdf            # the payload, verbatim
+en16931 convert  rechnung.xml --to cii   # through the model, not element by element
 ```
 
 ---

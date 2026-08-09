@@ -9,7 +9,7 @@
 //!                └──────────────┬───────────────────────────┘
 //!                               ▼
 //!                     ┌─────────────────────┐
-//!                     │      en16931        │  semantic model, 316 rules,
+//!                     │      en16931        │  semantic model, 317 rules,
 //!                     │  proof of validity  │  no XML, no PDF, no I/O
 //!                     └──────────┬──────────┘
 //!                                ▼
@@ -20,7 +20,7 @@
 //! ```
 //!
 //! [`en16931`] decides whether an invoice is **correct**. This crate decides
-//! what it looks like **on the wire**, and re-implements not one of the 316
+//! what it looks like **on the wire**, and re-implements not one of the 317
 //! rules.
 //!
 //! # Why one crate, not one per format
@@ -44,7 +44,6 @@
 //! | [`ubl`] | ✅ | 13 crates | UBL 2.1, both directions |
 //! | [`cii`] | — | 13 crates | UN/CEFACT CII D16B, both directions |
 //! | [`zugferd`] | — | **57 crates** | ZUGFeRD / Factur-X hybrid PDFs |
-//! | `render` | — | + a typesetting engine | Corporate design — **not yet implemented** |
 //!
 //! `zugferd` is off by default and that matters: `lopdf` brings AES, ChaCha20,
 //! SHA-2, `getrandom` and `libc`, and the result does not build for
@@ -52,7 +51,7 @@
 //!
 //! # The 91 % that costs a writer nothing
 //!
-//! CEN's artefacts carry **1 339** syntax rules, and **1 220 of them (91 %)**
+//! CEN's artefacts carry **1 339** syntax rules, and **1 218 of them (91 %)**
 //! say some element "shall not be used" — they fence off the parts of UBL 2.1
 //! and CII D16B that EN 16931 does not use. That inverts the usual expectation:
 //!

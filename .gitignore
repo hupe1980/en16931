@@ -50,3 +50,6 @@ ZUGFERD.md
 # Python bytecode from codegen/
 __pycache__/
 *.pyc
+
+# Zola's build output for the documentation site (see `just site`).
+/site/public/

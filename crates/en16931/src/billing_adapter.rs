@@ -39,9 +39,39 @@
 //! | `net_total` is neither BT-106 nor BT-109 — it is `BT-106 − BT-107`, which EN 16931 has no term for | `line_total()` / `taxable_total()` |
 //! | Per-line VAT attribution was unrecoverable after assembly | `LineItem::vat`, derived from `TaxLayer::covers` |
 //!
+//! # What crosses the seam
+//!
+//! | | From | To |
+//! |---|---|---|
+//! | BT-1, BT-2, BT-9 | `meta` | header |
+//! | BT-3, and the document *kind* | `meta.kind` / `is_credit_note()` | header — the kind is the semantics, BT-3 its rendering |
+//! | BT-5 | `meta.currency` | header — refused when still `XXX` |
+//! | BT-6, BT-111 | `vat_accounting_currency()` | header and BG-22, together |
+//! | BT-20 | `meta.payment_terms` | header, terminator checked |
+//! | BT-29, BT-46 | `meta.issuer_id` / `recipient_id` | merged into the caller's [`Party`] |
+//! | BG-1 (BT-21, BT-22) | `meta.notes` | notes, with their subject codes |
+//! | BG-14 | `meta.period` | header |
+//! | BG-25 | `net_positions()` | lines |
+//! | BG-20 | `discount_positions()` | allowances, sign flipped |
+//! | BG-21 | `charge_positions()` | charges |
+//! | BG-23 | `tax_breakdown()` | breakdown |
+//! | BG-22 | the totals accessors | totals |
+//! | `BG-X-45` | `advances()` | [`crate::extensions`] |
+//!
+//! **Deliberately not mapped**, because there is nothing to map them to:
+//! `meta.period_label` and `meta.labels` are display text and arbitrary
+//! key/value pairs, with no business term at all.
+//!
+//! Two rows are newer than the rest and were unmappable before `billing` 0.13.
+//! BT-29 and BT-46 needed the ISO 6523 scheme to travel with the value — a bare
+//! string documented as "MP-ID, GLN, BDEW code, or free-form" cannot be given a
+//! `@schemeID` without guessing, and `BR-CL-10` checks that guess. BG-1 needed
+//! notes to be `0..n` with a subject code, because BT-21 is what a routing
+//! system reads and one uncoded string cannot carry it.
+//!
 //! # What the adapter still owes
 //!
-//! Two obligations `billing` deliberately leaves here:
+//! Three obligations `billing` deliberately leaves here:
 //!
 //! 1. **Call `verify_vat_attribution()`.** It is not part of `validate()`,
 //!    because `AllocationRule` splits positions and breakdown with independent
@@ -49,6 +79,38 @@
 //!    downstream will catch a failure.
 //! 2. **Reject `LineItem::vat == None` by name.** Lawful in `billing`, fatal in
 //!    EN 16931 (`BR-CO-04`). Never default it.
+//! 3. **Check BT-20's terminator.** See below. `billing` supplies it now; the
+//!    adapter verifies it rather than assuming it.
+//!
+//! # The BT-20 newline, which is not a nicety
+//!
+//! `billing::PaymentTerms` renders EN 16931's BT-20 including Germany's Skonto
+//! micro-syntax. Up to and including 0.12 it rendered it *without* a trailing
+//! newline:
+//!
+//! ```text
+//! Zahlbar in 30 Tagen.\n#SKONTO#TAGE=10#PROZENT=2.00#
+//! ```
+//!
+//! `BR-DE-18` has two halves, and the second is easy to miss because it is
+//! folded into the same `satisfies` as the first rather than being its own
+//! `<assert>`:
+//!
+//! ```xpath
+//! every $line in cac:PaymentTerms/cbc:Note[1]/tokenize(., '(\r?\n)')[starts-with(normalize-space(.), '#')]
+//!   satisfies matches(normalize-space($line), $XR-SKONTO-REGEX)
+//!         and matches(cac:PaymentTerms/cbc:Note[1]/tokenize(., '#.+#')[last()], '^\s*\n')
+//! ```
+//!
+//! Everything after the **last** `#…#` must begin with a newline. Without one,
+//! `tokenize(…)[last()]` is the empty string, the second `matches` is false, and
+//! every German invoice carrying a Skonto is rejected — fatally.
+//!
+//! This adapter appended the newline for one release. `billing` 0.13 terminates
+//! it upstream, which is where it belongs: the `#SKONTO#…#` syntax has no core
+//! EN 16931 form, so a rendering that omits the terminator is valid nowhere.
+//! What is left here is a **guard**, not a fix — idempotent, and paired with a
+//! test that asserts upstream still does it.
 
 use billing::{BillingDocument, LineItem, Sign};
 use rust_decimal::Decimal;
@@ -247,6 +309,68 @@ fn period(
     .transpose()
 }
 
+/// BT-20, checked for the terminator `BR-DE-18` requires.
+///
+/// # This used to add the newline, and no longer has to
+///
+/// `billing` ≤ 0.12 rendered the field and stopped at the closing `#`, so every
+/// XRechnung carrying a Skonto failed `BR-DE-18` — see the module documentation
+/// for the XPath and why the second half of that rule is so easy to read past.
+/// The adapter appended the newline itself.
+///
+/// 0.13 terminates it upstream, which is the right place: the `#SKONTO#…#`
+/// micro-syntax **is** the German CIUS convention and has no core EN 16931 form,
+/// so a rendering without the terminator is valid nowhere at all.
+///
+/// The guard stays, because the alternative is trusting a convention across a
+/// crate boundary with nothing checking it — and this is the one field where
+/// getting it wrong is invisible until a counterparty's validator says no.
+/// `billing_renders_bt_20_with_the_terminator_br_de_18_needs` asserts upstream
+/// still does it, so a regression there fails our build rather than a customer's
+/// invoice.
+fn payment_terms(t: Option<&billing::terms::PaymentTerms>) -> Option<String> {
+    let t = t.filter(|t| !t.is_empty())?;
+    let rendered = t.to_string();
+    // Idempotent: `ends_with` is what makes this a guard rather than a second
+    // opinion about how BT-20 should be spelled.
+    if t.discounts().is_empty() || rendered.ends_with('\n') {
+        return Some(rendered);
+    }
+    Some(format!("{rendered}\n"))
+}
+
+/// Add the document's BT-29 / BT-46 to a party, without duplicating one the
+/// caller already supplied.
+///
+/// # Why merge rather than choose
+///
+/// Both are legitimate and they are not the same fact. The caller's `Party`
+/// carries master data — the identifiers a customer record holds — and the
+/// document's carries the party code the *billing run* was keyed on: an MP-ID in
+/// the energy market, a GLN in retail. Overwriting either way loses one.
+///
+/// EN 16931 makes BT-29 and BT-46 repeatable precisely because a party has more
+/// than one identity, so carrying both is what the model is for. The scheme is
+/// compared alongside the value: the same digits under `0088` and under `0293`
+/// are two different registries saying two different things.
+fn with_identifier(mut party: Party, id: Option<&billing::PartyIdentifier>) -> Party {
+    let Some(id) = id.filter(|i| !i.value.trim().is_empty()) else {
+        return party;
+    };
+    let scheme = id.scheme.as_deref().filter(|s| !s.trim().is_empty());
+    let already = party
+        .identifiers
+        .iter()
+        .any(|existing| existing.content() == id.value && existing.scheme() == scheme);
+    if !already {
+        party.identifiers.push(match scheme {
+            Some(s) => crate::Identifier::schemed(&id.value, s),
+            None => crate::Identifier::new(&id.value),
+        });
+    }
+    party
+}
+
 fn line_vat(v: Option<&billing::vat::LineVat>) -> Option<LineVat> {
     v.map(|v| LineVat {
         category: Code::new(v.category.code()),
@@ -376,22 +500,60 @@ impl<'a> FromBilling<'a> {
         // functional-update form is available here and states every mapped term
         // in one place.
         let mut inv = Invoice {
+            // **Not derived from BT-3.** `billing::DocumentKind::is_credit_note`
+            // is the semantic statement; the code is its rendering. The adapter
+            // used to leave this at the default, so a `billing` credit note
+            // became an EN 16931 *invoice* carrying BT-3 = 381 — which fails
+            // `BR-CL-01` (381 is a credit-note code and not an invoice one),
+            // wrongly runs `BR-CO-25` (which must not fire on a credit note),
+            // and, worst of all, serialises as `<ubl:Invoice>` because
+            // `en16931-formats` picks the root element from this field. A credit
+            // note on the wire wearing an invoice's document element.
+            kind: if doc.meta.kind.is_credit_note() {
+                crate::DocumentKind::CreditNote
+            } else {
+                crate::DocumentKind::Invoice
+            },
             specification_id: self.specification_id.clone(),
             number: Some(doc.meta.invoice_number.clone()).filter(|s| !s.is_empty()),
             issue_date: date(doc.meta.issue_date.as_deref(), "issue_date")?,
             due_date: date(doc.meta.due_date.as_deref(), "due_date")?,
             type_code: Some(Code::new(doc.meta.kind.code().to_string())),
             currency: Some(Code::new(currency.code())),
+            // BT-20. One of the two ways to satisfy `BR-CO-25`, and the only
+            // machine-readable home a Skonto has before EN 16931-1:2026 gives it
+            // fields of its own.
+            payment_terms: payment_terms(doc.meta.payment_terms.as_ref()),
+            // BT-6. `billing` will not construct a `VatAccountingCurrency` with
+            // `XXX`, so this cannot introduce the currency hazard BT-5 is
+            // guarded against above.
+            vat_accounting_currency: doc
+                .vat_accounting_currency()
+                .map(|a| Code::new(a.currency().code())),
             invoicing_period: period(doc.meta.period.as_ref(), "period")?,
-            // billing has no BT-21 analogue, so the notes arrive uncoded.
+            // BG-1, both terms. `billing` 0.13 models notes as `0..n` with an
+            // optional UNCL 4451 subject code, which is what the standard has —
+            // before that it was one uncoded string, and BT-21 could not cross
+            // at all. BT-21 is not decoration: a reverse-charge sentence and a
+            // payment instruction are both free text, and only the code says
+            // which is which to a system routing on it.
             notes: doc
                 .meta
                 .notes
                 .iter()
-                .map(crate::invoice::InvoiceNote::new)
+                .map(|n| crate::invoice::InvoiceNote {
+                    subject_code: n.subject_code.as_deref().map(Code::new),
+                    note: Some(n.text.clone()),
+                })
                 .collect(),
-            seller: self.seller.clone(),
-            buyer: self.buyer.clone(),
+            // BG-4 / BG-7 are the caller's — a tariff engine has no business
+            // knowing a postal address — but BT-29 and BT-46 are the document's,
+            // and `billing` 0.13 carries them with the ISO 6523 scheme that
+            // makes them mappable at all. Merged rather than overwritten: the
+            // caller's master data and the document's party code are both real,
+            // and neither is a substitute for the other.
+            seller: with_identifier(self.seller.clone(), doc.meta.issuer_id.as_ref()),
+            buyer: with_identifier(self.buyer.clone(), doc.meta.recipient_id.as_ref()),
             ..Default::default()
         };
 
@@ -669,7 +831,14 @@ impl<'a> FromBilling<'a> {
             vat_total: (!doc.tax_breakdown().is_empty())
                 .then(|| amount(vat, "BT-110"))
                 .transpose()?,
-            vat_total_accounting: None,
+            // BT-111. `BR-53` makes it mandatory whenever BT-6 is present, and
+            // the two now come from one place — an adapter that mapped the
+            // currency and left the amount `None` would manufacture a `BR-53`
+            // finding out of a document that carries both.
+            vat_total_accounting: doc
+                .vat_accounting_currency()
+                .map(|a| amount(a.vat_total(), "BT-111"))
+                .transpose()?,
             gross_total: amount(doc.gross_total(), "BT-112")?,
             paid: (!doc.prepaid().is_zero())
                 .then(|| amount(doc.prepaid(), "BT-113"))

@@ -54,7 +54,7 @@ fn main() {
     println!("XMP declares:   {:?}", got.xmp.conformance_level);
 
     match got.profile.is_en16931_invoice() {
-        IsInvoice::Yes => println!("EN 16931 invoice: yes — the 316 rules apply"),
+        IsInvoice::Yes => println!("EN 16931 invoice: yes — the 317 rules apply"),
         IsInvoice::No(why) => println!("EN 16931 invoice: NO — {why}"),
         IsInvoice::Unknown => println!("EN 16931 invoice: unknown profile; not guessing"),
     }

@@ -155,8 +155,16 @@ pub enum Severity {
     /// `BR-DE-TMP-32` suggests stating a delivery date and does not object if
     /// you do not.
     ///
-    /// Ordered below [`Warning`](Self::Warning), so `severity >= Warning` still
-    /// means "something a sender should look at".
+    /// # The ordering, stated because it reads backwards
+    ///
+    /// `Ord` is derived, so the variants order **most severe first**:
+    /// `Fatal < Warning < Info`. Read as a number that is the opposite of
+    /// "severity", which is why the useful comparison is `>=`:
+    /// `severity >= Warning` means *"advisory"* and `severity == Fatal` means
+    /// *"invalid"*. [`ValidationReport::advisory`] is the same test with a name.
+    ///
+    /// This is also what makes [`crate::Profile::is_conformant_cius`] a `<=`:
+    /// a profile **relaxes** a rule when it moves it to a greater value.
     Info,
 }
 
@@ -286,6 +294,16 @@ pub struct ValidationReport {
     /// report, so these are carried, printed by `Display`, and block the typed
     /// proof.
     suppressed: Vec<String>,
+    /// The authority releases the rules that ran were verified against.
+    ///
+    /// Taken from [`profile::Profile::artefacts`]. `&'static` rather than
+    /// owned, because every value is a compile-time constant — which is also
+    /// why it is **not** serialised here: a `&'static str` cannot be
+    /// deserialised from a buffer, and this type's serde shape is the crate's
+    /// internals rather than its wire format. [`crate::Report`] is the stored
+    /// shape, and it carries the same provenance in owned `String`s.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    artefacts: &'static [profile::ArtefactRef],
 }
 
 impl ValidationReport {
@@ -299,6 +317,17 @@ impl ValidationReport {
     #[must_use]
     pub fn findings(&self) -> &[Finding] {
         &self.findings
+    }
+
+    /// The authority releases the rules that ran were verified against.
+    ///
+    /// Empty only for a report built by hand. A stored report saying
+    /// `BR-DE-15` beside `CEN validation-1.3.16` names the wrong authority —
+    /// `BR-DE-*` is KoSIT's, on its own release cadence — so every profile
+    /// lists all of the releases its rules came from.
+    #[must_use]
+    pub fn artefacts(&self) -> &'static [profile::ArtefactRef] {
+        self.artefacts
     }
 
     /// Only the fatal ones.
@@ -371,15 +400,44 @@ impl ValidationReport {
     ///
     /// Takes the fields rather than the `Profile`, because a `&Profile` method
     /// receiver is not `&'static` even when every profile is a static.
-    pub(crate) fn attribute_to(&mut self, id: &'static str, edition: crate::Edition) {
+    pub(crate) fn attribute_to(
+        &mut self,
+        id: &'static str,
+        edition: crate::Edition,
+        artefacts: &'static [profile::ArtefactRef],
+    ) {
         self.profile = Some(id.to_owned());
         self.edition = edition;
+        self.artefacts = artefacts;
     }
 
     /// Whether a given rule raised anything.
     #[must_use]
     pub fn has(&self, rule: &str) -> bool {
         self.findings.iter().any(|f| canonical_eq(&f.rule, rule))
+    }
+
+    /// Apply a profile's severity overrides, then re-sort.
+    ///
+    /// Runs after every rule and restriction, because the authorities' own
+    /// configurations do exactly that: KoSIT's `<customLevel>` sits in
+    /// `<createReport>`, not in the Schematron. The rule fired; what changes is
+    /// what the reader is expected to do about it.
+    pub(crate) fn relevel(&mut self, levels: &[(&'static str, Severity)]) {
+        if levels.is_empty() {
+            return;
+        }
+        // `canonical_eq` rather than `==`, unlike the rule-set filtering: a
+        // profile's overrides are transcribed from an authority's own
+        // configuration, and an authority is entitled to spell a family the way
+        // the standard does. The list is single digits long and runs once per
+        // *finding*, not once per rule, so the cost is nothing.
+        for f in &mut self.findings {
+            if let Some((_, level)) = levels.iter().find(|(id, _)| canonical_eq(&f.rule, id)) {
+                f.severity = *level;
+            }
+        }
+        sort_findings(&mut self.findings);
     }
 
     /// Merge additional findings in, keeping the stable order.
@@ -435,6 +493,14 @@ impl fmt::Display for ValidationReport {
         }
         for finding in &self.findings {
             writeln!(f, "  {finding}")?;
+        }
+        // Which releases these verdicts were checked against. Printed last and
+        // once, because it is provenance rather than a finding — but printed,
+        // because "BR-DE-15 fired" is only actionable if the reader knows which
+        // XRechnung release said so.
+        if !self.artefacts.is_empty() {
+            let refs: Vec<String> = self.artefacts.iter().map(ToString::to_string).collect();
+            writeln!(f, "  verified against: {}", refs.join(", "))?;
         }
         write!(f, "  ({})", crate::ATTRIBUTION)
     }
@@ -558,6 +624,9 @@ pub fn validate_with(invoice: &Invoice, rules: &[&'static Rule]) -> ValidationRe
         profile: None,
         edition: crate::DEFAULT_EDITION,
         suppressed: Vec::new(),
+        // A bare core run is verified against CEN's release and nothing else.
+        // `Profile::validate` replaces this with the profile's own list.
+        artefacts: crate::profiles::EN16931.artefacts,
     }
 }
 
@@ -592,6 +661,9 @@ where
         profile: None,
         edition: crate::DEFAULT_EDITION,
         suppressed: Vec::new(),
+        // A bare core run is verified against CEN's release and nothing else.
+        // `Profile::validate` replaces this with the profile's own list.
+        artefacts: crate::profiles::EN16931.artefacts,
     }
 }
 
@@ -681,11 +753,28 @@ impl Check {
     ///
     /// Accepts ids that resolve to nothing: a counterparty's deviation list is
     /// not this crate's to validate, and silently dropping an unknown id would
-    /// make the report claim a suppression it never applied.
+    /// make the report claim a suppression it never applied. Such an id is
+    /// recorded on the report and changes nothing else — in particular it does
+    /// **not** reduce [`ValidationReport::rules_checked`], which counts checks
+    /// that did not run rather than requests to skip.
     #[must_use]
     pub fn without(mut self, rule: impl Into<String>) -> Self {
         self.suppressed.push(rule.into());
         self
+    }
+
+    /// Which of this profile's checks the suppressions actually remove.
+    ///
+    /// Not `suppressed.len()`, which is what it used to be. That counted
+    /// *requests*: suppressing `BR-DE-15` against the bare core profile, or a
+    /// name that resolves to no rule at all, reduced `rules_checked` for a check
+    /// that was never going to run. A count that can be wrong in the safe-looking
+    /// direction is worse than no count.
+    fn skipped(&self) -> usize {
+        self.profile
+            .check_ids()
+            .filter(|id| self.suppressed.iter().any(|s| canonical_eq(id, s)))
+            .count()
     }
 
     /// The ids this run will skip.
@@ -704,7 +793,7 @@ impl Check {
         report
             .findings
             .retain(|f| !self.suppressed.iter().any(|s| canonical_eq(&f.rule, s)));
-        report.checked = report.checked.saturating_sub(self.suppressed.len());
+        report.checked = report.checked.saturating_sub(self.skipped());
         report.suppressed.clone_from(&self.suppressed);
         report
     }

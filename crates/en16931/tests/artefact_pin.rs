@@ -50,14 +50,15 @@ fn read(rel: &str) -> String {
     std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
 }
 
-/// Both crates *inherit* their version rather than declaring one.
+/// Every published member *inherits* its version rather than declaring one, and
+/// reaches its siblings through `[workspace.dependencies]`.
 ///
 /// # What cargo already guarantees, and what it does not
 ///
-/// The number appears twice — `[workspace.package] version`, and the
-/// requirement in `[workspace.dependencies]`, because cargo has no
-/// `version.workspace` for a dependency requirement. Bumping only the first is
-/// **cargo's** error, not this test's:
+/// The number appears in `[workspace.package] version` and once per internal
+/// edge in `[workspace.dependencies]`, because cargo has no `version.workspace`
+/// for a dependency requirement. Bumping only the first is **cargo's** error,
+/// not this test's:
 ///
 /// ```text
 /// error: failed to select a version for the requirement `en16931 = "^0.2.0"`
@@ -65,24 +66,56 @@ fn read(rel: &str) -> String {
 /// ```
 ///
 /// What cargo does *not* notice is a member quietly going back to declaring its
-/// own `version = "…"`. That resolves fine, builds fine, and silently opts the
-/// crate out of the workspace bump — which is the whole mechanism. So this test
-/// asserts only the inheritance, and leaves the equality to the resolver.
+/// own `version = "…"`, or pinning a sibling at its own use site. Both resolve
+/// fine, build fine, and silently opt the crate out of the workspace bump —
+/// which is the whole mechanism. So this test asserts those two, and leaves the
+/// equality to the resolver.
+///
+/// Enumerated from `cargo metadata` rather than from a list: `en16931-cli` was
+/// added to the workspace with a hand-written `version = "0.2.0"` on its
+/// `en16931-formats` edge, and a hard-coded list of two members would not have
+/// noticed.
 #[test]
-fn both_crates_inherit_their_version() {
-    for member in ["crates/en16931", "crates/en16931-formats"] {
-        let manifest = read(&format!("{member}/Cargo.toml"));
+fn every_member_inherits_its_version() {
+    let meta = std::process::Command::new(env!("CARGO"))
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .current_dir(workspace_root())
+        .output()
+        .expect("cargo metadata runs");
+    let stdout = String::from_utf8(meta.stdout).expect("metadata is UTF-8");
+
+    // The manifest paths of every workspace member, without a JSON dependency:
+    // each appears as `"manifest_path":"…/Cargo.toml"`.
+    let manifests: Vec<&str> = stdout
+        .match_indices("\"manifest_path\":\"")
+        .map(|(i, m)| {
+            let start = i + m.len();
+            let end = start + stdout[start..].find('"').expect("closing quote");
+            &stdout[start..end]
+        })
+        .collect();
+    assert!(
+        manifests.len() >= 4,
+        "expected at least four members, found {manifests:?}"
+    );
+
+    for path in manifests {
+        let manifest = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
         assert!(
             manifest.contains("version.workspace"),
-            "{member} declares its own version instead of inheriting \
+            "{path} declares its own version instead of inheriting \
              [workspace.package]"
         );
+        // An internal edge with a literal `path = "../…"` is one that bypassed
+        // `[workspace.dependencies]`, so the resolver never sees the version
+        // requirement that makes a bad bump fail.
+        assert!(
+            !manifest.contains("path = \"../"),
+            "{path} reaches a sibling by path instead of through \
+             [workspace.dependencies], which puts the version requirement out \
+             of the resolver's reach"
+        );
     }
-    assert!(
-        read("crates/en16931-formats/Cargo.toml").contains("en16931.workspace"),
-        "en16931-formats pins en16931 itself instead of using the workspace \
-         entry, which puts the requirement out of the resolver's reach"
-    );
 }
 
 /// The pin the fetcher uses, the pin the crate publishes, and the pin stamped
@@ -148,4 +181,57 @@ fn the_syntax_bindings_were_derived_from_the_same_artefacts() {
             "{table} names an artefact revision other than `{cen_ref}`"
         );
     }
+}
+
+/// Every release a profile claims to be verified against is one `xtask` fetches.
+///
+/// [`Profile::artefacts`] is the provenance line in every stored report, and it
+/// is a `&'static str` typed by hand — so nothing stops it naming a KoSIT tag
+/// that was never cloned, or drifting a release behind the pin the conformance
+/// suites actually ran on. Either way the report would cite a revision nobody
+/// checked, which is worse than citing none: it is a claim rather than a gap.
+///
+/// So the pins are read out of `xtask/src/fetch.rs` — the one place that
+/// decides what lands in `spec/` — and every profile's list has to be a subset.
+///
+/// The CEN entry gets a second assertion, because it has a second copy:
+/// [`en16931::ARTEFACT_VERSION`] is public API and is stamped into every
+/// generated table's provenance header.
+///
+/// [`Profile::artefacts`]: en16931::validation::profile::Profile::artefacts
+#[test]
+fn every_declared_artefact_ref_is_one_xtask_fetches() {
+    let fetch = read("xtask/src/fetch.rs");
+    let fetched: Vec<String> = [
+        "CEN_REF",
+        "PEPPOL_REF",
+        "KOSIT_SCHEMATRON_REF",
+        "KOSIT_CONFIG_REF",
+    ]
+    .iter()
+    .map(|name| {
+        const_str(&fetch, name).unwrap_or_else(|| panic!("xtask/src/fetch.rs defines {name}"))
+    })
+    .collect();
+
+    for profile in en16931::profiles::ALL {
+        for artefact in profile.artefacts {
+            assert!(
+                fetched.iter().any(|r| r == artefact.git_ref),
+                "{} claims to be verified against {} {}, which `xtask fetch` \
+                 never clones — the conformance suites cannot have run against \
+                 it. Fetched: {fetched:?}",
+                profile.id,
+                artefact.repo,
+                artefact.git_ref,
+            );
+        }
+    }
+
+    // `CEN_REF` is the one with a public copy in the library.
+    assert_eq!(
+        en16931::profiles::CEN.git_ref,
+        en16931::ARTEFACT_VERSION,
+        "profiles::CEN and ARTEFACT_VERSION are the same pin"
+    );
 }

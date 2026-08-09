@@ -21,7 +21,7 @@
 //!
 //! # What is deliberately not here yet
 //!
-//! The design notes specifies a rule to go with this:
+//! There is a rule that belongs with this:
 //!
 //! ```text
 //! EN-EDITION-01 (fatal): a business term introduced in a later edition than the
@@ -32,9 +32,9 @@
 //! map from business term to introducing edition, and building one requires the
 //! EN 16931-1:2026 normative text. This crate's `spec/` holds the 2017+A1
 //! English text and nothing else, so any such map would be reconstructed from
-//! memory — which is precisely the mistake The design notes records, where two
-//! specification identifiers were written from plausibility and then reasoned
-//! from.
+//! memory — which is precisely the mistake this project has already made once,
+//! when two specification identifiers were written from plausibility and then
+//! reasoned from.
 //!
 //! [`Edition::En2026`] therefore exists as a classification a profile can carry,
 //! and carries **no term assignments**. When the text is in hand, the term map

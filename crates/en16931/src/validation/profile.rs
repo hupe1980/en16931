@@ -24,11 +24,18 @@
 //! a profile that tried to *loosen* something cannot be expressed. Loosening is
 //! an **Extension** (§4.3, CEN/TR 16931-5), a different mechanism.
 //!
-//! **2. Validation widens for free.** §4.4.4 states it outright: an instance
-//! complying with a conformant CIUS *"can still be received and processed by a
-//! party who is not supporting the CIUS because it still complies to the rules
-//! of the core invoice model."* So [`Validated<P>`] converts to
+//! **2. Validation widens for free — from a *conformant* CIUS.** §4.4.4 states
+//! it outright: an instance complying with one *"can still be received and
+//! processed by a party who is not supporting the CIUS because it still complies
+//! to the rules of the core invoice model."* So [`Validated<P>`] converts to
 //! `Validated<En16931>` infallibly — see [`Validated::widen`].
+//!
+//! Conformance is not a given, and this is where the restriction model stops
+//! being the whole story: [`Profile::levels`] can report a core rule at a
+//! *lower* severity, and a profile that does accepts documents the core model
+//! rejects. Three of the five shipped profiles do, XRechnung among them, on
+//! their authorities' own published configurations — so the widening impl exists
+//! only where it is true. See [`Profile::is_conformant_cius`].
 //!
 //! # How real profiles look
 //!
@@ -359,6 +366,34 @@ fn case_or_scope_hint(value: &str, allowed: &[&'static str]) -> Option<String> {
 
 // ── Profile ───────────────────────────────────────────────────────────────────
 
+/// One authority release a [`Profile`] was verified against.
+///
+/// Two fields rather than one string because a report is read by people who
+/// need to fetch the thing: `git clone <repo> --branch <git_ref>` is the whole
+/// use, and a prose sentence would have to be parsed back apart to get there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ArtefactRef {
+    /// The authority, as it calls itself — `"CEN"`, `"KoSIT"`, `"OpenPeppol"`.
+    pub authority: &'static str,
+    /// The repository the artefact lives in, without the host.
+    pub repo: &'static str,
+    /// The release tag fetched, verbatim.
+    pub git_ref: &'static str,
+}
+
+impl fmt::Display for ArtefactRef {
+    /// Authority and tag, without the repository.
+    ///
+    /// A profile lists up to four of these and they go on one line of every
+    /// report; the repository is forty characters that a person reading a
+    /// verdict does not need and a machine gets from
+    /// [`repo`](Self::repo) anyway.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {}", self.authority, self.git_ref)
+    }
+}
+
 /// A core invoice usage specification.
 ///
 /// Carries what §4.4.2 requires a conformant CIUS to state: its own identifier,
@@ -382,6 +417,22 @@ pub struct Profile {
     pub edition: crate::Edition,
     /// §4.4.2: *"shall state its underlying specifications"*.
     pub underlying: &'static [&'static str],
+    /// The authority release this profile's rules were verified against.
+    ///
+    /// The rules here are hand-written, not loaded from an artefact, so this is
+    /// not a version of *this* code — it is the published release whose
+    /// Schematron, code lists and severity overrides the conformance suites
+    /// compared it to.
+    ///
+    /// It belongs on the profile rather than on the crate because the answer
+    /// differs per profile: a core finding was checked against CEN's
+    /// `validation-1.3.16`, and an XRechnung finding against a KoSIT release
+    /// that has its own cadence entirely. A stored report that says only "CEN
+    /// 1.3.16" beside a `BR-DE-15` is naming the wrong authority.
+    ///
+    /// `crates/en16931/tests/artefact_pin.rs` asserts every value here is a ref
+    /// `xtask` actually fetches, so it cannot describe a release nobody checked.
+    pub artefacts: &'static [ArtefactRef],
     /// §7.3.2's narrowings, as data.
     pub restrictions: &'static [Restriction],
     /// The one axis that genuinely needs code — conditional rules.
@@ -394,12 +445,43 @@ pub struct Profile {
     /// difference between a lawful final invoice and a §14c Abs. 1 UStG
     /// liability.
     pub extensions: &'static [&'static str],
-    /// Core rules this profile withdraws, because another layer covers them.
+    /// Rules this profile reports at a severity other than the one the rule
+    /// itself carries.
     ///
-    /// Real: XRechnung 3.0 removed `BR-DE-29` because Peppol's
-    /// `PEPPOL-EN16931-R061` covers direct-debit mandates. A model of "each
-    /// profile owns a flat list" cannot express that.
-    pub suppressed: &'static [&'static str],
+    /// # Authorities re-level; they do not withdraw
+    ///
+    /// This used to be `suppressed: &[&str]` — a list of rules to drop. No
+    /// authority does that, and modelling it that way was wrong twice over.
+    ///
+    /// KoSIT's validator configuration states the real mechanism outright, once
+    /// per scenario:
+    ///
+    /// ```xml
+    /// <!-- overwrites CEN severity level "fatal" to enable use of mime codes defined per BR-DEX-01 -->
+    /// <customLevel level="information">BR-CL-24</customLevel>
+    /// ```
+    ///
+    /// The rule still runs and the finding still appears; only its consequence
+    /// changes. Dropping it instead loses the one line a reader needs to
+    /// understand why an unusual mime code is present and not objected to.
+    ///
+    /// And the list drawn up from "which rules does a `BR-DEX-*` replace?" was
+    /// not the list the authority publishes. XRechnung 3.0 — the plain CIUS,
+    /// with no Extension in sight — re-levels `BR-CL-21` and `BR-CL-23` to
+    /// **warning**, because CEN's ISO 6523 and Rec 20 tables lag the registries
+    /// they track. A validator that reports those as fatal rejects invoices the
+    /// German reference validator accepts, which this crate did.
+    ///
+    /// # Consequences
+    ///
+    /// Re-levelling *downward* is the thing §4.4.2 forbids a CIUS to do — see
+    /// [`is_conformant_cius`](Self::is_conformant_cius), which is computed from
+    /// this field rather than asserted.
+    ///
+    /// Every id must name a rule the profile actually runs;
+    /// `every_level_override_names_a_rule_that_runs` asserts it, so an override
+    /// that stops applying fails the build instead of quietly ceasing to.
+    pub levels: &'static [(&'static str, Severity)],
 }
 
 impl Profile {
@@ -416,71 +498,118 @@ impl Profile {
             .iter()
             .all(|g| self.extensions.contains(g));
 
-        // Both sides of these comparisons are ids this crate writes, already in
-        // the artefacts' canonical spelling — so a plain `==` is right and
-        // `matches`' aliasing would be wasted work on the hot path. A user's
-        // spelling never reaches here; `suppressed` is profile data.
-        let skip = |r: &Rule| {
-            (extensions_covered && r.id.as_str() == "EN-EXT-01")
-                || self.suppressed.contains(&r.id.as_str())
-        };
-
-        let mut report = if self.suppressed.is_empty() && !extensions_covered {
-            // The common case: nothing is filtered out, so the core set is
-            // passed through as-is and no intermediate `Vec` is built at all.
+        let mut report = if extensions_covered {
+            // The common case, and note that it *includes an invoice with no
+            // extension data at all* — `all()` over an empty list is true. So
+            // this branch runs for almost every document, and the borrowed
+            // iterator is the one worth having; a comment here once claimed the
+            // opposite branch was the common one, which had it exactly backwards.
+            //
+            // A plain `==` is right: this id is one this crate writes, and a
+            // user's spelling never reaches here.
+            validate_with_all(
+                invoice,
+                super::rules::CORE
+                    .iter()
+                    .copied()
+                    .filter(|r| r.id.as_str() != "EN-EXT-01"),
+                self.extra_rules,
+            )
+        } else {
+            // The invoice carries extension data this profile cannot represent,
+            // so `EN-EXT-01` has something to say and runs.
             validate_with_all(
                 invoice,
                 super::rules::CORE.iter().copied(),
                 self.extra_rules,
             )
-        } else {
-            let core: Vec<&'static Rule> = super::rules::CORE
-                .iter()
-                .copied()
-                .filter(|r| !skip(r))
-                .collect();
-            validate_with_all(invoice, core.into_iter(), self.extra_rules)
         };
-        let mut extra = Vec::new();
+        let mut findings = Vec::new();
         for restriction in self.restrictions {
-            restriction.check(invoice, &mut extra);
+            restriction.check(invoice, &mut findings);
         }
-        report.absorb(extra, self.restrictions.len());
-        report.attribute_to(self.id, self.edition);
+        report.absorb(findings, self.restrictions.len());
+        report.relevel(self.levels);
+        report.attribute_to(self.id, self.edition, self.artefacts);
         report
+    }
+
+    /// The severity this profile reports `rule` at, which is the rule's own
+    /// unless [`levels`](Self::levels) says otherwise.
+    #[must_use]
+    pub fn severity_of(&self, rule: &str) -> Option<Severity> {
+        self.levels
+            .iter()
+            .find(|(id, _)| crate::validation::RuleId::new(id).matches(rule))
+            .map(|(_, level)| *level)
+            .or_else(|| super::rules::explain(rule).map(|r| r.severity))
+    }
+
+    /// The id of every rule and restriction this profile evaluates.
+    ///
+    /// One flat list over three sources that are separate for good reasons — the
+    /// core set, [`extra_rules`](Self::extra_rules) and the derived
+    /// [`restrictions`](Self::restrictions) — because "did this run?" is a
+    /// question about the profile, not about which of the three a check happens
+    /// to live in. [`crate::validation::Check`] uses it to report an honest
+    /// `rules_checked` after a suppression, and
+    /// `suppressions_name_a_rule_that_would_otherwise_run` uses it to prove a
+    /// withdrawal actually withdraws something.
+    ///
+    /// Ids are yielded as the authority spells them, in evaluation order, and
+    /// may repeat: `PEPPOL-EN16931-R120` is one id with two instances, and only
+    /// one of them is ever in a given profile.
+    ///
+    /// Every check is listed whatever severity [`levels`](Self::levels) gives
+    /// it, because the question both callers ask is *"is this id one this
+    /// profile knows about?"* — and a re-levelled rule still runs.
+    pub fn check_ids(&self) -> impl Iterator<Item = &'static str> {
+        super::rules::CORE
+            .iter()
+            .map(|r| r.id.as_str())
+            .chain(self.extra_rules.iter().map(|r| r.id.as_str()))
+            .chain(self.restrictions.iter().map(Restriction::id))
     }
 
     /// Whether this profile is a **conformant CIUS** under §4.4.2 — that is,
     /// whether everything it accepts is also core-valid.
     ///
-    /// # It is not always `true`, and it used to say it was
+    /// # Computed, not asserted
     ///
     /// [`Restriction`] has no loosening variant, so the *restrictions* are
     /// narrowings by construction. That was once the whole story and the method
     /// returned a constant.
     ///
-    /// It is not the whole story. [`suppressed`](Self::suppressed) withdraws a
-    /// **core** rule, which is precisely the thing §4.4.2 forbids: a document
-    /// the profile accepts may then violate the core model. Two shipped profiles
-    /// do exactly that, for reasons documented on each:
+    /// It is not the whole story. A profile that reports a core rule at a
+    /// **lower** severity accepts documents the core model rejects, which is
+    /// precisely what §4.4.2 forbids — so this asks
+    /// [`levels`](Self::levels) whether any core rule has been relaxed, rather
+    /// than trusting a hand-maintained flag. Re-levelling *upward* is a
+    /// narrowing and keeps conformance.
     ///
-    /// * [`XRECHNUNG_CVD`](crate::profiles::XRECHNUNG_CVD) suppresses
-    ///   `BR-CL-13`, because CVD marks vehicle lines with a `BT-158` scheme that
-    ///   is not in UNTDID 7143.
-    /// * [`XRECHNUNG_EXTENSION`](crate::profiles::XRECHNUNG_EXTENSION)
-    ///   suppresses `BR-CO-16` and four code-list rules, because an Extension
-    ///   **adds**, and §4.3 says that is a different mechanism entirely.
+    /// **Three** shipped profiles are not conformant CIUSes, each on its own
+    /// authority's published configuration:
     ///
-    /// Both are correct behaviour and neither is a conformant CIUS. Reporting
-    /// `true` for them made the method a tautology and the test asserting it
-    /// worthless.
+    /// * [`XRECHNUNG`](crate::profiles::XRECHNUNG) itself — KoSIT reports
+    ///   `BR-CL-21` and `BR-CL-23` at *warning*, because CEN's ISO 6523 and
+    ///   Rec 20 tables lag the registries they track. An invoice with an unusual
+    ///   unit code is a valid XRechnung and not a valid core invoice.
+    /// * [`XRECHNUNG_CVD`](crate::profiles::XRECHNUNG_CVD) adds `BR-CL-13` at
+    ///   *information*, because CVD marks vehicle lines with a `BT-158` scheme
+    ///   that is not in UNTDID 7143.
+    /// * [`XRECHNUNG_EXTENSION`](crate::profiles::XRECHNUNG_EXTENSION) relaxes
+    ///   `BR-CO-16` and five code-list rules, because an Extension **adds**, and
+    ///   §4.3 says that is a different mechanism entirely.
     ///
-    /// This is exactly the split [`Underlies`] encodes at the type level: there
-    /// is no `Underlies<XRechnungExtension> for En16931`, and this method is the
-    /// runtime witness of the same fact.
+    /// This is exactly the split [`Underlies`] encodes at the type level, and
+    /// this method is the runtime witness of the same fact.
     #[must_use]
-    pub const fn is_conformant_cius(&self) -> bool {
-        self.suppressed.is_empty()
+    pub fn is_conformant_cius(&self) -> bool {
+        self.levels.iter().all(|(id, level)| {
+            // `Severity` orders most-severe-first, so "not relaxed" is `<=`.
+            // An override naming no rule cannot relax anything.
+            super::rules::explain(id).is_none_or(|r| *level <= r.severity)
+        })
     }
 
     /// The terms this profile makes mandatory that `invoice` does not yet
@@ -645,7 +774,7 @@ pub trait Underlies<P: ProfileMarker>: ProfileMarker {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::profiles::{En16931, XRechnung};
+    use crate::profiles::{En16931, PeppolBis3, XRechnung};
 
     #[test]
     fn a_cius_states_what_4_4_2_requires() {
@@ -655,7 +784,6 @@ mod tests {
             !p.underlying.is_empty(),
             "§4.4.2: underlying specifications"
         );
-        assert!(p.is_conformant_cius());
     }
 
     #[test]
@@ -672,12 +800,17 @@ mod tests {
         }
     }
 
+    /// §4.4.4 — a *conformant* CIUS's instances are core-conformant, so the
+    /// conversion exists and is infallible.
+    ///
+    /// Peppol BIS Billing 3.0 is the one shipped profile this holds for. It is
+    /// deliberately not XRechnung: its reference validator relaxes two core
+    /// code-list rules, so the widening would be a lie — see the note where the
+    /// missing impl would be, in `profiles.rs`.
     #[test]
-    fn core_is_reachable_from_a_cius_proof() {
-        // §4.4.4 — a CIUS-conformant instance is core-conformant, so the type
-        // conversion exists and is infallible.
+    fn core_is_reachable_from_a_conformant_cius_proof() {
         fn takes_core(_: Validated<En16931>) {}
-        fn round_trip(v: Validated<XRechnung>) {
+        fn round_trip(v: Validated<PeppolBis3>) {
             takes_core(v.widen());
         }
         let _ = round_trip; // compile-time assertion
@@ -700,6 +833,7 @@ mod restriction_tests {
         id: "test",
         edition: crate::Edition::En2017A1,
         specification_id: "urn:test",
+        artefacts: &[],
         underlying: &["EN 16931"],
         restrictions: &[
             Restriction::Mandatory {
@@ -718,7 +852,7 @@ mod restriction_tests {
         ],
         extra_rules: &[],
         extensions: &[],
-        suppressed: &[],
+        levels: &[],
     };
 
     fn subject() -> Invoice {

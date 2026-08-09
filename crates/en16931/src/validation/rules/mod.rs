@@ -410,8 +410,10 @@ rule!(BR_CO_17, "BR-CO-17", Fatal, Both, terms: [bt::VAT_TAX_AMOUNT, bt::VAT_TAX
         // a full currency unit of slack. Not in the standard — see the
         // module docs — but it is what every validator runs.
         let base = e.taxable_amount.into_decimal().abs();
+        // `continue`, not `return`: one group whose product overflows must not
+        // silence the rule for every group after it.
         let Some(exact) = base.checked_mul(rate).map(|v| v / Decimal::ONE_HUNDRED) else {
-            return;
+            continue;
         };
         let expected = exact.round_dp(2);
         let stated = e.tax_amount.into_decimal().abs();
@@ -559,6 +561,33 @@ rule!(EN_EXT_01, "EN-EXT-01", Warning, Crate, terms: [bt::PAID],
     }
 });
 
+rule!(EN_EXT_02, "EN-EXT-02", Fatal, Crate, terms: [bt::LINE_ID],
+"A SUB INVOICE LINE group (BG-DEX-01) is attached to an Invoice line (BG-25) that does not \
+ exist. Sub-lines are keyed by the zero-based position of the line they hang beneath, so an \
+ index past the end of BG-25 names nothing: the group is invisible to BR-DEX-02 and BR-DEX-03, \
+ and no writer will emit it. Re-key it, or remove it.",
+|inv, f| {
+    // **This crate's own**, because the hazard is this crate's own modelling
+    // choice: `Extensions::sub_invoice_lines` is keyed by line *index*, so a
+    // caller that removes or reorders a line leaves the key pointing at the
+    // wrong one — or at nothing.
+    //
+    // Nothing else notices. `BR-DEX-02` and `BR-DEX-03` iterate the lines and
+    // ask for each one's sub-lines, so an out-of-range group is never visited;
+    // the writer does the same, so it is never emitted. Data that validates
+    // clean and does not survive being written down is the failure mode this
+    // whole crate is built against, so it is a finding.
+    for (index, subs) in &inv.extensions.sub_invoice_lines {
+        if !subs.is_empty() && *index >= inv.lines.len() {
+            f.arithmetic(
+                Path::group(Group::Line),
+                format!("an index below {}", inv.lines.len()),
+                index,
+            );
+        }
+    }
+});
+
 // ── The registry ──────────────────────────────────────────────────────────────
 
 /// Rules that are not part of a VAT category family.
@@ -601,13 +630,25 @@ static GENERAL: &[&Rule] = &[
     &BR_CO_25,
     &EN_CURRENCY_01,
     &EN_EXT_01,
+    &EN_EXT_02,
 ];
 
-/// The EN 16931 core rule set implemented so far.
+/// The EN 16931 core rule set — **all 223 syntax-independent ids** of the
+/// pinned CEN artefacts, plus this crate's own `EN-*` rules.
 ///
-/// Not yet the full ~222 — see the design notes for the conformance corpus that
-/// gates completeness, and [`crate::validation::ValidationReport::rules_checked`]
-/// for what any given run actually covered.
+/// Complete, and measured rather than claimed:
+/// `the_registry_covers_the_syntax_independent_artefacts` in `tests/codelists.rs`
+/// diffs this list against the artefacts on any machine that has them, and CI
+/// runs it with `EN16931_REQUIRE_SPEC=1` so it cannot skip.
+///
+/// "Complete" does not mean every rule has a predicate: 53 are retired by the
+/// model's types and four are undecidable — CEN's own binding for them is
+/// `value="true()"`. Both kinds are registered so [`explain`] resolves them and
+/// a report can state they were checked. See
+/// [`structural`] for the list and the reasoning.
+///
+/// [`crate::validation::ValidationReport::rules_checked`] reports what a given
+/// run covered, which for a profile is this set plus its own.
 pub static CORE: std::sync::LazyLock<Vec<&'static Rule>> = std::sync::LazyLock::new(|| {
     GENERAL
         .iter()
@@ -737,30 +778,35 @@ mod tests {
 mod registry_tests {
     use super::*;
 
-    /// The registry's actual size and shape, asserted rather than estimated.
+    /// The registry's actual size and shape.
     ///
-    /// Coverage is stated honestly: this crate implements a *subset* of the
-    /// ~222 syntax-independent rules, and [`crate::validation::ValidationReport::rules_checked`]
-    /// reports how many any given run covered. Until the per-rule conformance
-    /// corpus is green (the design notes), "validates EN 16931" is not a claim
-    /// this crate may make.
+    /// The *authoritative* completeness check is
+    /// `the_registry_covers_the_syntax_independent_artefacts` in
+    /// `tests/codelists.rs`, which diffs this list against CEN's artefacts. This
+    /// one is its offline stand-in: it runs without `spec/`, so a contributor
+    /// who deletes a family notices before CI does.
+    ///
+    /// Both counts are **exact**. They were floors — `>= 45` and `>= 85` against
+    /// an actual 96 and 225 — which is a test that cannot fail for any change
+    /// short of deleting a third of the registry.
     #[test]
     fn coverage_is_what_we_say_it_is() {
         let ids: Vec<&str> = CORE.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids.len(), CORE.len());
 
-        // Every family emits five rows for each of nine categories, plus the
-        // two `B` rules and the two `O` exclusivity rules.
-        let family_rows = ids.iter().filter(|id| {
-            id.ends_with("-01")
-                || id.ends_with("-05")
-                || id.ends_with("-08")
-                || id.ends_with("-09")
-                || id.ends_with("-10")
-        });
-        assert!(family_rows.count() >= 45);
+        // Nine categories × the five rows whose ids end in these, plus BR-B-01,
+        // BR-O-11 and BR-O-14, and the `-01`/`-05` of nothing else.
+        let family_rows = ids
+            .iter()
+            .filter(|id| {
+                ["-01", "-05", "-08", "-09", "-10"]
+                    .iter()
+                    .any(|s| id.ends_with(s))
+            })
+            .count();
+        assert_eq!(family_rows, 65, "nine families of five rows, plus the rest");
 
-        assert!(CORE.len() >= 85, "registry has only {} rules", CORE.len());
+        assert_eq!(CORE.len(), 227, "the core registry changed size");
     }
 
     /// Every source classification is represented, and ours are namespaced.
@@ -808,9 +854,9 @@ mod provenance_tests {
     /// The `EN-` prefix is the whole reason a crate rule can never be mistaken
     /// for CEN's, so it must agree with [`Source::Crate`] in both directions.
     ///
-    /// Asserted rather than assumed: `EN-EDITION-01` was read by a reader of
-    /// the design notes as an authority's package-revision number, which is exactly
-    /// the confusion the namespace exists to prevent. A prefix that drifts out
+    /// Asserted rather than assumed: `EN-EDITION-01` has already been misread as
+    /// an authority's package-revision number, which is exactly the confusion the
+    /// namespace exists to prevent. A prefix that drifts out
     /// of step with the provenance it advertises is worse than no prefix.
     #[test]
     fn the_en_namespace_means_exactly_source_crate() {

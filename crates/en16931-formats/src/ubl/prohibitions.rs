@@ -2,7 +2,7 @@
 //!
 //! # Why this module is small
 //!
-//! There are 1 339 syntax rules across CEN's artefacts, and **1 220 of them say
+//! There are 1 339 syntax rules across CEN's artefacts, and **1 218 of them say
 //! some element "shall not be used"**. They exist because UBL 2.1 and CII D16B
 //! are far larger than EN 16931, and the standard has to fence off the rest.
 //! They are not business logic; they are a subset definition.
@@ -55,11 +55,21 @@ pub fn forbidden_attribute(name: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
 
+    /// The tables must contain something, or every test that consults them
+    /// passes for the wrong reason.
+    ///
+    /// `TOTAL_PARAMS` counts **assertions**, not rows. It used to count rows and
+    /// unextracted assertions together, so it grew when the extractor got better
+    /// at reading the artefact — a total that moves for that reason is not a
+    /// total. The floor moved with it, from 1 000 to 600.
     #[test]
     fn the_tables_are_populated() {
-        assert!(FORBIDDEN_PATHS.len() > 900, "{}", FORBIDDEN_PATHS.len());
+        assert!(FORBIDDEN_PATHS.len() > 1_000, "{}", FORBIDDEN_PATHS.len());
         assert!(FORBIDDEN_ATTRIBUTES.len() > 10);
-        const { assert!(TOTAL_PARAMS > 1000) };
+        const { assert!(TOTAL_PARAMS > 600) };
+        // Four fifths of what was once unreadable is now read; the rest needs an
+        // XPath engine. A regression here means the extractor lost ground.
+        const { assert!(UNEXTRACTED < 40) };
     }
 
     /// A prohibition anchored at the document element fires there and **only**

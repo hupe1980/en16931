@@ -45,6 +45,7 @@ mod tests {
     fn the_table_is_populated() {
         assert!(FORBIDDEN_PATHS.len() > 300, "{}", FORBIDDEN_PATHS.len());
         const { assert!(TOTAL_PARAMS > 400) };
+        const { assert!(UNEXTRACTED < 80) };
     }
 
     /// The regression this module's context exists to prevent: `ram:ID` is a

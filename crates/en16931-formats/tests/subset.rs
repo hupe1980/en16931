@@ -2,7 +2,7 @@
 
 //! The writer cannot emit an element EN 16931 forbids — in **either** syntax.
 //!
-//! 1 220 of the 1 339 syntax rules say some element or attribute "shall not be
+//! 1 218 of the 1 339 syntax rules say some element or attribute "shall not be
 //! used". The claim is that a writer driven from the semantic model cannot
 //! violate them: it has no way to express `cbc:UUID`, because the model has no
 //! term for it.
@@ -93,9 +93,11 @@ macro_rules! syntaxes {
                 let checked = prohibitions::FORBIDDEN_PATHS.len()
                     + prohibitions::FORBIDDEN_ATTRIBUTES.len();
                 println!(
-                    "{}: {n} element paths written; {checked} of {} prohibitions checked, \
-                     {} have a conditional context and are NOT checked",
+                    "{}: {n} element paths written; {} of {} \"shall not be used\" \
+                     assertions represented, as {checked} rows; {} have a conditional \
+                     test and are NOT checked",
                     stringify!($module),
+                    prohibitions::TOTAL_PARAMS - prohibitions::UNEXTRACTED,
                     prohibitions::TOTAL_PARAMS,
                     prohibitions::UNEXTRACTED,
                 );
@@ -115,6 +117,7 @@ macro_rules! syntaxes {
                     prohibitions::FORBIDDEN_PATHS.len()
                 );
                 assert!(prohibitions::TOTAL_PARAMS > 400);
+                assert!(prohibitions::UNEXTRACTED < prohibitions::TOTAL_PARAMS / 5);
             }
 
             /// A path the artefacts forbid must be caught when it appears.
@@ -138,4 +141,42 @@ macro_rules! syntaxes {
 syntaxes! {
     "ubl" => ubl,
     "cii" => cii,
+}
+
+// ── The numbers the documentation quotes ─────────────────────────────────────
+
+/// *"1 218 of the 1 339 syntax rules say some element shall not be used"* is
+/// repeated in seven files. This is where it is true.
+///
+/// Both figures come from the generated tables, which `cargo xtask check`
+/// re-derives from the artefacts on every CI run — so pinning them here pins
+/// them to the artefacts without this test needing `spec/`.
+///
+/// The coverage figure is the one that moves. It was 1 045 of 1 208 until the
+/// extractor learned to read `(cac:InvoiceLine|cac:CreditNoteLine)/x`, which is
+/// one rule about two spellings of the same thing and was four fifths of
+/// everything the tables were missing.
+#[cfg(all(feature = "ubl", feature = "cii"))]
+#[test]
+fn the_prohibition_counts_are_the_ones_the_docs_quote() {
+    use en16931_formats::{cii, ubl};
+
+    let total = ubl::prohibitions::TOTAL_PARAMS + cii::prohibitions::TOTAL_PARAMS;
+    let unchecked = ubl::prohibitions::UNEXTRACTED + cii::prohibitions::UNEXTRACTED;
+    let checked = total - unchecked;
+
+    assert_eq!(total, 1_218, "the documented \"shall not be used\" count");
+    assert_eq!(
+        checked, 1_111,
+        "the documented coverage of those prohibitions"
+    );
+    // 91 % of the 1 339 syntax rules are prohibitions, and 91 % of those are
+    // represented. The two 91 %s are a coincidence and both are quoted, so both
+    // are checked.
+    assert_eq!(total * 100 / 1_339, 90, "…of 1 339 syntax rules");
+    assert_eq!(
+        checked * 100 / total,
+        91,
+        "…of which this many are represented"
+    );
 }

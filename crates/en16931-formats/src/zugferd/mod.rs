@@ -94,8 +94,10 @@
 //! validated the model against the profile you name — and have that toolchain
 //! embed it. The half this crate can guarantee is the half it does.
 //!
-//! `render`, the visible-invoice feature, is downstream of the same problem and
-//! likewise unimplemented.
+//! There was a `render` feature declared for the visible half of the same job.
+//! It enabled nothing, gated nothing and shipped in the feature table for two
+//! releases; a feature that does not exist is worse documentation than an
+//! absence, so it is gone. This section is the answer it was standing in for.
 //!
 //! # ⚠ Provenance
 //!

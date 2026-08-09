@@ -7,7 +7,7 @@
 //! Two things this shows that a boolean cannot:
 //!
 //! * **A profile is a restriction, not a different standard.** XRechnung adds
-//!   `BR-DE-*` on top of EN 16931's 316; nothing is removed. So an invoice that
+//!   `BR-DE-*` on top of EN 16931's 317; nothing is removed. So an invoice that
 //!   passes XRechnung passes EN 16931 by construction — §4.4.4 of the standard,
 //!   and a `Underlies` impl in the type system.
 //! * **`Validated<P>` is a proof you cannot forge.** A serialiser that demands

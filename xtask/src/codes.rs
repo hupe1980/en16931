@@ -448,6 +448,8 @@ pub fn generate(spec: &Path) -> Result<(String, Vec<String>), String> {
 
     let mut emitted: BTreeMap<&str, Vec<String>> = BTreeMap::new();
     let mut total = 0usize;
+    // Every table name, in emission order, for the generated index below.
+    let mut names: Vec<String> = Vec::new();
 
     for table in TABLES {
         let branches = asserts
@@ -541,6 +543,7 @@ pub fn generate(spec: &Path) -> Result<(String, Vec<String>), String> {
             uniq.len(),
             table.rule
         ));
+        names.push(table.name.to_owned());
         parts.push(rust_slice(table.name, table.doc, table.rule, &uniq));
         emitted.insert(table.name, uniq);
     }
@@ -576,6 +579,7 @@ pub fn generate(spec: &Path) -> Result<(String, Vec<String>), String> {
         total += codes.len();
         let rule = format!("PEPPOL-EN16931-{}", t.rule);
         log.push(format!("  {:30} {:5}  ({rule})", t.name, codes.len()));
+        names.push(t.name.to_owned());
         parts.push(rust_slice(t.name, t.doc, &rule, codes));
     }
 
@@ -586,6 +590,7 @@ pub fn generate(spec: &Path) -> Result<(String, Vec<String>), String> {
         "NOTE_SUBJECT_CODES",
         notes.len()
     ));
+    names.push("NOTE_SUBJECT_CODES".to_owned());
     parts.push(rust_slice(
         "NOTE_SUBJECT_CODES",
         "BT-21 — UNCL 4451. The **union** over CEN's UBL, CII and EDIFACT bindings, which \
@@ -596,5 +601,20 @@ pub fn generate(spec: &Path) -> Result<(String, Vec<String>), String> {
 
     let tables = TABLES.len() + PEPPOL_TABLES.len() + 1;
     log.push(format!("\n{total} code values across {tables} tables"));
+
+    // An index of everything above, so the count the documentation quotes is a
+    // value the test suite can read rather than a number someone typed. Emitted
+    // rather than hand-written for the same reason as the tables themselves: a
+    // nineteenth list would otherwise be one nobody added here.
+    names.sort_unstable();
+    let mut index = String::from(
+        "/// Every generated code list, by the name it has in this module.\n         ///\n         /// Generated alongside the tables, so it cannot omit one. `TABLES.len()`\n         /// and the sum of the slice lengths are the two figures the documentation\n         /// quotes, and `tests/documented_numbers.rs` reads them from here.\n         pub static TABLES: &[(&str, &[&str])] = &[\n",
+    );
+    for name in &names {
+        index.push_str(&format!("    (\"{name}\", {name}),\n"));
+    }
+    index.push_str("];\n");
+    parts.push(index);
+
     Ok((parts.join("\n"), log))
 }

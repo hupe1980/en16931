@@ -69,3 +69,5 @@ pub fn require(suite: &str) -> Option<PathBuf> {
         }
     }
 }
+
+pub mod docs;

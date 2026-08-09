@@ -59,7 +59,7 @@ where
 {
     let mut inv = validated.invoice().clone();
     inv.specification_id = Some(P::PROFILE.specification_id.to_owned());
-    write(&inv)
+    write::write_waiving(&inv, waivers(P::PROFILE))
 }
 
 /// Write an invoice as UBL, discarding the report of anything the syntax could
@@ -145,7 +145,37 @@ pub fn write_for(
     invoice: &Invoice,
     profile: &'static en16931::validation::profile::Profile,
 ) -> Result<Written, crate::NotValid> {
-    crate::prepare_for(invoice, profile).map(|inv| write(&inv))
+    crate::prepare_for(invoice, profile).map(|inv| write::write_waiving(&inv, waivers(profile)))
+}
+
+/// The core prohibitions a profile's declared extension groups need waived.
+///
+/// # Why the writer asks the profile
+///
+/// `UBL-CR-470` and `UBL-CR-646` fence `cac:PrepaidPayment` and
+/// `cac:SubInvoiceLine` out of **core** EN 16931, and KoSIT's XRechnung
+/// Extension scenario reports both at `information` precisely so `BG-DEX-09` and
+/// `BG-DEX-01` can be carried. So whether the writer may emit them is a property
+/// of the target profile, not of the syntax.
+///
+/// The capability is read from [`Profile::extensions`], the same field
+/// `EN-EXT-01` reads to decide whether to warn — so the warning and the writer
+/// cannot disagree about what a profile can hold.
+///
+/// [`Profile::extensions`]: en16931::validation::profile::Profile::extensions
+fn waivers(profile: &'static en16931::validation::profile::Profile) -> &'static [&'static str] {
+    let subs = profile
+        .extensions
+        .contains(&en16931::extensions::SUB_INVOICE_LINES);
+    let third = profile
+        .extensions
+        .contains(&en16931::extensions::THIRD_PARTY_PAYMENTS);
+    match (subs, third) {
+        (true, true) => &["UBL-CR-646", "UBL-CR-470"],
+        (true, false) => &["UBL-CR-646"],
+        (false, true) => &["UBL-CR-470"],
+        (false, false) => &[],
+    }
 }
 
 /// The UBL namespaces, for a caller that needs to recognise a document before

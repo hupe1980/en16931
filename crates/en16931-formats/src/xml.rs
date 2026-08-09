@@ -18,7 +18,7 @@
 //!
 //! # It also enforces the prohibitions
 //!
-//! 1 220 of the 1 339 syntax rules say some element "shall not be used". The
+//! 1 218 of the 1 339 syntax rules say some element "shall not be used". The
 //! serialiser checks each path against the extracted tables, so "the writer
 //! cannot emit a forbidden element" is a property of *this* module rather than
 //! a habit spread across two hundred call sites.
@@ -29,6 +29,15 @@
 //! UBL's `<CreditNote>` has no `cbc:DueDate`; dropping BT-9 is correct, and
 //! dropping it quietly would mean a payment due date vanishing between two
 //! systems with nothing in any log.
+//!
+//! Three mechanisms notice, and they all write to the same list, because a
+//! caller asking *"what did I lose?"* should not have to know which one it was:
+//!
+//! | | |
+//! |---|---|
+//! | the sequence tables | an element the target document has no place for |
+//! | the prohibitions | an element CEN fences out of the EN 16931 subset |
+//! | [`Xml::dropped`] | what only the writer knows — CII nesting BT-147 inside the gross-price aggregate, a credit note whose BT-3 says otherwise, a group that would serialise empty |
 
 use core::fmt::Write as _;
 
@@ -54,6 +63,30 @@ pub(crate) struct Node {
 pub(crate) struct Xml {
     stack: Vec<Node>,
     rules: &'static Rules,
+    /// Losses the *writer* knows about, as opposed to the ones the sequence
+    /// tables and the prohibitions discover during rendering.
+    ///
+    /// Some terms have nowhere to go in a syntax for reasons no table can see:
+    /// CII nests BT-147 inside the gross-price aggregate, so a discount stated
+    /// without a gross price cannot be written at all. The writer is the only
+    /// thing that knows, so it says so here rather than dropping it in silence.
+    notes: Vec<String>,
+    /// Prohibition ids this document is permitted to violate.
+    ///
+    /// # Why a writer may ever be allowed to
+    ///
+    /// The prohibitions are **CEN core's** subset definition, and an Extension
+    /// is §4.3's mechanism for going outside it. `UBL-CR-646` forbids
+    /// `cac:SubInvoiceLine` and `UBL-CR-470` forbids `cac:PrepaidPayment`;
+    /// KoSIT's XRechnung Extension scenario reports both at `information`
+    /// precisely so `BG-DEX-01` and `BG-DEX-09` can be carried.
+    ///
+    /// So a write *for a profile that declares the extension group* waives the
+    /// matching prohibition, and a write for anything else does not — the
+    /// element is dropped and reported, as before. The capability comes from
+    /// [`en16931::Profile::extensions`], the same field `EN-EXT-01` reads, so
+    /// the warning and the writer cannot disagree about what a profile can hold.
+    waived: &'static [&'static str],
 }
 
 impl Xml {
@@ -66,7 +99,24 @@ impl Xml {
                 children: Vec::new(),
             }],
             rules,
+            notes: Vec::new(),
+            waived: &[],
         }
+    }
+
+    /// Permit the prohibitions in `ids` for this document — see [`Xml::waived`].
+    pub fn waiving(mut self, ids: &'static [&'static str]) -> Self {
+        self.waived = ids;
+        self
+    }
+
+    /// Record a term this syntax has no place for, with the reason.
+    ///
+    /// Goes into the same list the sequence tables and prohibitions write to,
+    /// because a caller asking "what did I lose?" should not have to know which
+    /// of three mechanisms noticed.
+    pub fn dropped(&mut self, what: impl Into<String>) {
+        self.notes.push(what.into());
     }
 
     fn push(&mut self, node: Node) {
@@ -142,9 +192,17 @@ impl Xml {
         debug_assert!(self.stack.is_empty(), "unbalanced group()");
         let mut out = String::with_capacity(4096);
         out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        let mut dropped = Vec::new();
+        let mut dropped = std::mem::take(&mut self.notes);
         let name = root.name.clone();
-        render(&root, &name, 0, &mut out, &mut dropped, self.rules);
+        render(
+            &root,
+            &name,
+            0,
+            &mut out,
+            &mut dropped,
+            self.rules,
+            self.waived,
+        );
         (out, dropped)
     }
 }
@@ -215,6 +273,7 @@ fn render(
     out: &mut String,
     dropped: &mut Vec<String>,
     r: &Rules,
+    waived: &[&str],
 ) {
     for _ in 0..depth {
         out.push_str("  ");
@@ -256,11 +315,13 @@ fn render(
         // habit — `cbc:CompanyLegalForm` is BT-33, the *seller's*, and
         // `UBL-CR-244` forbids it on the customer, which a hand-written writer
         // got wrong.
-        if let Some(rule) = (r.forbidden_path)(&child_path) {
+        if let Some(rule) = (r.forbidden_path)(&child_path)
+            && !waived.contains(&rule)
+        {
             dropped.push(format!("{child_path} ({rule})"));
             continue;
         }
-        render(c, &child_path, depth + 1, out, dropped, r);
+        render(c, &child_path, depth + 1, out, dropped, r, waived);
     }
     for _ in 0..depth {
         out.push_str("  ");

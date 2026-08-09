@@ -20,7 +20,7 @@
 //! | Table | Crate | Why it cannot be written by hand |
 //! |---|---|---|
 //! | [`codes`] | `en16931` | ~4 400 code values across eighteen lists, 2 162 unit codes alone. A wrong unit code is a rejected invoice. |
-//! | [`order`] | `en16931-formats` | Both content models are XSD `sequence`s, so right elements in the wrong order is invalid — and no *rule* reports it, because ordering is the schema's job. The order is evidence, topologically sorted from 490 published instances. |
+//! | [`order`] | `en16931-formats` | Both content models are XSD `sequence`s, so right elements in the wrong order is invalid — and no *rule* reports it, because ordering is the schema's job. The order is evidence, topologically sorted from 486 published instances. |
 //! | [`prohibitions`] | `en16931-formats` | 1 220 of the 1 339 syntax rules say some element "shall not be used", each *context-relative*. Dropping the context turns a narrow prohibition into a blanket one, and did. |
 //!
 //! # Why the extraction is careful

@@ -2,7 +2,7 @@ name: Release
 
 # Trigger: push a semver tag — `git tag v0.2.0 && git push --tags`
 #
-# One tag releases both crates, because they share one version
+# One tag releases every published member, because they share one version
 # (`[workspace.package] version`) and are published in dependency order.
 on:
   push:

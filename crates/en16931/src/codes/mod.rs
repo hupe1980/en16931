@@ -300,37 +300,29 @@ mod tests {
 
     /// The check above is only as good as [`LISTS`], so [`LISTS`] is checked.
     ///
-    /// Reading the generated source is the only way to enumerate the statics —
-    /// Rust has no reflection, and a `macro_rules!` that declared both would put
-    /// the generator's output behind a macro for the sake of one test. The file
-    /// is right there and the generator's shape is fixed, so this is four lines
-    /// rather than a redesign.
+    /// Against [`generated::TABLES`], which the generator emits alongside the
+    /// tables themselves and therefore cannot omit one of. This used to read the
+    /// generated *source* and count `pub static` lines, which worked until the
+    /// generator emitted a nineteenth static that was the index — a test that
+    /// parses its subject's syntax breaks on a change to the syntax rather than
+    /// to the subject.
+    ///
+    /// [`LISTS`] stays hand-written: it is the list this module promises to
+    /// binary-search, and deriving it from the same source it is checking
+    /// against would make the check vacuous.
     #[test]
     fn no_generated_list_escapes_the_sortedness_check() {
-        let source = include_str!("generated.rs");
-        let declared: Vec<&str> = source
-            .lines()
-            .filter_map(|l| l.strip_prefix("pub static "))
-            .filter_map(|l| l.split(':').next())
-            .collect();
-
-        assert_eq!(
-            declared.len(),
-            18,
-            "generated.rs declares {} tables; the module documentation says eighteen",
-            declared.len()
-        );
-        for name in &declared {
+        for (name, _) in generated::TABLES {
             assert!(
                 LISTS.iter().any(|(n, _)| n == name),
-                "{name} is in generated.rs and not in LISTS, so nothing asserts \
-                 it is sorted — and `contains` binary-searches it"
+                "{name} is generated and not in LISTS, so nothing asserts it is \
+                 sorted — and `contains` binary-searches it"
             );
         }
         assert_eq!(
             LISTS.len(),
-            declared.len(),
-            "LISTS names a table generated.rs does not declare"
+            generated::TABLES.len(),
+            "LISTS names a table the generator does not emit"
         );
     }
 

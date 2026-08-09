@@ -8,7 +8,7 @@
 //! test the failure surfaces at a counterparty's validator, weeks later, as
 //! "your invoice is malformed" with no rule id attached.
 //!
-//! The expected order is [`en16931_formats::ubl::order`], derived from 320 published
+//! The expected order is [`en16931_formats::ubl::order`], derived from 319 published
 //! instances rather than transcribed.
 
 #![cfg(feature = "ubl")]

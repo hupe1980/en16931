@@ -122,6 +122,17 @@ fn xrechnung_valid() -> Invoice {
     inv
 }
 
+/// A document valid under Peppol BIS Billing 3.0 — the one shipped CIUS that is
+/// conformant, and therefore the one `widen()` is demonstrated on.
+///
+/// XRechnung's document satisfies everything Peppol asks for except BT-24, which
+/// `PEPPOL-EN16931-R004` pins by prefix.
+fn peppol_valid() -> Invoice {
+    let mut inv = xrechnung_valid();
+    inv.specification_id = Some(profiles::PEPPOL_BIS_3.specification_id.to_owned());
+    inv
+}
+
 /// A CIUS *restricts*. So an invoice that satisfies it satisfies the core model,
 /// but not the reverse — which is the entire content of §4.4.4.
 #[test]
@@ -255,8 +266,19 @@ fn a_proof_survives_the_call_boundary_and_widens_for_free() {
         .unwrap();
     assert_eq!(serialise_xrechnung(&proof), "INV-1");
 
-    // §4.4.4: CIUS-valid implies core-valid, so this is infallible and free.
-    accepts_core(proof.widen());
+    // §4.4.4: for a **conformant** CIUS, CIUS-valid implies core-valid, so this
+    // is infallible and free. Peppol is one; XRechnung is not, because its
+    // reference validator relaxes two core code-list rules — so widening out of
+    // XRechnung has to re-validate, and does.
+    let peppol: Validated<PeppolBis3> = Validated::new(peppol_valid())
+        .map_err(|b| b.1.to_string())
+        .unwrap();
+    accepts_core(peppol.widen());
+
+    let core: Validated<En16931> = Validated::new(proof.into_inner())
+        .map_err(|b| b.1.to_string())
+        .expect("this particular document is core-valid too");
+    accepts_core(core);
 
     // The failure branch hands the invoice back, so a caller can fix and retry.
     let rejected = Validated::<XRechnung>::new(core_valid()).unwrap_err();
@@ -265,18 +287,49 @@ fn a_proof_survives_the_call_boundary_and_widens_for_free() {
     assert!(report.has("BR-DE-15"));
 }
 
+/// The soundness hole that removing `Underlies<XRechnung> for En16931` closes.
+///
+/// KoSIT reports `BR-CL-23` at warning, so a unit code outside CEN's Rec 20
+/// table leaves an invoice **valid as an XRechnung and invalid as a core
+/// invoice**. While the widening impl existed, `Validated<XRechnung>::widen()`
+/// turned that into a `Validated<En16931>` — a proof of something untrue, handed
+/// to a serialiser that was written to trust it.
+#[test]
+fn an_xrechnung_invoice_can_be_core_invalid() {
+    let mut inv = xrechnung_valid();
+    inv.lines[0].unit_code = en16931::invoice::Code::new("NOT-A-UNIT");
+
+    let xr = profiles::XRECHNUNG.validate(&inv);
+    assert!(xr.is_valid(), "KoSIT accepts it:\n{xr}");
+    assert!(
+        xr.findings().iter().any(|f| f.rule == "BR-CL-23"),
+        "…and still says so, at warning"
+    );
+
+    let core = en16931::validate(&inv);
+    assert!(!core.is_valid(), "core EN 16931 does not");
+
+    // So the proof cannot be widened by re-badging, only by re-validating —
+    // which is what `Validated::<En16931>::new` does, and it refuses.
+    assert!(Validated::<En16931>::new(inv).is_err());
+}
+
 /// §4.4.2's structural criterion, told apart from the profiles that break it.
 ///
 /// A conformant CIUS only *restricts*, so anything it accepts is also
-/// core-valid. Suppressing a core rule breaks that, and two shipped profiles do
-/// — deliberately, because they are not CIUSes:
+/// core-valid. Reporting a core rule at a **lower** severity breaks that, and
+/// three of the five shipped profiles do — each on its own authority's
+/// published validator configuration:
 ///
-/// * `XRECHNUNG_CVD` widens UNTDID 7143 by one value.
-/// * `XRECHNUNG_EXTENSION` is an **Extension**: §4.3's other mechanism.
+/// * `XRECHNUNG` relaxes `BR-CL-21` and `BR-CL-23` to warning, because CEN's
+///   code-list tables lag the registries they track;
+/// * `XRECHNUNG_CVD` adds `BR-CL-13` at information — it widens UNTDID 7143 by
+///   one value;
+/// * `XRECHNUNG_EXTENSION` relaxes six more: §4.3's other mechanism.
 ///
-/// The previous version of this test asserted `is_conformant_cius()` for every
-/// profile, and the method returned a constant `true`. It passed, proved
-/// nothing, and was wrong about two of the five.
+/// Two earlier versions of this test were wrong in the same way, one after the
+/// other: the first asserted a method that returned a constant `true`, the
+/// second a hand-maintained list that omitted XRechnung itself. Both passed.
 #[test]
 fn conformance_is_reported_honestly() {
     let conformant: Vec<&str> = profiles::ALL
@@ -286,14 +339,18 @@ fn conformance_is_reported_honestly() {
         .collect();
     assert_eq!(
         conformant,
-        ["EN 16931", "XRechnung 3.0", "Peppol BIS Billing 3.0"],
-        "a profile that suppresses a core rule is not a conformant CIUS"
+        ["EN 16931", "Peppol BIS Billing 3.0"],
+        "a profile that relaxes a core rule is not a conformant CIUS"
     );
+    // …and the property is computed from the data rather than restated here.
     for p in profiles::ALL {
+        let relaxes = p.levels.iter().any(|(id, level)| {
+            en16931::validation::rules::explain(id).is_some_and(|r| *level > r.severity)
+        });
         assert_eq!(
             p.is_conformant_cius(),
-            p.suppressed.is_empty(),
-            "{} — conformance and suppression must agree",
+            !relaxes,
+            "{} — conformance and the level overrides must agree",
             p.id
         );
     }
@@ -814,4 +871,191 @@ fn corpus_invoice() -> en16931::Invoice {
             description: None,
         });
     inv
+}
+
+// ── Regressions ───────────────────────────────────────────────────────────────
+
+/// The XRechnung **Extension** must accept an `application/xml` attachment.
+///
+/// `BR-DEX-01` exists to permit exactly that, and KoSIT's Extension scenario
+/// drops CEN's `BR-CL-24` to `information` to let it through. This crate instead
+/// re-levelled a Peppol rule that never runs under XRechnung, so `BR-CL-24` went
+/// on rejecting the one attachment the Extension is for.
+#[test]
+fn the_extension_accepts_the_xml_attachment_br_dex_01_permits() {
+    let mut inv = xrechnung_valid();
+    inv.specification_id = Some(profiles::XRECHNUNG_EXTENSION.specification_id.to_owned());
+    inv.attachments.push(SupportingDocument {
+        reference: DocumentReference::new("ANLAGE-1"),
+        description: None,
+        uri: None,
+        attachment: Some(
+            Attachment::new(b"<x/>".to_vec(), "application/xml", "anlage.xml").expect("attachment"),
+        ),
+    });
+
+    let report = profiles::XRECHNUNG_EXTENSION.validate(&inv);
+    assert!(
+        !report.fatal().any(|f| f.rule == "BR-CL-24"),
+        "BR-DEX-01 permits application/xml:\n{report}"
+    );
+    assert!(
+        !report.has("BR-DEX-01"),
+        "…and the Extension's own rule agrees:\n{report}"
+    );
+    // Relaxed, not dropped: the reader is still told the core model would object.
+    assert!(
+        report
+            .info()
+            .any(|f| f.rule == "BR-CL-24" && f.severity == Severity::Info),
+        "reported at KoSIT's level:\n{report}"
+    );
+    // …and the plain CIUS, which does not carry BR-DEX-01, still rejects it.
+    let mut cius = inv.clone();
+    cius.specification_id = Some(profiles::XRECHNUNG.specification_id.to_owned());
+    assert!(
+        profiles::XRECHNUNG
+            .validate(&cius)
+            .fatal()
+            .any(|f| f.rule == "BR-CL-24")
+    );
+}
+
+/// `BR-CL-10` and `BR-CL-11` are bound to **any** party identification, and the
+/// `SEPA` carve-out is scoped to the seller and the payee.
+///
+/// This crate checked the seller and the buyer, admitted `SEPA` on both, and
+/// never looked at the payee — three divergences from one Schematron context.
+#[test]
+fn the_party_identifier_scheme_rules_cover_every_party() {
+    let bad = || Identifier::schemed("X", "NOT-AN-ICD");
+
+    // The payee was invisible to both rules.
+    let mut inv = core_valid();
+    inv.payee = Some(Payee {
+        name: Some("Factoring GmbH".to_owned()),
+        identifier: Some(bad()),
+        legal_registration: Some(bad()),
+    });
+    let report = en16931::validate(&inv);
+    assert!(report.has("BR-CL-10"), "BT-60:\n{report}");
+    assert!(report.has("BR-CL-11"), "BT-61:\n{report}");
+
+    // `SEPA` is admissible under the seller and the payee…
+    let mut ok = core_valid();
+    ok.seller.identifiers = vec![Identifier::schemed("DE98ZZZ09999999999", "SEPA")];
+    ok.payee = Some(Payee {
+        name: Some("Factoring GmbH".to_owned()),
+        identifier: Some(Identifier::schemed("DE98ZZZ09999999999", "SEPA")),
+        legal_registration: None,
+    });
+    assert!(!en16931::validate(&ok).has("BR-CL-10"));
+
+    // …and nowhere else. The artefact's own predicate is
+    // `(ancestor::cac:AccountingSupplierParty) or (ancestor::cac:PayeeParty)`.
+    let mut buyer = core_valid();
+    buyer.buyer.identifiers = vec![Identifier::schemed("DE98ZZZ09999999999", "SEPA")];
+    assert!(
+        en16931::validate(&buyer).has("BR-CL-10"),
+        "SEPA is not admissible on the buyer"
+    );
+}
+
+/// Suppressing a rule that was never going to run must not make the report claim
+/// it checked fewer rules than it did.
+#[test]
+fn an_unknown_suppression_does_not_shrink_the_count() {
+    use en16931::validation::Check;
+
+    let plain = profiles::EN16931.validate(&core_valid());
+    let bogus = Check::new(&profiles::EN16931)
+        .without("BR-DE-15") // a real rule, but not one this profile runs
+        .without("NOT-A-RULE-AT-ALL")
+        .run(&core_valid());
+
+    assert_eq!(
+        bogus.rules_checked(),
+        plain.rules_checked(),
+        "nothing was skipped, so nothing may be deducted"
+    );
+    // The request is still recorded — a report must not hide what was asked for.
+    assert_eq!(bogus.suppressed().len(), 2);
+
+    // A suppression that *does* bite deducts exactly one.
+    let real = Check::new(&profiles::EN16931)
+        .without("BR-CO-26")
+        .run(&core_valid());
+    assert_eq!(real.rules_checked(), plain.rules_checked() - 1);
+}
+
+/// Sub-lines keyed to a line that does not exist are reported, not ignored.
+///
+/// `Extensions::sub_invoice_lines` is keyed by the *index* of the BG-25 line the
+/// group hangs beneath, so removing or reordering a line strands the key. Every
+/// consumer iterates the lines and asks for each one's sub-lines, so a stranded
+/// group is skipped by `BR-DEX-02`, skipped by `BR-DEX-03`, and never written —
+/// data that validates clean and does not survive being written down.
+#[test]
+fn stranded_sub_invoice_lines_are_a_finding() {
+    let mut inv = xrechnung_valid();
+    inv.specification_id = Some(profiles::XRECHNUNG_EXTENSION.specification_id.to_owned());
+    let sub = en16931::SubInvoiceLine {
+        line: inv.lines[0].clone(),
+        vat: Some(inv.lines[0].vat.clone()),
+        children: vec![],
+    };
+    // The invoice has one line, so index 0 is the only valid key.
+    inv.extensions
+        .sub_invoice_lines
+        .push((0, vec![sub.clone()]));
+    assert!(
+        !profiles::XRECHNUNG_EXTENSION
+            .validate(&inv)
+            .has("EN-EXT-02"),
+        "index 0 names the line that is there"
+    );
+
+    inv.extensions.sub_invoice_lines = vec![(7, vec![sub])];
+    let report = profiles::XRECHNUNG_EXTENSION.validate(&inv);
+    assert!(report.has("EN-EXT-02"), "index 7 names nothing:\n{report}");
+    assert!(
+        !report.is_valid(),
+        "and it is fatal — the data would vanish"
+    );
+}
+
+/// Every profile's check count, as five documents quote it.
+///
+/// `README.md`, `lib.rs`, the CLI's README and this site's profile page all
+/// print these five numbers, and they had already drifted by one the moment
+/// `EN-EXT-02` was registered — a rule in `CORE` moves every row at once. A
+/// number repeated in five files is a number nobody rechecks, so it is checked
+/// here instead.
+///
+/// The sibling of `just deps`, which does the same for the dependency graph
+/// sizes, and for the same reason.
+#[test]
+fn the_documented_profile_check_counts_are_measured() {
+    let documented = [
+        (&profiles::EN16931, 227),
+        (&profiles::XRECHNUNG, 282),
+        (&profiles::XRECHNUNG_CVD, 290),
+        (&profiles::XRECHNUNG_EXTENSION, 296),
+        (&profiles::PEPPOL_BIS_3, 273),
+    ];
+    let mut wrong = Vec::new();
+    for (profile, want) in documented {
+        let got = profile.check_ids().count();
+        if got != want {
+            wrong.push(format!("  {} — {got}, documented as {want}", profile.id));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "a documented profile check count is wrong.\n{}\n\
+         Either the rule should not be there, or every file quoting the old \
+         number needs updating:\n  \
+         rg -n '<old>' README.md crates/*/README.md crates/en16931/src/lib.rs site/content",
+        wrong.join("\n")
+    );
 }
