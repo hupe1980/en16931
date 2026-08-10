@@ -1,0 +1,35 @@
+# `cargo audit` configuration.
+#
+# # Why anything is ignored here
+#
+# `cargo audit` reads `Cargo.lock`, and a lockfile is **feature-independent**: it
+# records the optional dependencies of every package in the graph whether or not
+# anything enables them. So a crate can be listed, flagged, and never compiled.
+#
+# `cargo deny check advisories` reads the resolved *build* graph instead, and
+# disagrees. When the two disagree, the build graph is the one that decides
+# whether code ships — but the ignore below is not "trust the other tool": it is
+# paired with an assertion, because an ignore whose justification nobody rechecks
+# is how a real exposure gets filed under a resolved one.
+#
+# `just audit` runs `cargo audit` **and** re-asserts, against the actual build
+# graph, that every crate named here is absent. Add an entry only with that
+# assertion updated to match.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2026-0235 — `rkyv` 0.7.46, out-of-bounds read on archives
+    # containing `Rc`/`Arc`. Real, and not reachable from here.
+    #
+    # `rkyv` is an **optional** feature of `rust_decimal`, for zero-copy
+    # (de)serialisation. This workspace pins `rust_decimal` with
+    # `default-features = false, features = ["std"]` and no member forwards the
+    # `rkyv` feature, so it is never built: `cargo tree --workspace
+    # --all-features` finds no occurrence of it, and `cargo deny` reports
+    # `advisories ok`.
+    #
+    # It cannot be fixed by upgrading: 1.42.1 is the newest `rust_decimal`, and
+    # it still declares `rkyv` 0.7. When upstream moves to 0.8.17+, delete this
+    # entry rather than leaving it as decoration.
+    "RUSTSEC-2026-0235",
+]

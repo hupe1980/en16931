@@ -105,6 +105,17 @@ impl Xml {
     }
 
     /// Permit the prohibitions in `ids` for this document — see [`Xml::waived`].
+    ///
+    /// UBL only, and that is not an oversight in the `cfg`: the CII binding does
+    /// not *write* `BG-DEX-01` or `BG-DEX-09` at all — it reports them in
+    /// `dropped` — so there is no prohibition for it to waive. A waiver it never
+    /// calls would be a method advertising a capability the binding does not
+    /// have, and under `--no-default-features --features cii` the compiler says
+    /// so out loud.
+    ///
+    /// When the CII writer learns those groups, this loses the attribute and
+    /// gains a second caller.
+    #[cfg(feature = "ubl")]
     pub fn waiving(mut self, ids: &'static [&'static str]) -> Self {
         self.waived = ids;
         self

@@ -41,10 +41,12 @@ how 486 unread documents stay green.
 | `just codegen-check` | fail if a generated table drifted from the artefacts |
 | `just bench` | the criterion benchmarks |
 | `just site` | build this site with [Zola](https://www.getzola.org) |
+| `just features` | Clippy over every feature combination a consumer can select |
 | `just tracked` | fail if a source file is gitignored, or missing from git |
+| `just audit` | security advisories, and a re-check of every one set aside |
 | `just ci` | all of the above that CI runs |
 
-Three of those are less obvious than they look.
+Four of those are less obvious than they look.
 
 **`just deps`** measures the dependency-graph sizes the documentation quotes.
 They had already drifted once — the ZUGFeRD graph was documented as 56 in three
@@ -52,6 +54,13 @@ places and 57 in two, and it is 57. A number repeated in five files is a number
 nobody rechecks, so it is checked here instead. Raising a limit is a decision,
 not a chore: the small graph is why `en16931` reaches `wasm32`, and why the PDF
 parser is behind a non-default feature.
+
+**`just features`** exists because `just lint` runs `--all-features`, which is
+the one combination where nothing is `cfg`-ed out. It cannot see code that is
+dead without a feature, or code that fails to compile without one — and both
+have reached CI. The waiver the UBL writer uses for the Extension prohibitions
+is dead code under `--features cii` alone, because the CII binding does not
+write those groups at all.
 
 **`just tracked`** is the one CI cannot run. `.gitignore` once carried a bare
 filename for a local working note, and a bare pattern matches at *any depth* —
@@ -101,6 +110,20 @@ scanner walks every README, every `lib.rs` and every page of this site, so a
 
 If you reword a sentence containing one of these numbers, the test will tell you
 it stopped matching rather than silently checking nothing.
+
+## An ignored advisory is asserted, not trusted
+
+`cargo audit` reads `Cargo.lock`, and a lockfile is feature-independent: it
+records the optional dependencies of every package whether or not anything
+enables them. So it can flag a crate that is never compiled — `cargo deny`,
+which reads the resolved build graph, disagrees.
+
+One advisory is set aside on exactly that basis, with the reasoning written out
+in `.cargo/audit.toml`. It is paired with a check that the crate really is
+absent from the build graph, across the whole workspace with every feature on,
+because an ignore nobody rechecks is how a live exposure ends up filed under a
+resolved one. If the crate ever appears, `just audit` fails and the ignore has
+to go.
 
 ## Generated code
 

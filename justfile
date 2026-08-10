@@ -41,6 +41,34 @@ lint:
 check:
     cargo check --workspace --all-targets --all-features
 
+# Clippy over the feature combinations a consumer can actually select.
+#
+# `just lint` runs `--all-features`, which is the one combination where nothing
+# is `cfg`-ed out — so it cannot see code that is dead without a feature, or
+# code that fails to compile without one. Both have reached CI: `Xml::waiving`
+# is called only by the UBL writer, and under `--features cii` alone it is dead
+# code that `-D warnings` rejects.
+#
+# The same list as `.github/workflows/ci.yml`, deliberately. Two copies is one
+# too many, and the alternative — CI calling this recipe — would put a `just`
+# install in front of every job for one step's worth of sharing.
+[doc("Clippy over every feature combination CI checks.")]
+features:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    run() { echo "  $*"; cargo clippy -q "$@" -- -D warnings; }
+    # en16931 — the model. Its whole claim is that the default build is small,
+    # so every optional piece is checked alone.
+    run -p en16931 --all-targets --no-default-features
+    run -p en16931 --all-targets --no-default-features --features svrl
+    run -p en16931 --all-targets --no-default-features --features serde
+    run -p en16931 --all-targets --no-default-features --features billing
+    # en16931-formats — the syntax bindings, each alone and neither.
+    run -p en16931-formats --all-targets
+    run -p en16931-formats --all-targets --no-default-features --features cii
+    run -p en16931-formats --all-targets --no-default-features
+    echo "  every feature combination is clean ✓"
+
 # ── Testing ───────────────────────────────────────────────────────────────────
 
 # Unit + doc tests with default features.
@@ -168,7 +196,9 @@ tracked:
     set -euo pipefail
     fail=0
     # Everything under these is source; `site/public/` and `spec/` are not.
-    for dir in site crates xtask; do
+    # `.cargo/` is in the list because it carries `audit.toml`, whose absence
+    # from a checkout turns a reasoned advisory ignore back into a red CI job.
+    for dir in site crates xtask .cargo .github; do
       while IFS= read -r -d '' f; do
         case "$f" in site/public/*) continue;; esac
         if reason=$(git check-ignore -v "$f" 2>/dev/null); then
@@ -187,7 +217,7 @@ tracked:
       echo "not appear in \`git status\`, so this is the only place it shows up."
       exit 1
     }
-    echo "  every source file under site/, crates/ and xtask/ is tracked ✓"
+    echo "  every source file the build reads is tracked ✓"
 
 # ── Generated code ────────────────────────────────────────────────────────────
 
@@ -258,9 +288,42 @@ site-card:
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
 
-# Security advisories.
+# Security advisories — and a re-check of every advisory we have set aside.
+#
+# `cargo audit` reads `Cargo.lock`, which is feature-independent: it lists the
+# optional dependencies of every package whether or not anything enables them.
+# So it can flag a crate that is never compiled. `.cargo/audit.toml` ignores one
+# such advisory, with the reasoning written out.
+#
+# An ignore nobody rechecks is how a real exposure ends up filed under a
+# resolved one, so the justification is asserted rather than trusted: every
+# crate named there must be absent from the **build** graph, across the whole
+# workspace with every feature on. If one ever appears, the ignore is no longer
+# true and this fails.
+[doc("Security advisories, and a re-check of every ignore in .cargo/audit.toml.")]
 audit:
+    #!/usr/bin/env bash
+    set -euo pipefail
     cargo audit
+    # Crates the ignore list claims are not compiled. Keep in step with
+    # `.cargo/audit.toml`; the file says so too.
+    not_built=(rkyv)
+    graph=$(cargo tree --workspace --all-features --prefix none --edges normal,build,dev)
+    fail=0
+    for crate in "${not_built[@]}"; do
+      if grep -qE "^${crate} v" <<<"$graph"; then
+        echo "  ${crate} IS in the build graph — the audit ignore for it is now false"
+        fail=1
+      else
+        printf '  %-12s absent from the build graph ✓\n' "$crate"
+      fi
+    done
+    test "$fail" = 0 || {
+      echo
+      echo "An advisory was set aside because the crate is never compiled, and it"
+      echo "now is. Remove the ignore from .cargo/audit.toml and fix the advisory."
+      exit 1
+    }
 
 # Licence and dependency policy, over the union of every crate's graph.
 deny:
@@ -278,5 +341,5 @@ publish-dry:
     cargo publish --workspace --dry-run
 
 # ── Everything CI runs, locally ───────────────────────────────────────────────
-ci: fmt-check lint doc test-artefacts test-no-features codegen-check wasm deps tracked
+ci: fmt-check lint features doc test-artefacts test-no-features codegen-check wasm deps tracked
     @echo "✓ all green"

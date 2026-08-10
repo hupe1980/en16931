@@ -244,8 +244,27 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
+
+      # Reads `.cargo/audit.toml`, which sets one advisory aside on the grounds
+      # that the crate is never compiled — `cargo audit` scans the lockfile, and
+      # a lockfile lists optional dependencies nothing enables.
       - name: Run audit
         run: cargo audit
+
+      # …and re-checks that reasoning against the real build graph, because an
+      # ignore nobody rechecks is how a live exposure ends up filed under a
+      # resolved one. Mirrors `just audit`; kept inline so the job does not need
+      # a `just` install for one step.
+      - name: Every set-aside advisory is still set aside for the right reason
+        run: |
+          graph=$(cargo tree --workspace --all-features --prefix none --edges normal,build,dev)
+          for crate in rkyv; do
+            if grep -qE "^${crate} v" <<<"$graph"; then
+              echo "::error::${crate} is now in the build graph — its audit ignore is false"
+              exit 1
+            fi
+            echo "  ${crate} absent from the build graph"
+          done
 
   # ── License / dependency policy ─────────────────────────────────────────────
   deny:
