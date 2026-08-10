@@ -702,10 +702,6 @@ fn payment_means(x: &mut Xml, p: &PaymentInstructions) {
                     }
                 });
             }
-            // An *empty* credit-transfer list falls through to here: there is
-            // no account to carry, so one bare `cac:PaymentMeans` with the
-            // code and payment id is all the document can honestly say.
-            Some(PaymentMeans::CreditTransfer(_)) => {}
             Some(PaymentMeans::DirectDebit(d)) => {
                 x.group("cac:PaymentMandate", |x| {
                     if let Some(m) = &d.mandate_reference {
@@ -716,7 +712,11 @@ fn payment_means(x: &mut Xml, p: &PaymentInstructions) {
                     }
                 });
             }
-            None => {}
+            // An *empty* credit-transfer list falls through to here: there is
+            // no account to carry, so one bare `cac:PaymentMeans` with the
+            // code and payment id is all the document can honestly say —
+            // exactly as for no means at all.
+            Some(PaymentMeans::CreditTransfer(_)) | None => {}
         }
     });
 }

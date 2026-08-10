@@ -612,7 +612,10 @@ mod tests {
             UNIT.advice("kwh").expect("case"),
             UNIT.advice(" KWH").expect("whitespace"),
         ] {
-            assert!(!msg.contains("  "), "advice contains a run of spaces: {msg:?}");
+            assert!(
+                !msg.contains("  "),
+                "advice contains a run of spaces: {msg:?}"
+            );
         }
     }
 
