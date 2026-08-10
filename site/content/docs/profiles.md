@@ -190,6 +190,12 @@ pub enum PaymentMeans {
 The `-a` halves stay real: they tie the *variant* to BT-81's **value**, which no
 type can see.
 
+What about *reading* a document that carries the forbidden combination? KoSIT
+ships exactly such files as mutation instances. The readers keep the **first**
+group, record the later one as unmapped rather than letting it silently win —
+and the `-a` rule then fires on the mismatch, which is the verdict KoSIT's own
+validator reaches on those files.
+
 `BR-DE-19` and `-20` want a *correct IBAN*, and the crate implements ISO 7064
 mod-97-10 — no registry, no network, so it still runs on `wasm32`. It cannot tell
 you the account exists, only that the string is not a typo, which catches the

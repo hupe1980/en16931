@@ -45,7 +45,7 @@ members  = [
 # republishing an unchanged crate on a bindings-only patch.
 #
 # Bump here and in the dependency requirement below — the only two places.
-version      = "0.4.0"
+version      = "0.5.0"
 edition      = "2024"
 # `let`-chains, stabilised in 1.88. CI reads this value rather than repeating it.
 rust-version = "1.88"
@@ -64,8 +64,8 @@ repository   = "https://github.com/hupe1980/en16931"
 # `every_member_inherits_its_version` asserts the other half — that no member
 # has quietly gone back to declaring a version of its own, which resolves fine
 # and silently opts out of the workspace bump.
-en16931         = { version = "0.4.0", path = "crates/en16931" }
-en16931-formats = { version = "0.4.0", path = "crates/en16931-formats" }
+en16931         = { version = "0.5.0", path = "crates/en16931" }
+en16931-formats = { version = "0.5.0", path = "crates/en16931-formats" }
 
 # Pinned once, for the reason `en16931-formats` states at its own use site: two
 # `rust_decimal` majors in one graph means two incompatible `Decimal` types and

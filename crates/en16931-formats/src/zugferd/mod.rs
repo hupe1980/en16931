@@ -144,6 +144,25 @@
 //! PDFlib file notes that the sample PDFs in the Factur-X 1.0 info package use
 //! an all-lowercase spelling that is *not* correct.
 //!
+//! And a second writer pitfall, reported back by the same downstream user after
+//! running their output through veraPDF: **the Factur-X extension-schema block
+//! is not a self-contained fragment you can paste into an arbitrary packet.**
+//! The XMP data model (ISO 16684-1) allows each property at most once per
+//! packet, and `pdfaExtension:schemas` *is* a property. A PDF generator that
+//! already writes extension schemas of its own — Typst/krilla does — already
+//! carries a `pdfaExtension:schemas` bag, and adding the Factur-X description
+//! as a second `rdf:Description` duplicates the property. Every XML parser
+//! accepts the result; Adobe-lineage XMP parsers and veraPDF reject the entire
+//! packet (clause 6.6.2.1, with the PDF/A identification of 6.6.4 then reported
+//! missing), so the file silently stops being PDF/A. The fx schema's `rdf:li`
+//! must be **merged into whatever `pdfaExtension:schemas` bag is already
+//! there**; a standalone `rdf:Description` is only right for a generator that
+//! writes no extension schemas at all. Neither this crate's reader nor
+//! `en16931 validate` can see the defect — it is not an XML defect, and the
+//! payload is reached through the embedded-files tree, not the XMP — which is
+//! exactly why the section above says a writer is checkable only against
+//! veraPDF.
+//!
 //! [`Profile::as_str`]: crate::zugferd::Profile::as_str
 //! [`Xmp::version`]: crate::zugferd::Xmp::version
 //! [`Divergence::Relationship`]: crate::zugferd::Divergence::Relationship

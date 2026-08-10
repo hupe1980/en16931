@@ -24,6 +24,81 @@ reader upgrading nothing about whether it affected them.
 
 Nothing yet.
 
+## [0.5.0] — 2026-08-10
+
+### Fixed
+
+- **A second credit-transfer account no longer vanishes between two systems.**
+  BG-17 is 0..n, and both schemas put the account at **0..1 per payment-means
+  element** — several accounts are several `cac:PaymentMeans` /
+  `ram:SpecifiedTradeSettlementPaymentMeans` elements, which is how CEN's own
+  `guide-example1.xml` spells two accounts. Both writers packed every account
+  into one element (schema-invalid output for two or more), and both readers
+  assigned instead of accumulating, keeping only the **last** element's
+  accounts. The two defects were mirror images, so the round-trip suite could
+  not see either: an invoice with two bank accounts survived its own round
+  trip and lost an account at any counterparty. The writers now emit one
+  element per account, repeating BT-81 and BT-83 as CEN's example does; the
+  readers merge repeated elements into the one BG-16. New round-trip and
+  wire-shape tests pin both directions in both syntaxes.
+
+- **Reading one of `BR-DE-23/24/25`'s forbidden combinations now reports the
+  loss — and reaches KoSIT's verdict.** `PaymentMeans` is deliberately an
+  enum, so a document carrying BG-17 *and* BG-18 (KoSIT ships these as
+  mutation instances) cannot be held whole. Both readers used to let the last
+  group win silently — which could satisfy the `-a` rule the document is built
+  to fail. The first kind read now wins, the later kind is recorded in
+  `unmapped`, and the `-a` rule fires on the mismatch, agreeing with the
+  German reference validator on these files.
+
+- **`Identifier::eas_checked`'s too-short-GLN message carried two
+  fourteen-space runs** — the same collapsed-literal defect class documented
+  on `ATTRIBUTION`, recurring in a new place. Fixed, and a tripwire test now
+  asserts no registered rule text and none of `codes::guard`'s generated
+  advice contains a run of spaces.
+
+### Documentation
+
+- **The ZUGFeRD writer guidance gained the second XMP pitfall**, reported back
+  by the downstream team whose PDF/A-3 writer the guidance already served, and
+  found only by veraPDF: the Factur-X extension-schema block is not a
+  self-contained fragment. XMP allows each property once per packet and
+  `pdfaExtension:schemas` is a property, so a generator that already writes
+  extension schemas of its own (Typst/krilla does) already carries the bag, and
+  pasting the fx description in as a second `rdf:Description` makes
+  Adobe-lineage parsers and veraPDF reject the whole packet — the file silently
+  stops being PDF/A, and neither an XML parser nor `en16931 validate` can see
+  it. The fx `rdf:li` must merge into the existing `pdfaExtension:schemas` bag.
+  In `zugferd`'s module documentation and the site's ZUGFeRD page.
+
+- **The empty `ram:ApplicableHeaderTradeDelivery` is now defended at the code,
+  with the authorities' own evidence.** An external validator run reported
+  `PEPPOL-EN16931-R008` ("document MUST not contain empty elements") against
+  the CII writer's output and proposed omitting the element. That proposal is
+  wrong twice over, and the writer comment now says why so the next report can
+  be answered from source: the D16B XSD gives the element no `minOccurs`, which
+  defaults to **1** — omitting it fails schema validation outright — and
+  Peppol BIS publishes no CII Schematron at all, so R008 reaches CII only
+  through KoSIT's translation (`peppol-into-xr.xsl`), which authors the rule
+  with a hand-written carve-out of exactly this element — under the comment
+  "add R008 to CII", the context reads
+  `//*[not(name() = 'ram:ApplicableHeaderTradeDelivery') and not(*) and
+  not(normalize-space())]`. A validator flagging it is applying Peppol's
+  UBL-targeted rule to CII without the authority's carve-out. Re-verified
+  end-to-end: the 0.4.0 writer emits `<ram:ApplicableHeaderTradeDelivery/>`
+  for a delivery-less invoice, exactly as the report observed — and that is
+  the only output that satisfies both the XSD and the authority.
+
+### Audited
+
+- A full external audit pass on 2026-08-10 found the four artefact pins —
+  CEN `validation-1.3.16`, Peppol `v3.0.20`, KoSIT Schematron `v2.5.0` and
+  KoSIT validator configuration `v2026-01-31` — are each the **latest published
+  release** of their repository, so nothing is stale. The next upstream move is
+  XRechnung 4.0 (announced for late 2026, implementing EN 16931-1:2026), which
+  per the pinning policy in `xtask/src/fetch.rs` will be a **new profile**, not
+  a newer pin on the old one.
+
 ## [0.4.0] — 2026-08-10
 
 The first release with a changelog, and the reason it needed one: **eight
@@ -348,7 +423,8 @@ directions, ZUGFeRD / Factur-X extraction, and the command.
 - `en16931-cli`: `validate`, `convert`, `diff`, `extract`, `inspect`, `explain`,
   `rules`, `profiles`, and CI-shaped exit codes.
 
-[Unreleased]: https://github.com/hupe1980/en16931/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/hupe1980/en16931/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/hupe1980/en16931/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/hupe1980/en16931/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/hupe1980/en16931/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/hupe1980/en16931/compare/v0.1.0...v0.2.0

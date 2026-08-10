@@ -135,6 +135,18 @@ One value a writer needs and this crate does not hold: the XMP namespace URI is
 trailing `#` are both load-bearing, and the sample PDFs in the Factur-X 1.0 info
 package spell it in lowercase, which is wrong.
 
+And a second writer pitfall the same team hit, found only by veraPDF: **the
+Factur-X extension-schema block cannot be pasted into an arbitrary XMP packet as
+its own `rdf:Description`.** XMP allows each property once per packet, and
+`pdfaExtension:schemas` is a property — a PDF generator that already writes
+extension schemas of its own already carries that bag, and a second one makes
+Adobe-lineage parsers and veraPDF reject the whole packet, so the file silently
+stops being PDF/A. Merge the fx schema's `rdf:li` into the existing
+`pdfaExtension:schemas` bag; a standalone description is only correct when the
+generator writes no extension schemas at all. The defect is invisible to every
+XML parser and to `en16931 validate` — it is not an XML defect — which is
+exactly why a writer is checkable only against veraPDF.
+
 ## What is next
 
 - **[The CLI](@/docs/cli.md)** — `en16931 inspect rechnung.pdf`.

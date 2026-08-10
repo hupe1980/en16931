@@ -500,7 +500,9 @@ pub fn eas_value(scheme: &str, value: &str) -> Result<(), CodeError> {
 fn gln_problem(value: &str) -> Option<String> {
     if value.len() != 13 || !value.bytes().all(|b| b.is_ascii_digit()) {
         return Some(format!(
-            "a GS1 GLN (scheme 0088) is exactly 13 digits, and this is {} character(s).              Identifiers that are not GLNs — a BDEW Marktlokations-ID, a customer number —              need their own EAS scheme, not 0088",
+            "a GS1 GLN (scheme 0088) is exactly 13 digits, and this is {} character(s). \
+             Identifiers that are not GLNs — a BDEW Marktlokations-ID, a customer number — \
+             need their own EAS scheme, not 0088",
             value.chars().count()
         ));
     }
@@ -582,6 +584,35 @@ mod tests {
                 "{} has two values differing only in case, so a case hint could mislead",
                 list.name
             );
+        }
+    }
+
+    /// No user-facing sentence carries a run of spaces.
+    ///
+    /// The same defect class the crate documents on [`crate::ATTRIBUTION`]: a
+    /// string meant as one sentence ends up with the source indentation inside
+    /// it, and every message built from it carries the gap. It recurred here —
+    /// `gln_problem`'s too-short message shipped with two fourteen-space runs —
+    /// so the property is now asserted for every rule text and for the advice
+    /// this module generates, not just for the notice.
+    #[test]
+    fn no_rule_text_or_advice_contains_a_run_of_spaces() {
+        for r in crate::validation::rules::all() {
+            assert!(
+                !r.text.contains("  "),
+                "{}'s text contains a run of spaces: {:?}",
+                r.id,
+                r.text
+            );
+        }
+        for msg in [
+            gln_problem("12345").expect("too short"),
+            gln_problem("4012345000008").expect("bad check digit"),
+            EAS.advice("9958").expect("withdrawn"),
+            UNIT.advice("kwh").expect("case"),
+            UNIT.advice(" KWH").expect("whitespace"),
+        ] {
+            assert!(!msg.contains("  "), "advice contains a run of spaces: {msg:?}");
         }
     }
 

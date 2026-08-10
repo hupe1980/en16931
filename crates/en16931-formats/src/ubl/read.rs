@@ -231,7 +231,19 @@ impl Reader {
                 "PayeeParty" => inv.payee = Some(self.payee(c)),
                 "TaxRepresentativeParty" => inv.tax_representative = Some(self.tax_rep(c)),
                 "Delivery" => inv.delivery = Some(self.delivery(c)),
-                "PaymentMeans" => inv.payment = Some(self.payment(c)),
+                // BG-16 is 0..1 in the model and `cac:PaymentMeans` is 0..n in
+                // UBL: several elements are one instruction with several BG-17
+                // accounts — CEN's `guide-example1.xml` carries two. Merged,
+                // not overwritten; overwriting kept only the last account, a
+                // silent loss the round trip could not see because the writer
+                // had the mirror-image bug.
+                "PaymentMeans" => {
+                    let next = self.payment(c);
+                    inv.payment = Some(match inv.payment.take() {
+                        None => next,
+                        Some(prev) => self.merge_payment(prev, next),
+                    });
+                }
                 // **Not trimmed.** `BR-DE-18` requires the Skonto block to end
                 // with a newline, so BT-20's trailing whitespace is load-bearing
                 // and trimming it makes a conforming document fail.
@@ -463,6 +475,36 @@ impl Reader {
         d
     }
 
+    /// Fold a further `cac:PaymentMeans` element into the instruction already
+    /// read — the header terms keep their first value, and credit-transfer
+    /// accounts accumulate, which is the one way UBL expresses several BG-17.
+    ///
+    /// Two elements of *different kinds* — a card and a mandate, say — cannot
+    /// both live in the model's single BG-16, so the second kind is dropped
+    /// and recorded in [`Reader::unmapped`] rather than silently winning.
+    fn merge_payment(
+        &mut self,
+        mut prev: PaymentInstructions,
+        next: PaymentInstructions,
+    ) -> PaymentInstructions {
+        prev.means_code = prev.means_code.or(next.means_code);
+        prev.means_text = prev.means_text.or(next.means_text);
+        prev.remittance_information = prev.remittance_information.or(next.remittance_information);
+        match (&mut prev.means, next.means) {
+            (_, None) => {}
+            (slot @ None, some) => *slot = some,
+            (
+                Some(PaymentMeans::CreditTransfer(accounts)),
+                Some(PaymentMeans::CreditTransfer(more)),
+            ) => accounts.extend(more),
+            (Some(_), Some(_)) => {
+                self.unmapped
+                    .insert("Invoice/PaymentMeans (second, of a different kind)".to_owned());
+            }
+        }
+        prev
+    }
+
     fn payment(&mut self, n: roxmltree::Node<'_, '_>) -> PaymentInstructions {
         let mut p = PaymentInstructions {
             means_code: code(n, "PaymentMeansCode"),
@@ -474,26 +516,60 @@ impl Reader {
         for c in kids(n) {
             match name(c) {
                 "PayeeFinancialAccount" => {
-                    p.means = Some(PaymentMeans::CreditTransfer(vec![CreditTransfer {
+                    // Accumulate rather than assign: the schema puts this at
+                    // 0..1 per `cac:PaymentMeans`, but a lenient reader of a
+                    // document that repeats it anyway should not keep only the
+                    // last account.
+                    let t = CreditTransfer {
                         account_identifier: text(c, "ID"),
                         account_name: text(c, "Name"),
                         provider_identifier: kid(c, "FinancialInstitutionBranch")
                             .and_then(|b| text(b, "ID")),
-                    }]));
+                    };
+                    match &mut p.means {
+                        Some(PaymentMeans::CreditTransfer(ts)) => ts.push(t),
+                        slot @ None => *slot = Some(PaymentMeans::CreditTransfer(vec![t])),
+                        Some(_) => {
+                            self.unmapped.insert(
+                                "PaymentMeans/PayeeFinancialAccount (beside a card or mandate)"
+                                    .to_owned(),
+                            );
+                        }
+                    }
                 }
+                // BG-18 and BG-19 take the slot only when it is free. The model
+                // holds *one* of BG-17/18/19 — the combinations are what
+                // `BR-DE-23/24/25` forbid, and KoSIT's mutation corpus carries
+                // them on purpose — so the first kind read wins and a later
+                // different kind is recorded, never silently the winner.
+                // (Overwriting made the invalid combination read as its *last*
+                // group, which could satisfy the `-a` rule the document is
+                // built to fail.)
                 "CardAccount" => {
-                    p.means = Some(PaymentMeans::Card(PaymentCard {
-                        primary_account_number: text(c, "PrimaryAccountNumberID"),
-                        holder_name: text(c, "HolderName"),
-                    }));
+                    if p.means.is_none() {
+                        p.means = Some(PaymentMeans::Card(PaymentCard {
+                            primary_account_number: text(c, "PrimaryAccountNumberID"),
+                            holder_name: text(c, "HolderName"),
+                        }));
+                    } else {
+                        self.unmapped.insert(
+                            "PaymentMeans/CardAccount (beside another payment means)".to_owned(),
+                        );
+                    }
                 }
                 "PaymentMandate" => {
-                    p.means = Some(PaymentMeans::DirectDebit(DirectDebit {
-                        mandate_reference: text(c, "ID"),
-                        creditor_identifier: None,
-                        debited_account: kid(c, "PayerFinancialAccount")
-                            .and_then(|a| text(a, "ID")),
-                    }));
+                    if p.means.is_none() {
+                        p.means = Some(PaymentMeans::DirectDebit(DirectDebit {
+                            mandate_reference: text(c, "ID"),
+                            creditor_identifier: None,
+                            debited_account: kid(c, "PayerFinancialAccount")
+                                .and_then(|a| text(a, "ID")),
+                        }));
+                    } else {
+                        self.unmapped.insert(
+                            "PaymentMeans/PaymentMandate (beside another payment means)".to_owned(),
+                        );
+                    }
                 }
                 "PaymentMeansCode" | "PaymentID" | "PaymentDueDate" | "InstructionNote" => {}
                 _ => self.skip("PaymentMeans", c),

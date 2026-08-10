@@ -548,11 +548,25 @@ impl Reader {
     }
 
     fn payment_means(&mut self, p: &mut PaymentInstructions, n: Node<'_, '_>) {
+        // Called once per `ram:SpecifiedTradeSettlementPaymentMeans`, which is
+        // 0..unbounded in D16B: several elements are one BG-16 with several
+        // BG-17 accounts, since the XSD puts the creditor account at 0..1 per
+        // element. So everything here *accumulates* into `p` — assigning would
+        // keep only the last element's accounts, which is what this reader
+        // silently did for two releases.
         let mut transfers: Vec<CreditTransfer> = Vec::new();
         for c in kids(n) {
             match name(c) {
-                "TypeCode" => p.means_code = Some(Code::new(own_text(c))),
-                "Information" => p.means_text = non_empty(own_text(c)),
+                "TypeCode" => {
+                    if p.means_code.is_none() {
+                        p.means_code = Some(Code::new(own_text(c)));
+                    }
+                }
+                "Information" => {
+                    if p.means_text.is_none() {
+                        p.means_text = non_empty(own_text(c));
+                    }
+                }
                 "ApplicableTradeSettlementFinancialCard" => {
                     p.means = Some(PaymentMeans::Card(PaymentCard {
                         primary_account_number: text(c, "ID"),
@@ -583,7 +597,21 @@ impl Reader {
             }
         }
         if !transfers.is_empty() {
-            p.means = Some(PaymentMeans::CreditTransfer(transfers));
+            match &mut p.means {
+                Some(PaymentMeans::CreditTransfer(existing)) => existing.extend(transfers),
+                slot @ None => *slot = Some(PaymentMeans::CreditTransfer(transfers)),
+                // A card or a mandate is already in the model's single BG-16;
+                // an account arriving on top of it cannot be represented, and
+                // dropping it silently is the failure mode this reader's
+                // contract forbids.
+                Some(_) => {
+                    self.unmapped.insert(
+                        "SpecifiedTradeSettlementPaymentMeans/PayeePartyCreditorFinancialAccount \
+                         (beside a card or mandate)"
+                            .to_owned(),
+                    );
+                }
+            }
         }
     }
 

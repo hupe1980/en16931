@@ -411,6 +411,23 @@ fn address(x: &mut Xml, a: &PostalAddress) {
 fn delivery(x: &mut Xml, inv: &Invoice) {
     // `ram:ApplicableHeaderTradeDelivery` is mandatory in the D16B sequence
     // and may legitimately be empty — a minimal invoice delivers nothing.
+    //
+    // Empty is *correct*, not merely tolerated, and this has been questioned
+    // from outside, so the evidence: the D16B XSD gives the element no
+    // `minOccurs`, which defaults to 1 — omitting it fails schema validation
+    // outright — and KoSIT carves exactly this element out of the
+    // empty-element rule *by hand*. Peppol BIS publishes no CII Schematron at
+    // all (it is UBL-only), so R008 reaches CII only through KoSIT's
+    // translation, `xrechnung-schematron`'s src/xsl/peppol-into-xr.xsl —
+    // which, under the comment "add R008 to CII", authors the context as
+    //
+    //   //*[not(name() = 'ram:ApplicableHeaderTradeDelivery')
+    //      and not(*) and not(normalize-space())]
+    //
+    // A validator that flags `<ram:ApplicableHeaderTradeDelivery/>` under
+    // R008 is applying Peppol's UBL-targeted rule to CII without the
+    // authority's carve-out. Do not "fix" this by omitting the element: that
+    // trades a spurious warning for a hard XSD failure.
     x.group_required("ram:ApplicableHeaderTradeDelivery", |x| {
         if let Some(d) = &inv.delivery {
             if d.party_name.is_some() || d.location.is_some() || d.address.is_some() {
@@ -635,13 +652,47 @@ fn period(x: &mut Xml, wrapper: &str, p: &Period, what: &str) {
 }
 
 fn payment_means(x: &mut Xml, p: &PaymentInstructions) {
-    x.group("ram:SpecifiedTradeSettlementPaymentMeans", |x| {
+    // BG-17 is 0..n and D16B puts `ram:PayeePartyCreditorFinancialAccount` at
+    // **0..1** inside `ram:SpecifiedTradeSettlementPaymentMeans`
+    // (`TradeSettlementPaymentMeansType` in the XSD) — several accounts are
+    // several payment-means elements, exactly as in UBL, where CEN's own
+    // `guide-example1.xml` repeats `cac:PaymentMeans` per account. Two
+    // accounts inside one aggregate fails the schema; this writer emitted
+    // that for two releases, and the reader kept only the last element's
+    // accounts, so a round trip never noticed.
+    let head = |x: &mut Xml| {
         if let Some(c) = &p.means_code {
             x.leaf("ram:TypeCode", &[], c.as_str());
         }
         if let Some(t) = &p.means_text {
             x.leaf("ram:Information", &[], t);
         }
+    };
+    if let Some(PaymentMeans::CreditTransfer(ts)) = &p.means
+        && !ts.is_empty()
+    {
+        for t in ts {
+            x.group("ram:SpecifiedTradeSettlementPaymentMeans", |x| {
+                head(x);
+                if let Some(a) = &t.account_identifier {
+                    x.group("ram:PayeePartyCreditorFinancialAccount", |x| {
+                        x.leaf("ram:IBANID", &[], a);
+                        if let Some(n) = &t.account_name {
+                            x.leaf("ram:AccountName", &[], n);
+                        }
+                    });
+                }
+                if let Some(p) = &t.provider_identifier {
+                    x.group("ram:PayeeSpecifiedCreditorFinancialInstitution", |x| {
+                        x.leaf("ram:BICID", &[], p);
+                    });
+                }
+            });
+        }
+        return;
+    }
+    x.group("ram:SpecifiedTradeSettlementPaymentMeans", |x| {
+        head(x);
         match &p.means {
             Some(PaymentMeans::Card(c)) => {
                 x.group("ram:ApplicableTradeSettlementFinancialCard", |x| {
@@ -660,24 +711,9 @@ fn payment_means(x: &mut Xml, p: &PaymentInstructions) {
                     });
                 }
             }
-            Some(PaymentMeans::CreditTransfer(ts)) => {
-                for t in ts {
-                    if let Some(a) = &t.account_identifier {
-                        x.group("ram:PayeePartyCreditorFinancialAccount", |x| {
-                            x.leaf("ram:IBANID", &[], a);
-                            if let Some(n) = &t.account_name {
-                                x.leaf("ram:AccountName", &[], n);
-                            }
-                        });
-                    }
-                    if let Some(p) = &t.provider_identifier {
-                        x.group("ram:PayeeSpecifiedCreditorFinancialInstitution", |x| {
-                            x.leaf("ram:BICID", &[], p);
-                        });
-                    }
-                }
-            }
-            None => {}
+            // An empty credit-transfer list: no account to carry, so one bare
+            // payment-means element with the code is all there is to say.
+            Some(PaymentMeans::CreditTransfer(_)) | None => {}
         }
     });
 }

@@ -642,7 +642,15 @@ fn party(x: &mut Xml, wrapper: &str, p: &Party, sepa_creditor: Option<&str>) {
 }
 
 fn payment_means(x: &mut Xml, p: &PaymentInstructions) {
-    x.group("cac:PaymentMeans", |x| {
+    // BG-17 is 0..n and UBL puts `cac:PayeeFinancialAccount` at **0..1** inside
+    // `cac:PaymentMeans` (OASIS UBL 2.1, `PaymentMeansType`) — so several
+    // credit-transfer accounts are several `cac:PaymentMeans` elements, each
+    // repeating BT-81 and BT-83. That is how CEN's own `guide-example1.xml`
+    // spells two accounts. One aggregate holding two accounts reads naturally
+    // and fails the OASIS schema; this writer emitted exactly that for two
+    // releases, and the reader kept only the last element, so the loss was
+    // invisible to a round trip.
+    let head = |x: &mut Xml| {
         if let Some(c) = &p.means_code {
             let mut attrs: Vec<(&str, &str)> = Vec::new();
             if let Some(t) = &p.means_text {
@@ -653,6 +661,32 @@ fn payment_means(x: &mut Xml, p: &PaymentInstructions) {
         if let Some(r) = &p.remittance_information {
             x.leaf("cbc:PaymentID", &[], r);
         }
+    };
+    if let Some(PaymentMeans::CreditTransfer(ts)) = &p.means
+        && !ts.is_empty()
+    {
+        for t in ts {
+            x.group("cac:PaymentMeans", |x| {
+                head(x);
+                x.group("cac:PayeeFinancialAccount", |x| {
+                    if let Some(a) = &t.account_identifier {
+                        x.leaf("cbc:ID", &[], a);
+                    }
+                    if let Some(n) = &t.account_name {
+                        x.leaf("cbc:Name", &[], n);
+                    }
+                    if let Some(p) = &t.provider_identifier {
+                        x.group("cac:FinancialInstitutionBranch", |x| {
+                            x.leaf("cbc:ID", &[], p);
+                        });
+                    }
+                });
+            });
+        }
+        return;
+    }
+    x.group("cac:PaymentMeans", |x| {
+        head(x);
         match &p.means {
             Some(PaymentMeans::Card(c)) => {
                 x.group("cac:CardAccount", |x| {
@@ -668,23 +702,10 @@ fn payment_means(x: &mut Xml, p: &PaymentInstructions) {
                     }
                 });
             }
-            Some(PaymentMeans::CreditTransfer(ts)) => {
-                for t in ts {
-                    x.group("cac:PayeeFinancialAccount", |x| {
-                        if let Some(a) = &t.account_identifier {
-                            x.leaf("cbc:ID", &[], a);
-                        }
-                        if let Some(n) = &t.account_name {
-                            x.leaf("cbc:Name", &[], n);
-                        }
-                        if let Some(p) = &t.provider_identifier {
-                            x.group("cac:FinancialInstitutionBranch", |x| {
-                                x.leaf("cbc:ID", &[], p);
-                            });
-                        }
-                    });
-                }
-            }
+            // An *empty* credit-transfer list falls through to here: there is
+            // no account to carry, so one bare `cac:PaymentMeans` with the
+            // code and payment id is all the document can honestly say.
+            Some(PaymentMeans::CreditTransfer(_)) => {}
             Some(PaymentMeans::DirectDebit(d)) => {
                 x.group("cac:PaymentMandate", |x| {
                     if let Some(m) = &d.mandate_reference {

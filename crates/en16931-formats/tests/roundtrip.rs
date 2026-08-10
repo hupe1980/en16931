@@ -128,6 +128,28 @@ macro_rules! syntaxes {
                 roundtrip(&Invoice::default());
             }
 
+            /// Several BG-17 accounts survive — which takes several
+            /// payment-means elements on the wire, because both schemas put
+            /// the creditor account at 0..1 per element. The writer packed
+            /// them into one element (schema-invalid) and the reader kept
+            /// only the last element's account for two releases, and the two
+            /// bugs were mirror images, so the round trip never noticed.
+            #[test]
+            fn several_credit_transfer_accounts_survive_the_round_trip() {
+                use en16931::invoice::{CreditTransfer, PaymentMeans};
+                let mut inv = common::maximal();
+                let p = inv.payment.as_mut().expect("fixture has payment");
+                let Some(PaymentMeans::CreditTransfer(ts)) = &mut p.means else {
+                    panic!("fixture pays by credit transfer");
+                };
+                ts.push(CreditTransfer {
+                    account_identifier: Some("NL03INGB0004489902".into()),
+                    account_name: None,
+                    provider_identifier: None,
+                });
+                roundtrip(&inv);
+            }
+
             /// Input that is not this syntax must be refused, not silently read
             /// as an empty invoice.
             #[test]
@@ -329,4 +351,62 @@ fn a_document_nested_past_the_limit_is_an_error_in_both_readers() {
         let ok = nested("CrossIndustryInvoice", ns, cii::MAX_DEPTH - 1);
         assert!(cii::from_str(&ok).is_ok(), "the limit is off by one");
     }
+}
+
+/// Two BG-17 accounts, as a fixture both wire-shape tests share.
+#[cfg(any(feature = "ubl", feature = "cii"))]
+fn two_account_invoice() -> en16931::Invoice {
+    use en16931::invoice::{CreditTransfer, PaymentMeans};
+    let mut inv = common::maximal();
+    let p = inv.payment.as_mut().expect("fixture has payment");
+    let Some(PaymentMeans::CreditTransfer(ts)) = &mut p.means else {
+        panic!("fixture pays by credit transfer");
+    };
+    ts.push(CreditTransfer {
+        account_identifier: Some("NL03INGB0004489902".into()),
+        account_name: None,
+        provider_identifier: None,
+    });
+    inv
+}
+
+/// The wire shape of several accounts is several `cac:PaymentMeans` — how
+/// CEN's own `guide-example1.xml` spells two accounts, and the only shape the
+/// OASIS schema admits, which caps `cac:PayeeFinancialAccount` at 0..1 per
+/// element.
+#[cfg(feature = "ubl")]
+#[test]
+fn ubl_writes_one_payment_means_element_per_account() {
+    let out = en16931_formats::ubl::write(&two_account_invoice());
+    assert_eq!(
+        out.xml.matches("<cac:PaymentMeans>").count(),
+        2,
+        "{}",
+        out.xml
+    );
+    assert_eq!(out.xml.matches("<cac:PayeeFinancialAccount>").count(), 2);
+    // BT-81 rides on each element, as in CEN's example.
+    assert_eq!(out.xml.matches("<cbc:PaymentMeansCode").count(), 2);
+}
+
+/// The CII twin: D16B caps `ram:PayeePartyCreditorFinancialAccount` at 0..1
+/// per `ram:SpecifiedTradeSettlementPaymentMeans`.
+#[cfg(feature = "cii")]
+#[test]
+fn cii_writes_one_payment_means_element_per_account() {
+    let out = en16931_formats::cii::write(&two_account_invoice());
+    assert_eq!(
+        out.xml
+            .matches("<ram:SpecifiedTradeSettlementPaymentMeans>")
+            .count(),
+        2,
+        "{}",
+        out.xml
+    );
+    assert_eq!(
+        out.xml
+            .matches("<ram:PayeePartyCreditorFinancialAccount>")
+            .count(),
+        2
+    );
 }

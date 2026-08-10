@@ -151,10 +151,27 @@ macro_rules! syntaxes {
 syntaxes! {
     // `UBLExtensions` is forbidden by UBL-CR-001 and appears only in negative
     // instances; `CreditAccount` is a UBL payment element EN 16931 does not use.
-    "ubl" => (ubl, Ubl, 200, &["Invoice/UBLExtensions", "PaymentMeans/CreditAccount"]),
+    //
+    // The two "(beside …)" entries are KoSIT's `BR-DE-23/24/25` mutation
+    // instances: BG-17 together with BG-18 or BG-19, a combination those rules
+    // exist to forbid and `en16931::invoice::PaymentMeans` — an enum — cannot
+    // hold. The first kind read wins, the later kind is recorded here, and the
+    // `-a` rule then fires on the mismatch, which is the verdict KoSIT's own
+    // validator reaches on these files.
+    "ubl" => (ubl, Ubl, 200, &[
+        "Invoice/UBLExtensions",
+        "PaymentMeans/CreditAccount",
+        "PaymentMeans/PayeeFinancialAccount (beside a card or mandate)",
+        "PaymentMeans/PaymentMandate (beside another payment means)",
+    ]),
     // The *debtor's* bank. EN 16931 has BT-86 for the payee's BIC and no term
     // for the payer's, so this is outside the subset rather than a reader gap.
-    "cii" => (cii, Cii, 100, &["SpecifiedTradeSettlementPaymentMeans/PayerSpecifiedDebtorFinancialInstitution"]),
+    // The "(beside …)" entry is the CII spelling of the same KoSIT mutation
+    // instances named in the UBL list above.
+    "cii" => (cii, Cii, 100, &[
+        "SpecifiedTradeSettlementPaymentMeans/PayerSpecifiedDebtorFinancialInstitution",
+        "SpecifiedTradeSettlementPaymentMeans/PayeePartyCreditorFinancialAccount (beside a card or mandate)",
+    ]),
 }
 
 /// **The depth limit is measured against the authorities' own documents.**
