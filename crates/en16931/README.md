@@ -86,7 +86,7 @@ breaks `wasm32` outright.
 > [**pre-flight**](#-pre-flight--which-fields-will-this-profile-ask-me-for) that
 > says which fields a profile will ask for before the data is fetched.
 >
-> **Four** of those 317 are this crate's own, namespaced `EN-*` so they can never
+> **4** of those are this crate's own, namespaced `EN-*` so they can never
 > be mistaken for CEN's:
 >
 > | | |
@@ -400,6 +400,87 @@ Present on a small minority of findings — only where the crate genuinely knows
 more than the rule text, never as filler. It travels in the JSON shape and in
 SVRL's own `svrl:diagnostic-reference`, so `svrl:text` stays byte-identical to
 the authority's.
+
+---
+
+### 🧾 The scheme is checked; the value is not — unless you ask
+
+`Identifier::eas(x, "0088")` validates `0088`. It does **not** check that `x` is
+a GLN, and neither does `BR-CL-25`, which also only looks at the scheme code.
+
+That is worth stating because the `Result` invites the opposite reading. A
+downstream user put an eleven-digit BDEW *Marktlokations-ID* through
+`eas(malo, "0088")`: the constructor returned `Ok`, validation passed, and the
+document went out asserting that an eleven-digit German metering identifier was a
+thirteen-digit GS1 GLN. Syntactically valid, semantically false, and
+unresolvable for any receiver that believed it. No rule in the standard catches
+that.
+
+```rust
+use en16931::Identifier;
+use en16931::codes::guard;
+
+assert!(Identifier::eas_checked("4012345000009", "0088").is_ok());   // a real GLN
+
+let err = Identifier::eas_checked("51238696781", "0088").unwrap_err();
+assert!(err.to_string().contains("13 digits"));                      // the MaLo-ID
+
+// A scheme with no shape check behaves as `eas` — and says which it did.
+assert!(Identifier::eas_checked("991-01234-56", "0204").is_ok());
+assert!(!guard::eas_value_is_checkable("0204"));
+```
+
+`guard::CHECKED_EAS_SCHEMES` holds exactly one entry today, and that is the
+point rather than a shortfall. The EAS list has over a hundred schemes and most
+have no fixed public format, so "check the value" is not a job this crate can do
+honestly across it. What it can do is the ones whose format is fixed, published
+and **self-verifying** — GS1's GLN, where a wrong value is detectable without a
+registry lookup. Schemes join the list when their specification is in hand;
+guessing a format would produce a check that passes wrong values and is trusted
+because it exists.
+
+`eas_value_is_checkable` is the honest half: `Ok` means *verified* for a listed
+scheme and *nothing to verify* for the rest, and a caller building on the first
+when it has the second is the trap this closes.
+
+---
+
+## 🖨️ Formatting never shortens a value
+
+Every `Display` here used `Formatter::pad`, the standard helper — which, because
+that is what precision means for a *string*, truncates to N **characters**:
+
+```text
+format!("{:.2}",   InvoiceAmount::parse("1190.00")?)   →  "11"          ← eleven euros
+format!("{:>12.4}", InvoiceAmount::parse("1190.00")?)  →  "        1190"
+format!("{:.4}",   Date::parse("2026-07-31")?)         →  "2026"
+```
+
+A caller asking for two decimal places got a hundredth of the amount, neatly
+right-aligned in a column. This crate refuses to round an amount at a boundary
+because a plausible wrong number is worse than an error; printing one at a
+hundredth of its value is the same failure through the formatter.
+
+Nothing truncates now, and **precision on the numeric types is a minimum number
+of fraction digits**:
+
+```rust
+use en16931::{InvoiceAmount, Percentage};
+use rust_decimal::dec;
+
+let a = InvoiceAmount::parse("1190.00")?;
+assert_eq!(format!("{a:.4}"), "1190.0000");     // padded
+assert_eq!(format!("{a:.0}"), "1190.00");       // never rounded away
+assert_eq!(format!("{a:>12}"), "     1190.00"); // width, fill, alignment as before
+
+assert_eq!(format!("{:.2}", Percentage::new(dec!(19))), "19.00");
+# Ok::<(), en16931::ParseAmountError>(())
+```
+
+Padding is lossless and rounding is not, so only one of them happens. It is also
+what a document template wants: pad to the scale the layout needs, and let the
+value keep every digit it has. `en16931::fmt` exposes the two helpers, so a
+downstream `Display` can make the same promise.
 
 ---
 
@@ -1063,16 +1144,16 @@ conformant CIUS accepts it, core accepts it.*
 ## ⚡ Measured, not asserted
 
 ```text
-validate/core/5                      1.94 µs      ← the 5-line invoice
-validate/core/1000                 130.2  µs      ← linear in line count
-profile/EN 16931/5                   1.76 µs
+validate/core/5                      1.50 µs      ← the 5-line invoice
+validate/core/1000                 137.4  µs      ← linear in line count
+profile/EN 16931/5                   1.57 µs
 profile/XRechnung 3.0/5              6.30 µs
-profile/XRechnung 3.0 Extension/5    5.09 µs
+profile/XRechnung 3.0 Extension/5    5.05 µs
 ```
 
 `cargo bench`. The target was *"well under 100 µs for a typical 5-line invoice
-through the full core rule set"*; it is about 2 µs, and profile validation — 280
-rules for XRechnung — is a handful.
+through the full core rule set"*; it is about 1.5 µs, and profile validation —
+282 checks for XRechnung — is a handful.
 
 The Extension being *faster* than the CIUS it extends is not a mistake: it runs
 fourteen more rules and its documents trip fewer of them, and at this scale the
@@ -1107,7 +1188,7 @@ assert_eq!(report.suppressed(), ["BR-DE-15"]);
 ```
 
 ```text
-XRechnung 3.0 validation (EN 16931-1:2017+A1:2019) — 280 rule(s) checked, 27 finding(s), INVALID
+XRechnung 3.0 validation (EN 16931-1:2017+A1:2019) — 281 rule(s) checked, 27 finding(s), INVALID
   ⚠ 1 rule(s) suppressed and NOT checked: BR-DE-15
 ```
 
@@ -1124,7 +1205,7 @@ reassuring direction is worse than no number.
 **And a deviated run cannot produce a proof.** `Check::prove` refuses:
 
 ```text
-Check::new(&profiles::XRECHNUNG).without("BR-DE-15").prove::<XRechnung>(inv)
+Check::of::<XRechnung>().without("BR-DE-15").prove::<XRechnung>(inv)
 // Err(ProveError::Suppressed(["BR-DE-15"]))
 ```
 
@@ -1133,6 +1214,22 @@ documents the full set rejects, so a `Validated<P>` derived from it would claim
 something untrue. `Validated<P>` means *the whole rule set passed* — if it could
 also mean *most of it*, no consumer could rely on it and the type would be
 decoration.
+
+**Nor can it prove a profile it did not run.** `prove::<P>()` used to read only
+its type parameter, so the profile a `Check` was built for and the profile the
+proof claimed were unrelated choices:
+
+```text
+Check::new(&profiles::XRECHNUNG).prove::<En16931>(inv)
+// once: Ok(Validated<En16931>) — having evaluated the *core* rule set
+// now:  Err(ProveError::WrongProfile { checked: "XRechnung 3.0",
+//                                      claimed: "EN 16931" })
+```
+
+`Check::of::<P>()` is the constructor that makes the mismatch unrepresentable:
+the marker *is* the profile, so the two cannot be chosen separately. `Check::new`
+stays for the runtime case — a CLI resolving `--profile`, a service reading
+BT-24 — where the profile is not known until it runs.
 
 ---
 

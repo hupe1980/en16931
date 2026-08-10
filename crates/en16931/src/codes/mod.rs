@@ -243,7 +243,7 @@ impl VatCategory {
 impl fmt::Display for VatCategory {
     /// The code. Honours width, fill and alignment.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad(self.code())
+        crate::fmt::padded(f, self.code())
     }
 }
 

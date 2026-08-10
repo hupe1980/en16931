@@ -184,15 +184,44 @@ pub enum Error {
     /// CII reader should say so and not return an empty invoice.
     #[error("expected a CII CrossIndustryInvoice, found <{0}>")]
     NotCii(String),
+    /// Nested deeper than [`MAX_DEPTH`], and refused **before** being parsed.
+    ///
+    /// Not a style objection. The XML parser recurses once per level and aborts
+    /// the process on a stack overflow, which Rust cannot catch — so a document
+    /// nested a few hundred deep took the whole program down. CII's content
+    /// model is about a dozen levels deep at its worst, so nothing lawful is
+    /// anywhere near this.
+    #[error(
+        "nested {depth} elements deep, and the limit is {limit}. A document this \
+         deep is not a CII invoice; it is a denial of service, and the XML parser \
+         would abort the process rather than fail."
+    )]
+    TooDeep {
+        /// How deep the document actually goes.
+        depth: usize,
+        /// [`MAX_DEPTH`].
+        limit: usize,
+    },
 }
+
+/// The deepest element nesting [`from_str`] will accept — see [`Error::TooDeep`].
+pub const MAX_DEPTH: usize = crate::xml::MAX_DEPTH;
 
 /// Read a CII `rsm:CrossIndustryInvoice`.
 ///
 /// # Errors
 ///
-/// [`Error::Xml`] if the input is not well-formed, [`Error::NotCii`] if the
+/// [`Error::TooDeep`] if the input is nested past [`MAX_DEPTH`],
+/// [`Error::Xml`] if it is not well-formed, [`Error::NotCii`] if the
 /// document element is something else.
 pub fn from_str(xml: &str) -> Result<Read, Error> {
+    let depth = crate::xml::max_depth(xml);
+    if depth > MAX_DEPTH {
+        return Err(Error::TooDeep {
+            depth,
+            limit: MAX_DEPTH,
+        });
+    }
     let doc = roxmltree::Document::parse(xml)?;
     let root = doc.root_element();
     let name = root.tag_name().name();

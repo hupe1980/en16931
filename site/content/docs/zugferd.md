@@ -109,8 +109,31 @@ Most of the way there, and the half this crate can guarantee is the half it does
 The rest of this project is written against artefacts fetched and verified
 locally. **The ZUGFeRD and Factur-X specifications are not among them** — the
 profile names, attachment filenames and XMP structure here are stated from
-knowledge rather than from a fetched specification, and the crate marks them as
-such. Treat this page as the least-verified part of the documentation.
+knowledge rather than from a fetched specification, and the crate marks them ⚠.
+
+**The marks worked.** A downstream team building a PDF/A-3 writer needed exactly
+these values, checked them against the Factur-X reference implementation, and
+reported back. Everything matched — the five level names including the space in
+`EN 16931`, the filenames and their preference order, the four `fx:` XMP
+properties, and the finding that published guidance genuinely disagrees on
+`/AFRelationship`, so declining to pick a default is right rather than evasive.
+
+One did not, and is fixed: **`fx:Version` is the version of the Factur-X XMP
+schema, not of ZUGFeRD.** It has been the constant `1.0` since Factur-X 1.0, and
+a ZUGFeRD 2.3 file still carries `1.0`. It was documented as "the ZUGFeRD /
+Factur-X version", which invites comparing it against `2.3` — a check that
+rejects every conforming file.
+
+So the ⚠ stays, and now means *"corroborated against the reference
+implementation, not against CEN"*. That is a weaker claim than the normative
+text and a much stronger one than recollection. The two artefacts, for anyone
+repeating it: [`facturx.py`](https://github.com/akretion/factur-x/blob/master/src/facturx/facturx.py)
+and its [XMP extension schema](https://github.com/akretion/factur-x/blob/master/src/facturx/xmp/Factur-X_extension_schema.xmp).
+
+One value a writer needs and this crate does not hold: the XMP namespace URI is
+`urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#`. The mixed case and the
+trailing `#` are both load-bearing, and the sample PDFs in the Factur-X 1.0 info
+package spell it in lowercase, which is wrong.
 
 ## What is next
 

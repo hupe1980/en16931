@@ -22,7 +22,7 @@ invoice is *correct*; this crate decides what it looks like *on the wire*.
 |---|---|---|---|
 | `ubl` | ✅ | 13 crates | UBL 2.1 `Invoice` / `CreditNote`, both directions |
 | `cii` | — | 13 crates | UN/CEFACT CII D16B, both directions |
-| `zugferd` | — | **57 crates** | [ZUGFeRD / Factur-X](@/docs/zugferd.md) hybrid PDFs |
+| `zugferd` | — | **57 crates** | [ZUGFeRD / Factur-X](@/docs/zugferd.md) hybrid PDFs — **reading only** |
 | `serde` | — | + `serde` | `Serialize` / `Deserialize` on this crate's own types |
 
 `zugferd` is off by default and that matters: the PDF layer brings AES,
@@ -57,6 +57,28 @@ something the standard has no term for; `malformed` is how you find out they are
 sending something the model refuses at the boundary — a third decimal, a
 timestamp where a calendar date belongs. Neither is an error on its own, and
 neither is silent.
+
+### The document is hostile until it parses
+
+| | |
+|---|---|
+| **entity expansion** (billion laughs) | needs a DTD; the parser rejects every document carrying one |
+| **external entities** (XXE, file disclosure) | the same DTD refusal, for the same reason |
+| **nesting** | refused past `MAX_DEPTH` **before** parsing |
+
+The third is the one that had teeth. `roxmltree` recurses once per level of
+nesting and overflows the stack a few hundred levels in — and a stack overflow is
+**not a panic**: Rust can neither unwind it nor catch it, so the process aborts.
+Two lines of XML took down the caller, with nothing for `?` to catch.
+
+It cannot be handled afterwards, so it is refused before: one linear scan of the
+bytes, then `Error::TooDeep`. The limit is 64, the deepest of the 487 published
+instances is **9**, and the corpus suite fails if a future artefact release ships
+anything within three times the limit.
+
+Input size and time are deliberately *not* bounded here. A caller reading from a
+socket owns that decision, and a library that quietly capped it would be wrong
+for the batch job and useless for the endpoint.
 
 ## Writing
 

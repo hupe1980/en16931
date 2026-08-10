@@ -426,6 +426,100 @@ guarded! {
         terms: "BT-158-1", list: "UNTDID 7143", rule: "BR-CL-13";
 }
 
+// ── Value shapes, for the schemes that have one ───────────────────────────────
+
+/// The EAS schemes whose **value** this crate can check, not merely the code.
+///
+/// Deliberately one entry. See [`eas_value`] for why the list is short and why
+/// it is a list at all rather than a hidden branch.
+pub const CHECKED_EAS_SCHEMES: &[&str] = &["0088"];
+
+/// Whether [`eas_value`] can say anything about a value under `scheme`.
+///
+/// The honest half of a partial check. `eas_value` returning `Ok` means either
+/// *"verified"* or *"not verifiable here"*, and those are very different claims
+/// to build on — this is how a caller tells them apart.
+#[must_use]
+pub fn eas_value_is_checkable(scheme: &str) -> bool {
+    CHECKED_EAS_SCHEMES.contains(&scheme)
+}
+
+/// Check an electronic address **value** against its EAS scheme's own format.
+///
+/// # Why this exists, and why it covers one scheme
+///
+/// [`eas`] validates the scheme code. Nothing validates the content — and
+/// neither does `BR-CL-25`, which also only looks at the code. So
+/// `Identifier::eas(x, "0088")` asserts *"x is a GS1 GLN"* and no layer anywhere
+/// checks it. A downstream user put an eleven-digit BDEW Marktlokations-ID
+/// through that call: it returned `Ok`, validation passed, and the document went
+/// out claiming an eleven-digit German metering identifier was a thirteen-digit
+/// GLN. Syntactically valid, semantically false, unresolvable at the receiver.
+///
+/// The EAS list has over a hundred schemes and most have no fixed public
+/// format, so checking "the value" in general is not a job this crate can do
+/// honestly. What it can do is the handful whose format is fixed, published and
+/// **self-verifying** — where being wrong is detectable without a registry
+/// lookup. Today that is GS1's GLN and nothing else:
+///
+/// | Scheme | Check |
+/// |---|---|
+/// | `0088` GLN | 13 digits, GS1 mod-10 check digit |
+///
+/// Schemes are added here only when their specification is in hand. Guessing a
+/// format would produce the failure mode this whole module exists to prevent,
+/// one level further in — a check that passes wrong values and is trusted
+/// because it exists.
+///
+/// # Errors
+/// [`CodeError`] when `scheme` is one of [`CHECKED_EAS_SCHEMES`] and `value`
+/// does not have its shape. `Ok(())` for every other scheme — ask
+/// [`eas_value_is_checkable`] whether that means anything.
+pub fn eas_value(scheme: &str, value: &str) -> Result<(), CodeError> {
+    let problem = match scheme {
+        "0088" => gln_problem(value),
+        _ => None,
+    };
+    match problem {
+        None => Ok(()),
+        Some(hint) => Err(CodeError {
+            terms: EAS.terms,
+            list: "the set of valid GS1 GLNs",
+            rule: EAS.rule,
+            value: value.to_owned(),
+            hint: Some(hint),
+        }),
+    }
+}
+
+/// What is wrong with `value` as a GS1 GLN, if anything.
+///
+/// GLN is GS1's 13-digit key and shares GTIN-13's check digit: weights 1 and 3
+/// alternating from the left over the first twelve digits, and the check digit
+/// is whatever brings the total to a multiple of ten.
+fn gln_problem(value: &str) -> Option<String> {
+    if value.len() != 13 || !value.bytes().all(|b| b.is_ascii_digit()) {
+        return Some(format!(
+            "a GS1 GLN (scheme 0088) is exactly 13 digits, and this is {} character(s).              Identifiers that are not GLNs — a BDEW Marktlokations-ID, a customer number —              need their own EAS scheme, not 0088",
+            value.chars().count()
+        ));
+    }
+    let digits: Vec<u32> = value.bytes().map(|b| u32::from(b - b'0')).collect();
+    let sum: u32 = digits[..12]
+        .iter()
+        .enumerate()
+        .map(|(i, d)| d * if i % 2 == 0 { 1 } else { 3 })
+        .sum();
+    let expected = (10 - sum % 10) % 10;
+    (digits[12] != expected).then(|| {
+        format!(
+            "the GS1 check digit is wrong: 13 digits, but {} ends in {} where the \
+             first twelve require {expected}",
+            value, digits[12]
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

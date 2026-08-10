@@ -137,7 +137,7 @@ fn eq_ignore_case_concat(a1: &str, a2: &str, b1: &str, b2: &str) -> bool {
 
 impl fmt::Display for RuleId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad(self.0)
+        crate::fmt::padded(f, self.0)
     }
 }
 
@@ -175,11 +175,14 @@ impl core::fmt::Display for Severity {
     /// and by other tools, and every Schematron implementation in this field
     /// writes these three words.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.pad(match self {
-            Self::Fatal => "fatal",
-            Self::Warning => "warning",
-            Self::Info => "information",
-        })
+        crate::fmt::padded(
+            f,
+            match self {
+                Self::Fatal => "fatal",
+                Self::Warning => "warning",
+                Self::Info => "information",
+            },
+        )
     }
 }
 
@@ -678,25 +681,21 @@ fn sort_findings(findings: &mut [Finding]) {
 }
 
 /// Run the full EN 16931 core rule set.
+///
+/// Every rule in the registry, unconditionally — so `rules_checked()` is
+/// [`rules::CORE`]`.len()`, which is the number the documentation quotes.
+///
+/// It used to filter `EN-EXT-01` out whenever the invoice carried no extension
+/// data, on the reasoning that a rule with nothing to say has not been checked.
+/// That cost a 226-element `Vec` on the heap for the overwhelmingly common call,
+/// and it made every documented per-profile check count wrong by one against the
+/// tool's own output — a report reading `280 rule(s) checked` beside five files
+/// saying 282. `EN-EXT-01` is now evaluated like every other rule and simply
+/// finds nothing; [`profile::Profile::validate`] withdraws the *finding* where a
+/// profile can represent the data, which is the only place the distinction was
+/// ever load-bearing.
 #[must_use]
 pub fn validate(invoice: &Invoice) -> ValidationReport {
-    // `EN-EXT-01` warns that an invoice carries extension groups the target
-    // cannot represent. Core EN 16931 can represent none, so it applies exactly
-    // when the invoice has some — and running it on an invoice with no
-    // extensions is checking a rule that has nothing to say.
-    //
-    // `Profile::validate` already skips it on the same condition. Without the
-    // same skip here, this path and `profiles::EN16931.validate` report
-    // different `rules_checked` for identical findings, and a caller comparing
-    // the two sees a difference that means nothing.
-    if invoice.extensions.is_empty() {
-        let core: Vec<&'static Rule> = rules::CORE
-            .iter()
-            .copied()
-            .filter(|r| r.id.as_str() != "EN-EXT-01")
-            .collect();
-        return validate_with(invoice, &core);
-    }
     validate_with(invoice, &rules::CORE)
 }
 
@@ -741,12 +740,41 @@ pub struct Check {
 
 impl Check {
     /// Start a run against `profile`, with nothing suppressed.
+    ///
+    /// Takes the profile at *runtime*, which is what a CLI or a service needs:
+    /// the profile comes out of BT-24 or a flag, not out of the source. Use
+    /// [`Check::of`] when the profile is known at compile time and you intend to
+    /// call [`prove`](Self::prove).
     #[must_use]
     pub fn new(profile: &'static profile::Profile) -> Self {
         Self {
             profile,
             suppressed: Vec::new(),
         }
+    }
+
+    /// Start a run against the profile `P` names, with nothing suppressed.
+    ///
+    /// The constructor to reach for when the run ends in [`prove`](Self::prove):
+    /// the profile that is checked and the profile the proof claims are then the
+    /// same by construction, rather than by two call sites agreeing.
+    ///
+    /// ```
+    /// use en16931::profiles::XRechnung;
+    /// use en16931::validation::Check;
+    ///
+    /// let check = Check::of::<XRechnung>();
+    /// assert_eq!(check.profile().id, "XRechnung 3.0");
+    /// ```
+    #[must_use]
+    pub fn of<P: profile::ProfileMarker>() -> Self {
+        Self::new(P::PROFILE)
+    }
+
+    /// The profile this run checks against.
+    #[must_use]
+    pub fn profile(&self) -> &'static profile::Profile {
+        self.profile
     }
 
     /// Skip a rule, by any of its spellings.
@@ -798,16 +826,42 @@ impl Check {
         report
     }
 
-    /// Validate and hand back a typed proof — **only** with nothing suppressed.
+    /// Validate and hand back a typed proof — **only** with nothing suppressed,
+    /// and only for the profile this `Check` was built for.
+    ///
+    /// # The proof is of `P`, so `P` has to be the profile that ran
+    ///
+    /// `P` decides which rule set [`profile::Validated::new`] evaluates, and it
+    /// used to be the *only* thing that did: `self.profile` was never read here.
+    /// So `Check::new(&profiles::XRECHNUNG).prove::<En16931>(inv)` announced an
+    /// XRechnung run, checked the bare core rule set, and handed back a proof —
+    /// and the mirror image, `Check::new(&profiles::EN16931).prove::<XRechnung>`,
+    /// silently ran the stricter set. Either way the profile the caller named and
+    /// the profile that ran were unrelated, in the one method whose entire job is
+    /// to say *which* rule set a document passed.
+    ///
+    /// [`Check::of`] makes the mismatch unrepresentable; this check catches it
+    /// for callers who came in through [`Check::new`].
     ///
     /// # Errors
-    /// [`ProveError::Suppressed`] when any rule was suppressed, because the resulting
-    /// document has not passed the rule set the proof would claim. Use
-    /// [`Check::run`] and read the report instead.
+    /// [`ProveError::WrongProfile`] when `P` does not name this `Check`'s
+    /// profile. [`ProveError::Suppressed`] when any rule was suppressed, because
+    /// the resulting document has not passed the rule set the proof would claim —
+    /// use [`Check::run`] and read the report instead. [`ProveError::Rejected`]
+    /// when the invoice simply does not pass.
     pub fn prove<P>(&self, invoice: Invoice) -> Result<profile::Validated<P>, ProveError>
     where
         P: profile::ProfileMarker,
     {
+        // Pointer identity, not `id` equality: every profile is a distinct
+        // `static`, and two profiles that happened to share a name would still be
+        // two rule sets.
+        if !core::ptr::eq(self.profile, P::PROFILE) {
+            return Err(ProveError::WrongProfile {
+                checked: self.profile.id,
+                claimed: P::PROFILE.id,
+            });
+        }
         if !self.suppressed.is_empty() {
             return Err(ProveError::Suppressed(self.suppressed.clone()));
         }
@@ -817,7 +871,15 @@ impl Check {
 
 /// Why [`Check::prove`] did not produce a proof.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ProveError {
+    /// The type parameter named a different profile than the one being checked.
+    WrongProfile {
+        /// The profile this [`Check`] runs.
+        checked: &'static str,
+        /// The profile the requested proof would have claimed.
+        claimed: &'static str,
+    },
     /// Rules were suppressed, so no proof can honestly be made.
     Suppressed(Vec<String>),
     /// The invoice did not pass; the report says why.
@@ -827,6 +889,12 @@ pub enum ProveError {
 impl fmt::Display for ProveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::WrongProfile { checked, claimed } => write!(
+                f,
+                "cannot prove validity: this check runs {checked} and the proof \
+                 would claim {claimed}. Use `Check::of::<{claimed}>()`, or ask for \
+                 a proof of {checked}."
+            ),
             Self::Suppressed(ids) => write!(
                 f,
                 "cannot prove validity: {} rule(s) were suppressed ({}). A proof \
@@ -864,5 +932,72 @@ mod tests {
         // XRechnung has BR-DE-23-a / -b; padding must not mangle them.
         assert!(RuleId::new("BR-DE-23-a").matches("br-de-23-a"));
         assert!(!RuleId::new("BR-DE-23-a").matches("BR-DE-23-b"));
+    }
+
+    /// A proof names the rule set that actually ran, or it is not produced.
+    ///
+    /// The hole this closes: `prove` read only its type parameter, so the
+    /// profile a `Check` was built for and the profile a proof claimed were
+    /// two unrelated choices.
+    #[test]
+    fn a_proof_cannot_name_a_profile_the_check_did_not_run() {
+        use crate::profiles::{En16931, XRechnung};
+        use crate::validation::profile::ProfileMarker as _;
+        use crate::{Invoice, profiles};
+
+        let err = Check::new(&profiles::XRECHNUNG)
+            .prove::<En16931>(Invoice::default())
+            .expect_err("a core proof out of an XRechnung check");
+        assert!(
+            matches!(
+                err,
+                ProveError::WrongProfile {
+                    checked: "XRechnung 3.0",
+                    claimed: "EN 16931"
+                }
+            ),
+            "{err}"
+        );
+
+        // …and the other direction, which silently ran the *stricter* set.
+        let err = Check::new(&profiles::EN16931)
+            .prove::<XRechnung>(Invoice::default())
+            .expect_err("an XRechnung proof out of a core check");
+        assert!(matches!(err, ProveError::WrongProfile { .. }), "{err}");
+
+        // `Check::of` cannot be mismatched: the marker is the profile.
+        assert!(core::ptr::eq(
+            Check::of::<XRechnung>().profile(),
+            XRechnung::PROFILE
+        ));
+    }
+
+    /// The suppression refusal still applies once the profiles agree.
+    #[test]
+    fn a_matching_profile_still_cannot_prove_a_suppressed_run() {
+        use crate::Invoice;
+        use crate::profiles::En16931;
+
+        let err = Check::of::<En16931>()
+            .without("BR-02")
+            .prove::<En16931>(Invoice::default())
+            .expect_err("suppressed");
+        assert!(matches!(err, ProveError::Suppressed(_)), "{err}");
+    }
+
+    /// The bare core path and `profiles::EN16931` agree on both halves of a
+    /// report, including how many rules they say they ran.
+    ///
+    /// The `EN-EXT-01` skip exists for exactly this parity, and it changed shape
+    /// when the per-call `Vec` came out of it.
+    #[test]
+    fn the_bare_core_path_agrees_with_the_core_profile() {
+        use crate::{Invoice, profiles};
+
+        let inv = Invoice::default();
+        let bare = validate(&inv);
+        let via_profile = profiles::EN16931.validate(&inv);
+        assert_eq!(bare.rules_checked(), via_profile.rules_checked());
+        assert_eq!(bare.findings(), via_profile.findings());
     }
 }

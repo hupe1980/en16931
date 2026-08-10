@@ -178,11 +178,11 @@ wrong. See [contributing](@/docs/contributing.md#the-documentation-is-tested).
 ## Measured, not asserted
 
 ```text
-validate/core/5                      1.94 µs      ← the 5-line invoice
-validate/core/1000                 130.2  µs      ← linear in line count
-profile/EN 16931/5                   1.76 µs
+validate/core/5                      1.50 µs      ← the 5-line invoice
+validate/core/1000                 137.4  µs      ← linear in line count
+profile/EN 16931/5                   1.57 µs
 profile/XRechnung 3.0/5              6.30 µs
-profile/XRechnung 3.0 Extension/5    5.09 µs
+profile/XRechnung 3.0 Extension/5    5.05 µs
 ```
 
 `cargo bench`, on the maintainer's machine — the useful information is the *order

@@ -253,6 +253,33 @@ proptest! {
         let report = validate(&inv);
         prop_assert_eq!(report.is_valid(), report.fatal().count() == 0);
     }
+
+    /// **A finding never points somewhere that cannot exist.**
+    ///
+    /// [`Group::repeats`] says which groups may occur more than once, and an
+    /// occurrence index only means something in one of those: `BG-4[3]` claims a
+    /// fourth seller, and BG-4 is `1..1`. `Path::at(Group::Seller, 3)` builds
+    /// that happily, so nothing but this stops a rule emitting it.
+    ///
+    /// The converse is deliberately **not** asserted. `BR-16` reports "there is
+    /// no invoice line" at `BG-25` with no index, which is right: the finding is
+    /// about the group's absence, not about one of its occurrences.
+    ///
+    /// Until this existed, `repeats()` was public API whose only caller was its
+    /// own unit test — a documented invariant with nothing enforcing it, which is
+    /// how it came to disagree with the paths four rules were already emitting.
+    #[test]
+    fn every_finding_points_somewhere_that_can_exist(inv in any_invoice()) {
+        for p in profiles::ALL {
+            for f in p.validate(&inv).findings() {
+                prop_assert!(
+                    f.path.index.is_none() || f.path.group.repeats(),
+                    "{} reports {} at {}, and {:?} occurs at most once",
+                    p.id, f.rule, f.path, f.path.group
+                );
+            }
+        }
+    }
 }
 
 /// A minimal line carrying `net`. `InvoiceLine` has no `Default` on purpose —

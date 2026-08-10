@@ -194,6 +194,29 @@ would let you fix it is three layers away. This is a convenience and never a
 second source of truth: `guard` checks the same generated list the corresponding
 rule checks, and skipping the layer loses nothing but the earlier message.
 
+## Formatting never shortens a value
+
+Every `Display` in the crate used `Formatter::pad`, the standard helper — which,
+because that is what precision means for a *string*, truncates to N
+**characters**:
+
+```text
+format!("{:.2}",    amount)   →  "11"           ← 1190.00, as eleven euros
+format!("{:>12.4}", amount)   →  "        1190"
+format!("{:.4}",    date)     →  "2026"
+```
+
+A caller asking for two decimal places got a hundredth of the amount, right
+where a person reads it. The crate refuses to round an amount at a boundary
+because a plausible wrong number is worse than an error, and this was the same
+failure arriving through the formatter.
+
+Nothing truncates now, and **precision on the numeric types is a minimum number
+of fraction digits** — `{:.4}` on `1190.00` is `1190.0000`, `{:.0}` is still
+`1190.00`. Padding is lossless; rounding is not. Width, fill and alignment are
+unchanged, and `en16931::fmt` exposes the two helpers so a downstream `Display`
+can make the same promise.
+
 ## Editions are values, not crate versions
 
 `XRechnung 3.0` and a future `XRechnung 4.0` are *values* of the same type, not

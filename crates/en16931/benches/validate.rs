@@ -9,12 +9,17 @@
 //!
 //! Run with `cargo bench`. The interesting comparisons are:
 //!
-//! * `core/5-lines` — the headline number.
-//! * `xrechnung/5-lines` — 280 rules instead of 225, so the marginal cost of a
-//!   profile is visible.
-//! * `core/100-lines` — whether the per-line rules stay linear. A validator that
-//!   goes quadratic on line count is fine on examples and dies on a telecoms
-//!   bill with 5 000 call records.
+//! * `validate/core/5` — the headline number.
+//! * `profile/XRechnung 3.0/5` — 282 checks instead of 227, so the marginal cost
+//!   of a profile is visible.
+//! * `validate/core/100` and `validate/core/1000` — whether the per-line rules
+//!   stay linear. A validator that goes quadratic on line count is fine on
+//!   examples and dies on a telecoms bill with 5 000 call records.
+//!
+//! Those are the ids `criterion` actually prints. This list named
+//! `core/5-lines` and `xrechnung/5-lines`, neither of which has ever existed —
+//! a documentation bug in the one file whose whole subject is measuring rather
+//! than asserting.
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use en16931::invoice::*;

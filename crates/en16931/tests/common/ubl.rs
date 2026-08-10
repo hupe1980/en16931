@@ -13,6 +13,15 @@
 //! would make the crate that must not know about syntax depend on one that is
 //! nothing but syntax.
 //!
+//! # Why `tests/common/` and not `tests/ubl.rs`
+//!
+//! Cargo makes every `tests/*.rs` an integration-test **binary**. As a sibling
+//! file this was compiled twice — once as `mod ubl;` inside `conformance`, and
+//! once on its own, where it declares no `#[test]` and so reported
+//! `0 passed; 0 failed` on every run. A suite that has never had a test in it
+//! printing a green result line is the exact shape of the failure this crate's
+//! conformance gate exists to prevent.
+//!
 //! # It never silently drops anything
 //!
 //! Every element it walks is either mapped or recorded in [`Reader::unmapped`].

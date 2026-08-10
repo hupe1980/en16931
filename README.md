@@ -5,7 +5,8 @@ business rules, and the UBL / CII / ZUGFeRD bindings that carry them on the wire
 
 [**Documentation**](https://hupe1980.github.io/en16931) ·
 [API reference](https://docs.rs/en16931) ·
-[crates.io](https://crates.io/crates/en16931)
+[crates.io](https://crates.io/crates/en16931) ·
+[Changelog](CHANGELOG.md)
 
 Three crates, one workspace.
 
@@ -121,15 +122,22 @@ because a number written down in six places is a number nobody rechecks.
 ### Releasing
 
 All three crates share one version (`[workspace.package]`), so one tag releases
-all of them:
+all of them, and [`CHANGELOG.md`](CHANGELOG.md) carries one entry for the three:
 
 ```sh
-git tag v0.3.0 && git push --tags
+# 1. move the Unreleased section of CHANGELOG.md under the new version
+# 2. bump `[workspace.package] version` and the two dependency requirements
+git tag v0.4.0 && git push --tags
 ```
 
 They publish in dependency order. That order is not a convention to remember:
 each crate requires the one below it by version as well as by path, so
 crates.io rejects it until the model crate is up.
+
+The changelog says *why*, not only *what*, and it is the one document that is
+**not** scanned by the documented-number suite: recording what was true at each
+release means holding superseded figures on purpose, which is the one thing that
+scanner cannot tell from drift.
 
 ---
 

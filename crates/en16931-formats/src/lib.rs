@@ -43,7 +43,7 @@
 //! |---|---|---|---|
 //! | [`ubl`] | ✅ | 13 crates | UBL 2.1, both directions |
 //! | [`cii`] | — | 13 crates | UN/CEFACT CII D16B, both directions |
-//! | [`zugferd`] | — | **57 crates** | ZUGFeRD / Factur-X hybrid PDFs |
+//! | [`zugferd`] | — | **57 crates** | ZUGFeRD / Factur-X hybrid PDFs — **reading only**, see [`zugferd`] |
 //!
 //! `zugferd` is off by default and that matters: `lopdf` brings AES, ChaCha20,
 //! SHA-2, `getrandom` and `libc`, and the result does not build for
@@ -78,6 +78,35 @@
 //! assert!(read.unmapped.is_empty(), "nothing was silently dropped");
 //! # }
 //! ```
+//!
+//! # Reading a document somebody else wrote
+//!
+//! Which is the only kind worth reading. Three ways an inbound document can
+//! attack the reader rather than inform it, and what happens to each:
+//!
+//! | | |
+//! |---|---|
+//! | **entity expansion** (billion laughs) | needs a DTD; the parser rejects every document carrying one |
+//! | **external entities** (XXE, file disclosure) | the same DTD refusal, for the same reason |
+//! | **nesting** | refused past [`ubl::MAX_DEPTH`] before parsing — see below |
+//!
+//! The third is the one that had teeth. `roxmltree` recurses once per level of
+//! nesting and overflows the stack a few hundred levels in, and a stack overflow
+//! is **not a panic**: Rust cannot unwind it and cannot catch it, so the process
+//! aborts. Two lines of XML took down the caller, with no report and nothing for
+//! `?` to catch.
+//!
+//! It cannot be handled afterwards, so it is refused before: one linear scan of
+//! the bytes, then [`ubl::Error::TooDeep`] or its CII twin. The limit is 64 and
+//! the deepest of the 487 published instances in the artefact tree is **nine**,
+//! which `tests/corpus.rs` measures rather than assumes.
+//!
+//! What this crate does **not** do is bound input size or time — a caller who
+//! reads from a socket owns that decision, and a library that quietly capped it
+//! would be wrong for the batch job and useless for the endpoint.
+//!
+//! [`ubl::MAX_DEPTH`]: crate::ubl::MAX_DEPTH
+//! [`ubl::Error::TooDeep`]: crate::ubl::Error::TooDeep
 //!
 //! # Attribution
 //!
@@ -224,16 +253,44 @@ pub enum Syntax {
 /// Returns `None` rather than guessing when the root is neither — "not an
 /// e-invoice at all" and "an e-invoice in the other syntax" need different
 /// messages, and a caller that cannot tell them apart writes a bad one.
+///
+/// # The prologue is skipped properly, not by shape
+///
+/// This used to split on `<` and take the first piece that began with neither
+/// `?` nor `!`. That reads a comment's *contents* as markup, so a document
+/// opening with
+///
+/// ```xml
+/// <!-- exported from <ERP> 4.2 -->
+/// <Invoice …>
+/// ```
+///
+/// sniffed as `ERP` and came back `None` — the file is a perfectly ordinary UBL
+/// invoice, and the CLI would have reported it as not an e-invoice at all.
+/// A comment, a processing instruction and a doctype each have their own
+/// terminator, so each is skipped by its own.
 #[must_use]
 pub fn sniff(xml: &str) -> Option<Syntax> {
-    let root = xml
-        .split('<')
-        .find(|s| !s.is_empty() && !s.starts_with('?') && !s.starts_with('!'))?;
-    let name = root
-        .split([' ', '>', '\t', '\n', '\r', '/'])
-        .next()?
-        .rsplit(':')
-        .next()?;
+    let mut rest = xml;
+    let name = loop {
+        rest = &rest[rest.find('<')? + 1..];
+        if let Some(body) = rest.strip_prefix("!--") {
+            // A comment may contain anything at all, `<` included.
+            rest = &body[body.find("-->")? + 3..];
+        } else if rest.starts_with('?') {
+            rest = &rest[rest.find("?>")? + 2..];
+        } else if rest.starts_with('!') {
+            // `<!DOCTYPE …>`. An internal subset re-enters this loop on its own
+            // `<!ENTITY …>` declarations and falls out at the real root.
+            rest = &rest[rest.find('>')? + 1..];
+        } else {
+            break rest
+                .split([' ', '>', '\t', '\n', '\r', '/'])
+                .next()?
+                .rsplit(':')
+                .next()?;
+        }
+    };
     match name {
         "Invoice" | "CreditNote" => Some(Syntax::Ubl),
         "CrossIndustryInvoice" => Some(Syntax::Cii),
@@ -264,6 +321,30 @@ mod tests {
             sniff("<?xml?>\n<!-- a note -->\n<Invoice>"),
             Some(Syntax::Ubl)
         );
+    }
+
+    /// A comment's *contents* are not markup, however much they look like it.
+    ///
+    /// Real exporters write their own name in a banner comment, and one of them
+    /// writing it in angle brackets made a perfectly ordinary UBL invoice sniff
+    /// as "not an e-invoice".
+    #[test]
+    fn sniff_is_not_fooled_by_markup_inside_a_comment() {
+        assert_eq!(
+            sniff("<!-- exported from <ERP> 4.2 -->\n<Invoice/>"),
+            Some(Syntax::Ubl)
+        );
+        assert_eq!(
+            sniff("<!--<CrossIndustryInvoice>--><Invoice/>"),
+            Some(Syntax::Ubl),
+            "the comment names the other syntax; the document is still UBL"
+        );
+        assert_eq!(
+            sniff("<?xml version=\"1.0\"?><!DOCTYPE Invoice><rsm:CrossIndustryInvoice>"),
+            Some(Syntax::Cii)
+        );
+        // An unterminated comment has no document element to find.
+        assert_eq!(sniff("<!-- never closed <Invoice>"), None);
     }
 
     /// The notice travels with the crate, and is not a second copy that can rot.

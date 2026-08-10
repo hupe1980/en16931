@@ -102,6 +102,24 @@ impl Identifier {
     /// # Ok::<(), en16931::codes::guard::CodeError>(())
     /// ```
     ///
+    /// # What this call asserts, and what it does not check
+    ///
+    /// **The scheme is validated. The content is not.** `eas(x, "0088")` states
+    /// that `x` *is a GS1 GLN*, and nothing here — nor `BR-CL-25`, which also
+    /// only looks at the scheme — checks that it is one.
+    ///
+    /// That is worth saying plainly because the `Result` invites the opposite
+    /// reading. A downstream user put an eleven-digit BDEW *Marktlokations-ID*
+    /// through `eas(malo, "0088")`; it returned `Ok`, `BR-CL-25` passed, and the
+    /// document went out asserting that an eleven-digit German metering
+    /// identifier was a thirteen-digit GLN. Syntactically valid, semantically
+    /// false, and unresolvable for any receiver that believed it. No rule in the
+    /// standard can catch that.
+    ///
+    /// [`Identifier::eas_checked`] additionally verifies the *value* for the
+    /// schemes whose format is fixed and publicly specified. Use it where the
+    /// scheme is one of those; this one where it is not.
+    ///
     /// # Errors
     /// [`CodeError`](crate::codes::guard::CodeError) when `scheme` is not in the
     /// CEF EAS code list, carrying the successor of a withdrawn code where the
@@ -111,6 +129,50 @@ impl Identifier {
         scheme: &str,
     ) -> Result<Self, crate::codes::guard::CodeError> {
         let scheme = crate::codes::guard::eas(scheme)?;
+        Ok(Self::schemed(content, scheme.as_str()))
+    }
+
+    /// As [`eas`](Self::eas), and **also** check the value against the scheme's
+    /// own format.
+    ///
+    /// Only for the schemes in [`guard::CHECKED_EAS_SCHEMES`], which is a short
+    /// list on purpose: it holds the ones whose format is fixed, publicly
+    /// specified and self-verifying. For every other scheme this behaves exactly
+    /// like [`eas`](Self::eas) and says so through
+    /// [`guard::eas_value_is_checkable`], so a caller can tell "verified" from
+    /// "not verifiable here" rather than reading `Ok` as the former.
+    ///
+    /// ```
+    /// use en16931::Identifier;
+    /// use en16931::codes::guard;
+    ///
+    /// // A real GLN, check digit and all.
+    /// assert!(Identifier::eas_checked("4012345000009", "0088").is_ok());
+    ///
+    /// // The BDEW Marktlokations-ID that started this: eleven digits, not a GLN.
+    /// let err = Identifier::eas_checked("51238696781", "0088").unwrap_err();
+    /// assert!(err.to_string().contains("13 digits"), "{err}");
+    ///
+    /// // A scheme with no shape check behaves as `eas`, and says so.
+    /// assert!(Identifier::eas_checked("anything", "0204").is_ok());
+    /// assert!(!guard::eas_value_is_checkable("0204"));
+    /// # Ok::<(), en16931::codes::guard::CodeError>(())
+    /// ```
+    ///
+    /// [`guard::CHECKED_EAS_SCHEMES`]: crate::codes::guard::CHECKED_EAS_SCHEMES
+    /// [`guard::eas_value_is_checkable`]: crate::codes::guard::eas_value_is_checkable
+    ///
+    /// # Errors
+    /// [`CodeError`](crate::codes::guard::CodeError) when the scheme is not in
+    /// the CEF EAS code list, or when it is one this crate can check and the
+    /// content does not have its shape.
+    pub fn eas_checked(
+        content: impl Into<String>,
+        scheme: &str,
+    ) -> Result<Self, crate::codes::guard::CodeError> {
+        let content = content.into();
+        let scheme = crate::codes::guard::eas(scheme)?;
+        crate::codes::guard::eas_value(scheme.as_str(), &content)?;
         Ok(Self::schemed(content, scheme.as_str()))
     }
 
@@ -221,7 +283,7 @@ impl DocumentReference {
 
 impl fmt::Display for DocumentReference {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad(&self.0)
+        crate::fmt::padded(f, &self.0)
     }
 }
 

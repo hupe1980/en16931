@@ -33,7 +33,14 @@ ubl = ["dep:roxmltree"]
 ## is carried in CII as well as UBL, and every ZUGFeRD payload is CII — which is
 ## why `zugferd` enables this feature rather than duplicating the binding.
 cii = ["dep:roxmltree"]
-## ZUGFeRD / Factur-X: extracting the invoice from a hybrid PDF.
+## ZUGFeRD / Factur-X — **reading only**: pull the CII invoice out of a hybrid
+## PDF, with its XMP metadata and any disagreement between the two.
+##
+## There is no writer, and the name does not say so. A downstream user read
+## `zugferd` on crates.io, assumed it meant both directions, found no
+## `embed`-shaped function, concluded the feature was useless to them, and
+## reimplemented the extractor by hand. The module docs explain the absence at
+## length; the feature list is what people see first, so it says it here.
 ##
 ## **Off by default, and that matters.** `lopdf` brings AES, ChaCha20, SHA-2,
 ## `getrandom` and `libc` — a graph of 57 crates against 13 for `ubl` alone,

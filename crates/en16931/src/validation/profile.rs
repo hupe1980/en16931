@@ -74,12 +74,33 @@ pub type Rejected = Box<(Invoice, ValidationReport)>;
 /// [`Restriction`] uniform over both, and — crucially — makes the [`Path`] in a
 /// derived finding come from the accessor rather than from each rule.
 pub struct TermAccessor {
-    /// Which term.
+    /// Which term, or [`BtId(0)`](BtId) for a whole group.
     pub term: BtId,
     /// Its name in the standard, for messages.
     pub name: &'static str,
     /// `(where, value)` for every occurrence. `None` means absent.
     pub read: fn(&Invoice) -> Occurrences,
+}
+
+impl TermAccessor {
+    /// How this reads in a finding — `"Seller city (BT-37)"`.
+    ///
+    /// # Why the id is conditional
+    ///
+    /// An accessor may stand for a whole **group** rather than a term, and
+    /// `BtId(0)` is the sentinel for that. Appending it unconditionally made
+    /// `BR-DE-1` report *"PAYMENT INSTRUCTIONS (BG-16) **(BT-0)** shall be
+    /// present"* — a business-term id that does not exist, in the text of a
+    /// finding, in front of somebody trying to look it up. The group's own id is
+    /// already in `name` where that applies.
+    #[must_use]
+    pub fn label(&self) -> String {
+        if self.term == BtId(0) {
+            self.name.to_owned()
+        } else {
+            format!("{} ({})", self.name, self.term)
+        }
+    }
 }
 
 impl fmt::Debug for TermAccessor {
@@ -289,7 +310,7 @@ impl Restriction {
             let (ok, why, hint) = match self {
                 Self::Mandatory { .. } => (
                     value.as_deref().is_some_and(|v| !v.trim().is_empty()),
-                    format!("{} ({}) shall be present", acc.name, acc.term),
+                    format!("{} shall be present", acc.label()),
                     None,
                 ),
                 Self::NotUsed { .. } => (
@@ -301,19 +322,14 @@ impl Restriction {
                     // document could satisfy either reading of it. Whitespace is
                     // not a value in any of these terms.
                     value.as_deref().is_none_or(|v| v.trim().is_empty()),
-                    format!("{} ({}) shall not be used", acc.name, acc.term),
+                    format!("{} shall not be used", acc.label()),
                     None,
                 ),
                 Self::CodeValues { allowed, .. } => {
                     let v = value.as_deref();
                     (
                         v.is_none_or(|v| allowed.contains(&v)),
-                        format!(
-                            "{} ({}) shall be one of: {}",
-                            acc.name,
-                            acc.term,
-                            allowed.join(", ")
-                        ),
+                        format!("{} shall be one of: {}", acc.label(), allowed.join(", ")),
                         // A profile's code list is narrower than the core one,
                         // so a rejected value is usually a *lawful* EN 16931
                         // code this CIUS does not admit. Saying which of the two
@@ -486,44 +502,39 @@ pub struct Profile {
 
 impl Profile {
     /// Validate `invoice` against the core rules plus this profile.
+    ///
+    /// Every check this profile carries runs, so `rules_checked()` is exactly
+    /// [`check_ids`](Self::check_ids)`().count()` — the number the documentation
+    /// quotes, for every profile, on every document.
     #[must_use]
     pub fn validate(&self, invoice: &Invoice) -> ValidationReport {
-        // `EN-EXT-01` is about *this* profile's capabilities, so it is skipped
-        // when the profile can represent everything the invoice carries. The
-        // core rule set assumes the worst, because core EN 16931 can represent
-        // nothing.
-        let extensions_covered = invoice
+        let mut report = validate_with_all(
+            invoice,
+            super::rules::CORE.iter().copied(),
+            self.extra_rules,
+        );
+
+        // `EN-EXT-01` is the one core rule whose verdict depends on the *target*
+        // rather than on the document: it warns that extension data will be
+        // dropped, and the core rule set assumes the worst because core EN 16931
+        // can represent nothing. A profile that can hold every group the invoice
+        // carries withdraws the finding.
+        //
+        // Withdrawing the finding, not skipping the rule. Filtering it out of
+        // the rule sequence is what it used to do, and that made `rules_checked`
+        // one lower than every published count for any invoice without extension
+        // data — which is nearly all of them. The check ran; it had nothing to
+        // report. A plain `==` on the id is right: this one is written by this
+        // crate and a user's spelling never reaches here.
+        if invoice
             .extensions
             .populated()
             .iter()
-            .all(|g| self.extensions.contains(g));
+            .all(|g| self.extensions.contains(g))
+        {
+            report.findings.retain(|f| f.rule != "EN-EXT-01");
+        }
 
-        let mut report = if extensions_covered {
-            // The common case, and note that it *includes an invoice with no
-            // extension data at all* — `all()` over an empty list is true. So
-            // this branch runs for almost every document, and the borrowed
-            // iterator is the one worth having; a comment here once claimed the
-            // opposite branch was the common one, which had it exactly backwards.
-            //
-            // A plain `==` is right: this id is one this crate writes, and a
-            // user's spelling never reaches here.
-            validate_with_all(
-                invoice,
-                super::rules::CORE
-                    .iter()
-                    .copied()
-                    .filter(|r| r.id.as_str() != "EN-EXT-01"),
-                self.extra_rules,
-            )
-        } else {
-            // The invoice carries extension data this profile cannot represent,
-            // so `EN-EXT-01` has something to say and runs.
-            validate_with_all(
-                invoice,
-                super::rules::CORE.iter().copied(),
-                self.extra_rules,
-            )
-        };
         let mut findings = Vec::new();
         for restriction in self.restrictions {
             restriction.check(invoice, &mut findings);
@@ -909,6 +920,29 @@ mod restriction_tests {
         // requirement the profile never stated.
         inv.type_code = None;
         assert!(!EVERY_VARIANT.validate(&inv).has("T-CODES"));
+    }
+
+    /// A whole-group accessor does not invent a business-term id.
+    ///
+    /// `BtId(0)` is the sentinel for "this stands for a group, not a term", and
+    /// appending it made `BR-DE-1` report *"PAYMENT INSTRUCTIONS (BG-16)
+    /// (BT-0) shall be present"* — an id nobody can look up, in the text of a
+    /// finding.
+    #[test]
+    fn a_group_restriction_does_not_report_bt_0() {
+        let label = terms::PAYMENT_INSTRUCTIONS.label();
+        assert_eq!(label, "PAYMENT INSTRUCTIONS (BG-16)");
+        assert!(!label.contains("BT-0"));
+        // …and a real term still carries its id.
+        assert_eq!(terms::SELLER_CITY.label(), "Seller city (BT-37)");
+
+        let report = crate::profiles::XRECHNUNG.validate(&Invoice::default());
+        let f = report
+            .findings()
+            .iter()
+            .find(|f| f.rule == "BR-DE-1")
+            .expect("BG-16 is absent from a default invoice");
+        assert!(!f.message.contains("BT-0"), "{}", f.message);
     }
 
     /// Findings from restrictions carry the profile's own id and a term path.

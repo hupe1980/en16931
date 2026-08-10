@@ -1059,3 +1059,48 @@ fn the_documented_profile_check_counts_are_measured() {
         wrong.join("\n")
     );
 }
+
+/// …and the number a **report** prints is that same number, on any document.
+///
+/// The two used to differ by one. `EN-EXT-01` was filtered out of the rule
+/// sequence whenever the target could represent whatever extension data the
+/// invoice carried — which, for an invoice carrying none, is every profile and
+/// every document. So five files quoted 282 for XRechnung and the tool printed
+/// `280 rule(s) checked` under a suppression that removed one.
+///
+/// The rule now runs and its *finding* is withdrawn instead, which is the only
+/// place the distinction ever mattered. This pins that, because the difference
+/// is invisible until someone reads a report next to a README.
+#[test]
+fn a_report_says_it_checked_what_the_profile_registers() {
+    use en16931::extensions::SubInvoiceLine;
+
+    let mut with_extension = xrechnung_valid();
+    with_extension.extensions.sub_invoice_lines = vec![(
+        0,
+        vec![SubInvoiceLine {
+            line: with_extension.lines[0].clone(),
+            vat: Some(with_extension.lines[0].vat.clone()),
+            children: vec![],
+        }],
+    )];
+
+    for (label, inv) in [
+        ("empty", Invoice::default()),
+        ("with extension data", with_extension),
+    ] {
+        for p in profiles::ALL {
+            assert_eq!(
+                p.validate(&inv).rules_checked(),
+                p.check_ids().count(),
+                "{} on an {label} invoice reports a count it cannot justify",
+                p.id
+            );
+        }
+        assert_eq!(
+            en16931::validate(&inv).rules_checked(),
+            profiles::EN16931.check_ids().count(),
+            "the bare core path on an {label} invoice"
+        );
+    }
+}

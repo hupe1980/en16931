@@ -58,13 +58,50 @@ pub struct Date {
 }
 
 impl Date {
-    /// Construct from parts, validating that the day exists.
+    /// The first representable day, `0000-01-01`.
+    ///
+    /// See [`Date::new`] for why the year is bounded at all.
+    pub const MIN: Self = Self {
+        year: 0,
+        month: 1,
+        day: 1,
+    };
+    /// The last representable day, `9999-12-31`.
+    pub const MAX: Self = Self {
+        year: 9999,
+        month: 12,
+        day: 31,
+    };
+
+    /// Construct from parts, validating that the day exists **and that the year
+    /// is four digits**.
+    ///
+    /// # Why the year is bounded
+    ///
+    /// §6.5.9 does not say "a date"; it cites ISO 8601:2004 §5.2.1.1, the
+    /// *calendar date complete representation*, which is `YYYY-MM-DD` — four
+    /// digits, exactly. [`Date::parse`] has always enforced that. This did not,
+    /// so the type held two different ideas of what a date is: `Date::new(50_000, 1, 1)`
+    /// succeeded, printed `50000-01-01`, and `Date::parse` rejected its own
+    /// `Display` output. Nothing downstream could read it either — it is not a
+    /// lawful BT-2, no XML schema accepts it, and neither `time::Date` nor
+    /// anything else in the ecosystem represents it.
+    ///
+    /// Closing that also makes the conversions out of this type **infallible**,
+    /// which is what they should always have been: every `Date` now fits every
+    /// date library this crate bridges to.
     ///
     /// # Errors
-    /// [`ParseDateError::NotACalendarDay`] for a month outside 1–12 or a day
-    /// outside the month's length, leap years included.
+    /// [`ParseDateError::NotACalendarDay`] for a year outside `0000..=9999`, a
+    /// month outside 1–12, or a day outside the month's length — leap years
+    /// included.
     pub fn new(year: i32, month: u8, day: u8) -> Result<Self, ParseDateError> {
-        if month == 0 || month > 12 || day == 0 || day > days_in_month(year, month) {
+        if !(0..=9999).contains(&year)
+            || month == 0
+            || month > 12
+            || day == 0
+            || day > days_in_month(year, month)
+        {
             return Err(ParseDateError::NotACalendarDay { year, month, day });
         }
         Ok(Self { year, month, day })
@@ -153,8 +190,8 @@ impl Date {
     /// The calendar day `epoch_day` days after 1970-01-01.
     ///
     /// # Errors
-    /// [`ParseDateError::NotACalendarDay`] only for a value so far out that the
-    /// year does not fit an `i32` — every day in between is a real one.
+    /// [`ParseDateError::NotACalendarDay`] outside [`Date::MIN`]..=[`Date::MAX`],
+    /// which is every day ISO 8601's four-digit calendar date can name.
     pub fn from_epoch_day(epoch_day: i64) -> Result<Self, ParseDateError> {
         // Hinnant's `civil_from_days`, the exact inverse of the above.
         let z = epoch_day + 719_468;
@@ -167,11 +204,10 @@ impl Date {
         let d = doy - (153 * mp + 2) / 5 + 1;
         let m = mp + if mp < 10 { 3 } else { -9 };
         let year = y + i64::from(m <= 2);
-        let year = i32::try_from(year).map_err(|_| ParseDateError::NotACalendarDay {
-            year: i32::MAX,
-            month: m as u8,
-            day: d as u8,
-        })?;
+        // Saturating rather than erroring here: an out-of-range year is
+        // reported by `Date::new` below, with the value it actually computed,
+        // so there is one refusal rather than two that disagree.
+        let year = i32::try_from(year).unwrap_or(i32::MAX);
         // Casts are safe: the algorithm's own ranges are [1, 12] and [1, 31].
         Self::new(year, m as u8, d as u8)
     }
@@ -228,10 +264,10 @@ const fn days_in_month(year: i32, month: u8) -> u8 {
 impl fmt::Display for Date {
     /// `YYYY-MM-DD`. Honours width, fill and alignment.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad(&format!(
-            "{:04}-{:02}-{:02}",
-            self.year, self.month, self.day
-        ))
+        crate::fmt::padded(
+            f,
+            &format!("{:04}-{:02}-{:02}", self.year, self.month, self.day),
+        )
     }
 }
 
@@ -271,10 +307,14 @@ impl From<chrono::NaiveDate> for Date {
 }
 
 #[cfg(feature = "chrono")]
-impl TryFrom<Date> for chrono::NaiveDate {
-    type Error = Date;
-    fn try_from(d: Date) -> Result<Self, Self::Error> {
-        chrono::NaiveDate::from_ymd_opt(d.year, u32::from(d.month), u32::from(d.day)).ok_or(d)
+impl From<Date> for chrono::NaiveDate {
+    /// Infallible: `Date` is a four-digit calendar day, and `NaiveDate`'s range
+    /// is five orders of magnitude wider. This was a `TryFrom` whose error arm
+    /// no caller could reach, which is a fallible signature asking every call
+    /// site to handle nothing.
+    fn from(d: Date) -> Self {
+        chrono::NaiveDate::from_ymd_opt(d.year, u32::from(d.month), u32::from(d.day))
+            .expect("a four-digit calendar day is always a NaiveDate")
     }
 }
 
@@ -283,6 +323,23 @@ impl TryFrom<time::Date> for Date {
     type Error = ParseDateError;
     fn try_from(d: time::Date) -> Result<Self, Self::Error> {
         Self::new(d.year(), u8::from(d.month()), d.day())
+    }
+}
+
+#[cfg(feature = "time")]
+impl From<Date> for time::Date {
+    /// Infallible, and that took bounding the year to make true.
+    ///
+    /// `time::Date` spans -9999..=9999 without its `large-dates` feature, so
+    /// every four-digit calendar day fits. It did not fit before: this crate
+    /// accepted `Date::new(50_000, 1, 1)`, and a downstream user asking for this
+    /// impl reasoned it could not fail *because* `Date` is validated on
+    /// construction — which was the right instinct about a type that was not yet
+    /// keeping that promise. See [`Date::new`].
+    fn from(d: Date) -> Self {
+        let month = time::Month::try_from(d.month).expect("1..=12, checked on construction");
+        time::Date::from_calendar_date(d.year, month, d.day)
+            .expect("a four-digit calendar day is always a time::Date")
     }
 }
 
@@ -388,6 +445,36 @@ mod tests {
         }
     }
 
+    /// A `Date` is a **four-digit** calendar day, through every constructor.
+    ///
+    /// `parse` always enforced this and `new` did not, so the type disagreed
+    /// with itself: `Date::new(50_000, 1, 1)` succeeded and `Date::parse` then
+    /// rejected that value's own `Display` output. Nothing downstream could
+    /// hold it either, which is what made the conversions out of this type
+    /// fallible for no reachable reason.
+    #[test]
+    fn the_year_is_four_digits_everywhere() {
+        assert!(
+            Date::new(50_000, 1, 1).is_err(),
+            "five digits is not ISO 8601"
+        );
+        assert!(Date::new(-1, 1, 1).is_err());
+        assert!(Date::new(10_000, 1, 1).is_err());
+        assert_eq!(Date::new(0, 1, 1).expect("the first day"), Date::MIN);
+        assert_eq!(Date::new(9999, 12, 31).expect("the last day"), Date::MAX);
+
+        // The bound is reachable by arithmetic too, and refused there.
+        assert!(Date::MAX.checked_add_days(1).is_none());
+        assert!(Date::MIN.checked_add_days(-1).is_none());
+        assert!(Date::from_epoch_day(20_000_000).is_err());
+
+        // Every `Date` round-trips through its own `Display`, which is the
+        // property the missing bound broke.
+        for d in [Date::MIN, Date::MAX, Date::parse("2026-07-31").unwrap()] {
+            assert_eq!(Date::parse(&d.to_string()).expect("round trip"), d);
+        }
+    }
+
     #[test]
     fn ordering_is_chronological() {
         // BR-29 / BR-30 compare period endpoints, so `Ord` has to be right
@@ -400,6 +487,24 @@ mod tests {
         v.sort();
         assert_eq!(v[0], d("2025-12-31"));
         assert_eq!(v[2], d("2026-03-01"));
+    }
+
+    /// Both date-library bridges go **both ways**, as their feature
+    /// documentation says. `time` only went one way for two releases.
+    #[cfg(feature = "chrono")]
+    #[test]
+    fn chrono_round_trips_in_both_directions() {
+        let d = Date::parse("2026-06-30").unwrap();
+        let out: chrono::NaiveDate = d.into();
+        assert_eq!(Date::from(out), d);
+    }
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn time_round_trips_in_both_directions() {
+        let d = Date::parse("2026-06-30").unwrap();
+        let out: time::Date = d.into();
+        assert_eq!(Date::try_from(out).expect("a calendar day"), d);
     }
 
     #[cfg(feature = "serde")]

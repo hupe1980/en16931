@@ -131,7 +131,7 @@ impl fmt::Display for Percentage {
     /// Trailing zeros stripped: `19`, `7.5`, `0`. No `%` sign — the business
     /// term is the number, and the unit is implied by BT-119 being a rate.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad(&self.0.normalize().to_string())
+        crate::fmt::number(f, &self.0.normalize().to_string())
     }
 }
 
@@ -234,7 +234,7 @@ impl Quantity {
 impl fmt::Display for Quantity {
     /// Trailing zeros stripped. Honours width, fill and alignment.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad(&self.0.normalize().to_string())
+        crate::fmt::number(f, &self.0.normalize().to_string())
     }
 }
 

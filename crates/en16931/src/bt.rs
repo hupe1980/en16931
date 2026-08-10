@@ -22,7 +22,7 @@ pub struct BtId(pub u16);
 
 impl fmt::Display for BtId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad(&format!("BT-{}", self.0))
+        crate::fmt::padded(f, &format!("BT-{}", self.0))
     }
 }
 
@@ -34,7 +34,7 @@ pub struct BgId(pub u16);
 
 impl fmt::Display for BgId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad(&format!("BG-{}", self.0))
+        crate::fmt::padded(f, &format!("BG-{}", self.0))
     }
 }
 
@@ -243,7 +243,7 @@ impl fmt::Display for Path {
         if s.is_empty() {
             s.push_str("Invoice");
         }
-        f.pad(&s)
+        crate::fmt::padded(f, &s)
     }
 }
 

@@ -327,7 +327,7 @@ fn walk(a: &serde_json::Value, b: &serde_json::Value, at: &str, out: &mut Vec<Di
     }
 }
 
-/// Whether two JSON values are the same number written two ways.
+/// Whether two JSON values are the same number written to two **scales**.
 ///
 /// The model's numeric types serialise as **strings**, deliberately: a JSON
 /// number is a float in most readers, and an invoice total that survives a
@@ -341,18 +341,46 @@ fn walk(a: &serde_json::Value, b: &serde_json::Value, at: &str, out: &mut Vec<Di
 /// diff, because it manufactures work — the first real conversion this was run
 /// against reported three differences and all three were this.
 ///
+/// # Scale only, and that word is load-bearing
+///
+/// This compared `x.parse::<Decimal>() == y.parse::<Decimal>()`, which is a
+/// wider claim than the one above and a wrong one. Going through `serde` means
+/// the *type* is gone by the time the two values meet, so every `String` term
+/// was being compared as a number if it happened to look like one — and then
+/// **`"0001"` and `"1"` were the same invoice number.** So were the post codes
+/// `01067` (Dresden) and `1067`, the line ids `01` and `1`, and the order
+/// reference `007`. `en16931 diff` would print *"identical as invoices"* and
+/// exit `0` on a conversion that had eaten a leading zero, which is the one
+/// answer a pipeline acts on.
+///
+/// A scale difference is precisely a difference in *trailing fractional* zeros,
+/// so that is what is compared. Leading zeros are text, and text is what a
+/// document reference is.
+///
 /// Only string-to-string: a string against a number, or against `null`, is a
 /// genuine change of shape.
 fn same_number(a: &serde_json::Value, b: &serde_json::Value) -> bool {
     let (Some(x), Some(y)) = (a.as_str(), b.as_str()) else {
         return false;
     };
-    match (
-        x.parse::<rust_decimal::Decimal>(),
-        y.parse::<rust_decimal::Decimal>(),
-    ) {
-        (Ok(p), Ok(q)) => p == q,
-        _ => false,
+    // Both have to be decimals at all, so a term like `"REF.0"` against `"REF"`
+    // is never quietly folded together.
+    if x.parse::<rust_decimal::Decimal>().is_err() || y.parse::<rust_decimal::Decimal>().is_err() {
+        return false;
+    }
+    trimmed_scale(x) == trimmed_scale(y)
+}
+
+/// `"25.00"` → `"25"`, `"1.50"` → `"1.5"`, `"0001"` → `"0001"`.
+fn trimmed_scale(s: &str) -> &str {
+    let Some((int, frac)) = s.split_once('.') else {
+        return s;
+    };
+    let kept = frac.trim_end_matches('0').len();
+    if kept == 0 {
+        int
+    } else {
+        &s[..int.len() + 1 + kept]
     }
 }
 
@@ -461,9 +489,9 @@ pub fn profiles(o: &mut String) {
     }
     let _ = writeln!(
         o,
-        "\nCHECKS counts the rules and restrictions a profile declares. A report says\n\
-         how many ran for the document in hand, which can be one lower: `EN-EXT-01`\n\
-         has nothing to say about an invoice carrying no extension data."
+        "\nCHECKS counts the rules and restrictions a profile declares, and a report\n\
+         says the same number for every document: every check runs, whether or not\n\
+         it has anything to report. `en16931 rules --profile <NAME>` lists them."
     );
     let _ = writeln!(o, "\nedition: {}", en16931::DEFAULT_EDITION);
 
@@ -528,6 +556,21 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 /// ```sh
 /// en16931 rules --format json > new.json && diff old.json new.json
 /// ```
+///
+/// # Restrictions are in it
+///
+/// A profile's §7.3.2 narrowings are *data* rather than predicates, so they are
+/// not `Rule`s — but they are published under real ids, they are what a German
+/// counterparty quotes (`BR-DE-3`, `BR-DE-15`, `BR-DE-17`), and they are counted
+/// in the CHECKS column `en16931 profiles` prints. Leaving them out made
+/// `--profile "XRechnung 3.0"` list 270 of the 282 checks it declares, and the
+/// twelve missing were the German ones. The JSON did not so much as mention
+/// them, which is the shape people diff across releases.
+///
+/// They are listed with `source: "profile"` — the same word
+/// [`en16931::report::Entry`] uses for a finding whose id resolves to no rule —
+/// because the wording is this crate's rendering of a narrowing, not an
+/// authority's sentence, and the catalogue must not imply otherwise.
 pub fn catalogue(
     o: &mut String,
     profile: Option<&'static Profile>,
@@ -559,6 +602,13 @@ pub fn catalogue(
         .filter(|r| term.is_none_or(|t| r.terms.contains(&t)))
         .filter(|r| seen.insert((r.id.as_str(), r.severity, r.text)))
         .collect();
+    // The profile's narrowings, filtered by the same `--term` as the rules.
+    let restrictions: Vec<&'static Restriction> = profile
+        .into_iter()
+        .flat_map(|p| p.restrictions.iter())
+        .filter(|r| term.is_none_or(|t| r.term().term == t))
+        .collect();
+
     match format {
         CatalogueFormat::Text => {
             let _ = writeln!(o, "{:<26} {:<12} {:<18} TEXT", "RULE", "SEVERITY", "SOURCE");
@@ -574,19 +624,36 @@ pub fn catalogue(
                     first_sentence(r.text),
                 );
             }
-            let _ = writeln!(o, "\n{} rule(s)", rules.len());
+            for r in &restrictions {
+                let _ = writeln!(
+                    o,
+                    "{:<26} {:<12} {:<18} {}",
+                    r.id(),
+                    // A restriction always rejects; §7.3.2 has no advisory
+                    // narrowing, and `Restriction::check` writes `Fatal`.
+                    "fatal",
+                    "profile",
+                    restriction_text(r),
+                );
+            }
+            let _ = writeln!(
+                o,
+                "\n{} check(s): {} rule(s) and {} restriction(s)",
+                rules.len() + restrictions.len(),
+                rules.len(),
+                restrictions.len()
+            );
             if let Some(p) = profile {
                 let _ = writeln!(
                     o,
-                    "as {p} runs them, including {} restriction(s) not listed here \
-                     (they are data, not rules — `en16931 explain BR-DE-3`)",
-                    p.restrictions.len(),
+                    "as {p} runs them. A restriction is data rather than a predicate \
+                     (§7.3.2) — `en16931 explain BR-DE-3` says which kind.",
                     p = p.id
                 );
             }
         }
         CatalogueFormat::Json => {
-            let out: Vec<_> = rules
+            let mut out: Vec<_> = rules
                 .iter()
                 .map(|r| {
                     let severity = profile
@@ -601,6 +668,16 @@ pub fn catalogue(
                     })
                 })
                 .collect();
+            out.extend(restrictions.iter().map(|r| {
+                serde_json::json!({
+                    "rule": r.id(),
+                    "severity": "fatal",
+                    "source": "a profile narrowing (EN 16931-1 §7.3.2), not a rule",
+                    "terms": [r.term().term.to_string()],
+                    "text": restriction_text(r),
+                    "restriction": restriction_kind(r),
+                })
+            }));
             let _ = writeln!(
                 o,
                 "{}",
@@ -613,6 +690,30 @@ pub fn catalogue(
                 }))
                 .expect("the value was just built")
             );
+        }
+    }
+}
+
+/// Which of §7.3.2's narrowings this is, as one stable token.
+const fn restriction_kind(r: &Restriction) -> &'static str {
+    match r {
+        Restriction::Mandatory { .. } => "mandatory",
+        Restriction::NotUsed { .. } => "not-used",
+        Restriction::CodeValues { .. } => "code-values",
+    }
+}
+
+/// A restriction rendered as one sentence, matching what a finding would say.
+///
+/// Uses [`TermAccessor::label`] rather than formatting the pair here, so this
+/// and the finding cannot describe the same narrowing two different ways.
+fn restriction_text(r: &Restriction) -> String {
+    let label = r.term().label();
+    match r {
+        Restriction::Mandatory { .. } => format!("{label} shall be present."),
+        Restriction::NotUsed { .. } => format!("{label} shall not be used."),
+        Restriction::CodeValues { allowed, .. } => {
+            format!("{label} shall be one of: {}.", allowed.join(", "))
         }
     }
 }
@@ -641,6 +742,39 @@ fn first_sentence(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A scale difference is not a difference; a **leading zero** is.
+    ///
+    /// The second half is the one that was wrong. Comparing parsed `Decimal`s
+    /// made `"0001"` and `"1"` the same invoice number, and `01067` and `1067`
+    /// the same Dresden post code — on a command whose exit code says whether a
+    /// conversion preserved the document.
+    #[test]
+    fn only_a_trailing_fractional_zero_is_not_a_difference() {
+        let s = |v: &str| serde_json::Value::String(v.to_owned());
+        for (x, y) in [("25", "25.0"), ("25.00", "25"), ("1.50", "1.5")] {
+            assert!(
+                same_number(&s(x), &s(y)),
+                "{x} vs {y} is a scale difference"
+            );
+        }
+        for (x, y) in [
+            ("0001", "1"),     // BT-1, an invoice number
+            ("01067", "1067"), // BT-53, a post code
+            ("01", "1"),       // BT-126, a line id
+            ("007", "7"),      // BT-13, an order reference
+            ("+5", "5"),       // a sign form is text too
+        ] {
+            assert!(
+                !same_number(&s(x), &s(y)),
+                "{x} vs {y} differs in more than scale"
+            );
+        }
+        // Not a number at all, and not folded together by the trimming.
+        assert!(!same_number(&s("REF.0"), &s("REF")));
+        // And a shape change is never a scale difference.
+        assert!(!same_number(&s("1"), &serde_json::Value::Null));
+    }
 
     #[test]
     fn wrapping_never_splits_a_word_or_loses_one() {

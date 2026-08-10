@@ -53,6 +53,13 @@ invoice because a volume was not mounted.
 en16931 validate out/*.xml --quiet || exit 1
 ```
 
+Hostile input lands on `2`, never on a crash. A document nested a few hundred
+elements deep used to abort the process — the XML parser recurses per level, and
+a stack overflow is not something Rust can catch — so `validate` exited `134`
+with no report. It is refused before parsing now. Entity expansion and XXE need a
+DTD, and the parser rejects any document carrying one.
+
+
 ## The commands
 
 ### `validate`
@@ -228,6 +235,17 @@ thing to diff across versions:
 ```sh
 en16931 rules --format json > new.json && diff old.json new.json
 ```
+
+`rules --profile <name>` lists **every check that profile declares**, rules and
+§7.3.2 restrictions alike, and its total is the same number `profiles` prints in
+its CHECKS column and a report prints as `rule(s) checked`. It used to list the
+rules only, so XRechnung showed 270 of its 282 checks and the twelve missing were
+the `BR-DE-*` narrowings every German counterparty quotes. A restriction is
+marked `profile` in the SOURCE column, and carries `"restriction": "mandatory" |
+"not-used" | "code-values"` in the JSON — the wording is this crate's rendering
+of a narrowing, not an authority's sentence, and the catalogue does not pretend
+otherwise.
+
 
 …and the shortest way to see the severity question the libraries spend a page
 on:

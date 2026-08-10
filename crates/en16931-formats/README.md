@@ -58,7 +58,7 @@ semantic rules do not depend on a syntax" is enforced rather than asked for, and
 |---|---|---|---|
 | `ubl` | ✅ | 13 crates | UBL 2.1 `Invoice` / `CreditNote`, both directions |
 | `cii` | — | 13 crates | UN/CEFACT CII D16B, both directions |
-| `zugferd` | — | **57 crates** | ZUGFeRD / Factur-X hybrid PDFs |
+| `zugferd` | — | **57 crates** | ZUGFeRD / Factur-X hybrid PDFs — **reading only** |
 | `serde` | — | + `serde` | `Serialize` / `Deserialize` on this crate's own types |
 
 `zugferd` is off by default and that matters: `lopdf` brings AES, ChaCha20,
@@ -157,6 +157,44 @@ assert!(read.malformed.is_empty()); // present, but not representable
 UBL's `<CreditNote>` has no `cbc:DueDate` and no `cac:ProjectReference`. Dropping
 them is correct; dropping them *quietly* means a payment due date vanishing
 between two systems with nothing in any log.
+
+---
+
+## 🛡️ Reading a document somebody else wrote
+
+Which is the only kind worth reading. Three ways an inbound document can attack
+the reader rather than inform it:
+
+| | |
+|---|---|
+| **entity expansion** (billion laughs) | needs a DTD; the parser rejects every document carrying one |
+| **external entities** (XXE, file disclosure) | the same DTD refusal, for the same reason |
+| **nesting** | refused past `MAX_DEPTH` **before** parsing |
+
+The third is the one that had teeth. `roxmltree` recurses once per level of
+nesting and overflows the stack a few hundred levels in — and a stack overflow is
+**not a panic**. Rust cannot unwind it and cannot catch it, so the process
+aborts: two lines of XML took down the caller, with no report, no log line and
+nothing for `?` to catch.
+
+It cannot be handled afterwards, so it is refused before. One linear scan of the
+bytes, then `Error::TooDeep`:
+
+```text
+nested 50001 elements deep, and the limit is 64. A document this deep is not a
+UBL invoice; it is a denial of service, and the XML parser would abort the
+process rather than fail.
+```
+
+The limit is **measured, not guessed**: the deepest of the 487 published
+instances in the artefact tree is **9**, and `tests/corpus.rs` fails if a future
+release ships anything within three times the limit. The headroom runs the other
+way too — the overflow was measured on the main thread's 8 MB, and a worker
+thread gets 2 MB, so a limit that fits `main` would still abort inside a server.
+
+What this crate does **not** do is bound input size or time. A caller reading
+from a socket owns that decision, and a library that quietly capped it would be
+wrong for the batch job and useless for the endpoint.
 
 ---
 

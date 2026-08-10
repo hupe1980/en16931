@@ -112,8 +112,8 @@
 //!
 //! [`Profile::missing_terms`]: validation::profile::Profile::missing_terms
 //!
-//! A five-line invoice validates in about **2 µs** through the core rules and
-//! under 7 µs through XRechnung's 280; `proptest` properties assert validation
+//! A five-line invoice validates in about **1.5 µs** through the core rules and
+//! under 7 µs through XRechnung's 282; `proptest` properties assert validation
 //! never panics, is deterministic, and never cites an unresolvable rule id.
 //!
 //! Out of scope, deliberately and named rather than quietly dropped: the 1 339
@@ -240,6 +240,7 @@ pub mod date;
 pub mod edition;
 pub mod error;
 pub mod extensions;
+pub mod fmt;
 pub mod identifier;
 pub mod invoice;
 pub mod numeric;
@@ -262,7 +263,11 @@ pub use extensions::{AdvancePayment, Extensions, SubInvoiceLine, ThirdPartyPayme
 pub use identifier::{DocumentReference, Identifier};
 pub use invoice::{DocumentKind, Invoice, InvoiceLine, InvoiceNote};
 pub use numeric::{Percentage, Quantity};
-pub use profiles::{En16931, PeppolBis3, XRechnung};
+// All five markers, not three. `XRechnungCvd` and `XRechnungExtension` were
+// reachable only as `profiles::XRechnungCvd` while their three siblings were at
+// the root, which reads as "these two are second-class" — they are not; they are
+// the two profiles a German integrator is most likely to need after the CIUS.
+pub use profiles::{En16931, PeppolBis3, XRechnung, XRechnungCvd, XRechnungExtension};
 pub use reconcile::{ReconcileError, Reconciler, reconcile};
 pub use report::Report;
 pub use validation::profile::{Profile, Validated};
@@ -315,6 +320,7 @@ pub mod prelude {
         AmountError, Attachment, BtId, Date, DocumentKind, DocumentReference, En16931, Finding,
         Group, Identifier, Invoice, InvoiceAmount, InvoiceLine, InvoiceNote, ParseAmountError,
         ParseDateError, Path, PeppolBis3, Percentage, Profile, Quantity, Severity, UnitPriceAmount,
-        Validated, ValidationReport, VatCategory, XRechnung, validate,
+        Validated, ValidationReport, VatCategory, XRechnung, XRechnungCvd, XRechnungExtension,
+        validate,
     };
 }

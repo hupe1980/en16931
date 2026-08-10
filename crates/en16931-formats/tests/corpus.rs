@@ -156,3 +156,78 @@ syntaxes! {
     // for the payer's, so this is outside the subset rather than a reader gap.
     "cii" => (cii, Cii, 100, &["SpecifiedTradeSettlementPaymentMeans/PayerSpecifiedDebtorFinancialInstitution"]),
 }
+
+/// **The depth limit is measured against the authorities' own documents.**
+///
+/// `ubl::MAX_DEPTH` exists because `roxmltree::Document::parse` recurses once
+/// per level of nesting and aborts the process on a stack overflow — which Rust
+/// cannot catch, so it has to be refused before it happens. A limit chosen by
+/// intuition is the wrong way to protect against that in both directions: too
+/// low and it rejects an invoice somebody actually sent, too high and it does
+/// not protect anything.
+///
+/// So it is compared against every published UBL and CII instance in the
+/// artefact tree — several hundred documents from three authorities, including
+/// the deliberately malformed ones. The floor asserted here is the headroom, not
+/// the limit: if a future artefact release ships something deeper than a third
+/// of `MAX_DEPTH`, that is worth knowing before a user finds out.
+#[test]
+fn the_depth_limit_clears_every_published_document() {
+    // Whichever syntax this build carries. The limit is one constant shared by
+    // both readers, so either half measures it.
+    #[cfg(feature = "ubl")]
+    let (limit, syntaxes) = (
+        en16931_formats::ubl::MAX_DEPTH,
+        vec![en16931_formats::Syntax::Ubl, en16931_formats::Syntax::Cii],
+    );
+    #[cfg(all(not(feature = "ubl"), feature = "cii"))]
+    let (limit, syntaxes) = (
+        en16931_formats::cii::MAX_DEPTH,
+        vec![en16931_formats::Syntax::Cii],
+    );
+
+    let mut deepest = 0usize;
+    let mut worst = String::new();
+    let mut seen = 0usize;
+    for syntax in syntaxes {
+        for (path, text) in documents(syntax) {
+            seen += 1;
+            // Counted independently of the crate's own scanner: a guard checked
+            // against a copy of itself checks nothing.
+            let d = nesting(&text);
+            assert!(
+                d <= limit,
+                "{} is {d} levels deep and the reader will refuse it",
+                path.display()
+            );
+            if d > deepest {
+                deepest = d;
+                worst = path.display().to_string();
+            }
+        }
+    }
+    if seen == 0 {
+        return; // no artefacts; `common::require` has already said so
+    }
+    println!("deepest of {seen} published documents: {deepest} ({worst})");
+    assert!(
+        deepest * 3 <= limit,
+        "the deepest published document is {deepest} levels ({worst}) and the \
+         limit is {limit}. That is less than three times the headroom — raise the \
+         limit deliberately, or find out why a document grew."
+    );
+}
+
+/// The corpus's own depth counter, kept separate from the crate's on purpose:
+/// a guard checked against a copy of itself checks nothing.
+fn nesting(xml: &str) -> usize {
+    let doc = match roxmltree::Document::parse(xml) {
+        Ok(d) => d,
+        Err(_) => return 0, // the negative instances include unparseable ones
+    };
+    doc.descendants()
+        .filter(roxmltree::Node::is_element)
+        .map(|n| n.ancestors().filter(roxmltree::Node::is_element).count())
+        .max()
+        .unwrap_or(0)
+}

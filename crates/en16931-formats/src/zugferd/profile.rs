@@ -119,7 +119,11 @@ impl Profile {
 
 impl fmt::Display for Profile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad(self.as_str())
+        // Not `Formatter::pad`: it truncates to `precision` characters, so
+        // `{:.2}` on `EN 16931` prints `EN` — a profile name that is not a
+        // profile. `en16931::fmt::padded` is the same helper the model crate's
+        // own types use, shared rather than copied.
+        en16931::fmt::padded(f, self.as_str())
     }
 }
 

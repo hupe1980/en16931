@@ -44,9 +44,8 @@
 //! The second is asserted to zero for every element the suite actually uses, so
 //! it cannot quietly grow.
 
-mod ubl;
-
 mod common;
+use common::ubl;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;

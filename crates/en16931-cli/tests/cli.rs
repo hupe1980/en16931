@@ -353,10 +353,15 @@ fn strict_turns_advisories_into_failures() {
 }
 
 /// The rule catalogue is derived from the registry, so it cannot drift from
-/// what the validator runs.
+/// what the validator runs — **including the restrictions**.
+///
+/// It used to list the rules only, so `--profile "XRechnung 3.0"` printed 270 of
+/// the 282 checks the profile declares and the twelve missing were the German
+/// ones every counterparty quotes. This test allowed it, by adding
+/// `p.restrictions.len()` back before comparing.
 #[test]
 fn the_catalogue_matches_what_each_profile_actually_runs() {
-    let count = |args: &[&str]| -> usize {
+    let stdout = |args: &[&str]| -> String {
         let out = cli()
             .args(args)
             .assert()
@@ -364,25 +369,43 @@ fn the_catalogue_matches_what_each_profile_actually_runs() {
             .get_output()
             .stdout
             .clone();
-        let text = String::from_utf8(out).expect("UTF-8");
+        String::from_utf8(out).expect("UTF-8")
+    };
+    let total = |args: &[&str]| -> usize {
+        let text = stdout(args);
         text.lines()
-            .find_map(|l| l.strip_suffix(" rule(s)"))
+            .find_map(|l| l.split_once(" check(s):").map(|(n, _)| n.to_owned()))
             .and_then(|n| n.trim().parse().ok())
             .unwrap_or_else(|| panic!("no count in:\n{text}"))
     };
 
-    // A profile's catalogue plus its restrictions is exactly `check_ids()`,
-    // which is what `profiles` prints. Two commands, one number.
+    // One number, from two commands: the catalogue's total is exactly
+    // `check_ids()`, which is what `profiles` prints in its CHECKS column and
+    // what a report prints as `rule(s) checked`.
     for p in en16931::profiles::ALL {
-        let listed = count(&["rules", "--profile", p.id]);
         assert_eq!(
-            listed + p.restrictions.len(),
+            total(&["rules", "--profile", p.id]),
             p.check_ids().count(),
-            "{} lists {listed} rules and declares {} checks",
-            p.id,
-            p.check_ids().count()
+            "{} — the catalogue and the profile disagree",
+            p.id
         );
     }
+
+    // And the restrictions are there by id, in both shapes, because a user
+    // grepping the catalogue for `BR-DE-15` is the case this exists for.
+    let text = stdout(&["rules", "--profile", "XRechnung 3.0"]);
+    for id in ["BR-DE-1", "BR-DE-15", "BR-DE-17", "BR-DE-21"] {
+        assert!(text.contains(id), "{id} missing from the text catalogue");
+    }
+    assert!(
+        !text.contains("BT-0"),
+        "a whole-group restriction must not invent a business-term id:\n{text}"
+    );
+    let json = stdout(&["rules", "--profile", "XRechnung 3.0", "--format", "json"]);
+    assert!(
+        json.contains("\"BR-DE-15\"") && json.contains("\"restriction\": \"mandatory\""),
+        "the JSON catalogue is what people diff across releases"
+    );
 }
 
 /// `--profile` reports the severity that profile uses, not the rule's own.
@@ -476,6 +499,74 @@ fn a_closed_pipe_is_silent() {
         !src.contains("println!") && !src.contains("print!("),
         "output.rs must build strings, not print — see `write_out`"
     );
+}
+
+// ── hostile input ────────────────────────────────────────────────────────────
+
+/// A document nobody would write must be **refused**, not fatal.
+///
+/// This command is pointed at files the user did not author, so the interesting
+/// inputs are the ones designed to hurt. All three below once produced, or would
+/// have produced, something other than "I could not read that":
+///
+/// * **Nesting.** `roxmltree` recurses per level and overflows the stack at a
+///   few hundred. That is not a panic — it aborts the process, exit `134`, with
+///   no report and nothing for `?` to catch. It is now refused before parsing.
+/// * **Billion laughs** and **XXE.** Both need a DTD, and the parser rejects any
+///   document carrying one; asserted here so a future parser swap cannot quietly
+///   re-open them.
+///
+/// The assertion that matters in every case is `code(2)` — *"could not read
+/// it"* — because the whole point of the exit codes is that a pipeline can tell
+/// that from *"this invoice is wrong"*.
+#[test]
+fn hostile_documents_are_refused_rather_than_fatal() {
+    let ns = "urn:oasis:names:specification:ubl:schema:xsd:Invoice-2";
+
+    let deep = write_temp(
+        "hostile-deep.xml",
+        &format!(
+            "<Invoice xmlns=\"{ns}\">{}{}</Invoice>",
+            "<a>".repeat(5_000),
+            "</a>".repeat(5_000)
+        ),
+    );
+    cli()
+        .args(["validate", deep.to_str().unwrap()])
+        .assert()
+        .code(2)
+        .stderr(contains("nested"));
+
+    let laughs = write_temp(
+        "hostile-laughs.xml",
+        &format!(
+            "<?xml version=\"1.0\"?>\n<!DOCTYPE Invoice [\n<!ENTITY e0 \"aaaaaaaaaa\">\n{}\n]>\n\
+             <Invoice xmlns=\"{ns}\"><ID>&e9;</ID></Invoice>",
+            (1..=9)
+                .map(|i| format!("<!ENTITY e{i} \"&e{};&e{};\">", i - 1, i - 1))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    );
+    cli()
+        .args(["validate", laughs.to_str().unwrap()])
+        .assert()
+        .code(2)
+        .stderr(contains("DTD"));
+
+    let xxe = write_temp(
+        "hostile-xxe.xml",
+        &format!(
+            "<?xml version=\"1.0\"?>\n\
+             <!DOCTYPE Invoice [<!ENTITY xxe SYSTEM \"file:///etc/passwd\">]>\n\
+             <Invoice xmlns=\"{ns}\"><ID>&xxe;</ID></Invoice>"
+        ),
+    );
+    cli()
+        .args(["validate", xxe.to_str().unwrap()])
+        .assert()
+        .code(2)
+        .stderr(contains("DTD"));
 }
 
 // ── diff ─────────────────────────────────────────────────────────────────────

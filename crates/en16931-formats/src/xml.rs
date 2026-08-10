@@ -41,6 +41,123 @@
 
 use core::fmt::Write as _;
 
+// ── Depth guard ───────────────────────────────────────────────────────────────
+
+/// The deepest element nesting either reader will accept.
+///
+/// # This is not a style limit. It is the only thing between a counterparty's
+/// document and `SIGABRT`.
+///
+/// `roxmltree::Document::parse` recurses once per level of nesting, and around
+/// five hundred levels it **overflows the stack**. A stack overflow is not a
+/// panic: Rust cannot unwind it and cannot catch it, so the process aborts. A
+/// validator whose entire job is to be pointed at documents someone else wrote
+/// therefore had a two-line denial of service in it —
+/// `en16931 validate theirs.xml` exiting `134` instead of `2`, and any service
+/// embedding [`crate::ubl::from_str`] simply dying.
+///
+/// It cannot be handled after the fact, so it is refused before. One linear scan
+/// of the bytes, no allocation, and the answer is a typed error.
+///
+/// # Why 64
+///
+/// Measured, not guessed. `deep_documents_are_refused_before_they_can_abort` in
+/// `tests/corpus.rs` walks every published UBL and CII instance in the artefact
+/// tree and asserts the deepest is far below this — the real answer is about a
+/// dozen, because both content models are shallow by construction.
+///
+/// The headroom goes the other way. The overflow measured at ~500 levels was on
+/// the main thread's 8 MB, in a debug build: roughly 16 KB of stack per level. A
+/// worker thread gets 2 MB by default, which is ~125 levels, so a limit chosen
+/// to fit the *main* thread would still abort inside a web server. 64 levels is
+/// five times the deepest real document and about 1 MB of stack in the worst
+/// build.
+pub(crate) const MAX_DEPTH: usize = 64;
+
+/// The two ends of the range, checked when the crate compiles rather than when
+/// a test runs — a bound on a constant is not something to discover at runtime.
+const _: () = {
+    assert!(
+        MAX_DEPTH >= 32,
+        "UBL and CII nest about a dozen deep; a limit this low would reject real invoices"
+    );
+    assert!(
+        MAX_DEPTH <= 100,
+        "the parser overflows a 2 MB worker-thread stack around 125 levels"
+    );
+};
+
+/// The deepest element nesting in `xml`, without parsing it.
+///
+/// Deliberately a scanner rather than a parser: the whole point is to answer
+/// before anything recurses. It is allowed to be approximate in one direction
+/// only — over-reporting depth would reject a lawful document, so comments,
+/// CDATA, processing instructions and quoted attribute values (in which `>` is
+/// legal, and appears in real invoices carrying URLs) are all skipped properly.
+pub(crate) fn max_depth(xml: &str) -> usize {
+    let b = xml.as_bytes();
+    let (mut i, mut depth, mut max) = (0usize, 0usize, 0usize);
+    let after = |from: usize, needle: &[u8]| -> usize {
+        b[from..]
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .map_or(b.len(), |p| from + p + needle.len())
+    };
+    while i < b.len() {
+        if b[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let rest = &b[i + 1..];
+        if rest.starts_with(b"!--") {
+            i = after(i + 4, b"-->");
+        } else if rest.starts_with(b"![CDATA[") {
+            i = after(i + 9, b"]]>");
+        } else if rest.starts_with(b"?") {
+            i = after(i + 2, b"?>");
+        } else if rest.starts_with(b"!") {
+            // `<!DOCTYPE …>`. `roxmltree` refuses these outright, which is what
+            // makes billion-laughs and XXE non-issues here; skipping it keeps
+            // this scanner from miscounting on the way to that refusal.
+            i = after(i + 2, b">");
+        } else if rest.starts_with(b"/") {
+            depth = depth.saturating_sub(1);
+            i = after(i + 2, b">");
+        } else {
+            // A start tag. `>` inside a quoted attribute value is legal, so the
+            // end of the tag is found with the quoting respected.
+            let (end, self_closing) = end_of_tag(b, i + 1);
+            if !self_closing {
+                depth += 1;
+                max = max.max(depth);
+            }
+            i = end;
+        }
+    }
+    max
+}
+
+/// `(index just past `>`, whether the tag closed itself)`.
+fn end_of_tag(b: &[u8], mut i: usize) -> (usize, bool) {
+    let mut quote = None::<u8>;
+    let mut last = b'<';
+    while i < b.len() {
+        let c = b[i];
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+        } else if c == b'"' || c == b'\'' {
+            quote = Some(c);
+        } else if c == b'>' {
+            return (i + 1, last == b'/');
+        }
+        last = c;
+        i += 1;
+    }
+    (b.len(), false)
+}
+
 /// How a syntax answers the serialiser's two questions.
 pub(crate) struct Rules {
     /// The child order for a parent element, by local name.
@@ -199,14 +316,14 @@ impl Xml {
     ///
     /// Returns the document and everything the syntax could not carry.
     pub fn finish(mut self) -> (String, Vec<String>) {
-        let root = self.stack.pop().expect("the root");
+        let mut root = self.stack.pop().expect("the root");
         debug_assert!(self.stack.is_empty(), "unbalanced group()");
         let mut out = String::with_capacity(4096);
         out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         let mut dropped = std::mem::take(&mut self.notes);
         let name = root.name.clone();
         render(
-            &root,
+            &mut root,
             &name,
             0,
             &mut out,
@@ -277,8 +394,16 @@ fn order_children(parent: &str, children: &mut Vec<Node>, dropped: &mut Vec<Stri
     });
 }
 
+/// Render `node`, sorting each level **in place**.
+///
+/// `&mut Node`, not `&Node`. It used to clone `node.children` at every level so
+/// that [`order_children`] had something mutable to sort — and `Node` is a
+/// recursive type, so each of those clones was a deep copy of the whole subtree.
+/// Rendering a thousand-line invoice therefore copied the document once per
+/// level of nesting, every string in it, before writing a byte. Sorting the real
+/// children costs nothing and reads the same.
 fn render(
-    node: &Node,
+    node: &mut Node,
     path: &str,
     depth: usize,
     out: &mut String,
@@ -313,9 +438,11 @@ fn render(
         return;
     }
     let _ = writeln!(out, ">");
-    let mut kids = node.children.clone();
-    order_children(&node.name, &mut kids, dropped, r);
-    for c in &kids {
+    // Disjoint field borrows: the sequence table is keyed by the parent's name
+    // and the sort mutates its children, and the two are different fields.
+    let Node { name, children, .. } = node;
+    order_children(name, children, dropped, r);
+    for c in children.iter_mut() {
         let child_path = if path.is_empty() {
             c.name.clone()
         } else {
@@ -337,7 +464,7 @@ fn render(
     for _ in 0..depth {
         out.push_str("  ");
     }
-    let _ = writeln!(out, "</{}>", node.name);
+    let _ = writeln!(out, "</{name}>");
 }
 
 /// Escape the five metacharacters, and drop control characters XML 1.0 cannot
@@ -423,6 +550,34 @@ mod tests {
         forbidden_path: |_| None,
         forbidden_attribute: |_| None,
     };
+
+    /// The scanner may over-report nothing, because over-reporting rejects a
+    /// lawful invoice. Each case below is a way of writing `<` or `>` that is
+    /// not a tag.
+    #[test]
+    fn depth_counts_elements_and_nothing_that_merely_looks_like_one() {
+        assert_eq!(max_depth(""), 0);
+        assert_eq!(max_depth("<a/>"), 0, "a self-closing element opens nothing");
+        assert_eq!(max_depth("<a></a>"), 1);
+        assert_eq!(max_depth("<a><b><c/></b></a>"), 2);
+        // Siblings are not depth.
+        assert_eq!(max_depth("<a><b/><b/><b/></a>"), 1);
+        // Markup inside a comment or CDATA is text.
+        assert_eq!(max_depth("<a><!-- <b><c><d> --></a>"), 1);
+        assert_eq!(max_depth("<a><![CDATA[<b><c><d>]]></a>"), 1);
+        assert_eq!(max_depth("<?xml version=\"1.0\"?><a></a>"), 1);
+        assert_eq!(max_depth("<!DOCTYPE a><a></a>"), 1);
+        // `>` inside a quoted attribute value is legal, and real invoices carry
+        // URLs and free text in attributes.
+        assert_eq!(max_depth("<a x=\"1>2\"><b/></a>"), 1);
+        assert_eq!(max_depth("<a x='a>b' y=\"c>d\"/>"), 0);
+        // An unterminated construct ends the scan rather than looping. Depth may
+        // be over-reported by one for a truncated start tag, and that is the one
+        // place it is allowed to be: the document is not well-formed, so the
+        // parser rejects it either way and no lawful invoice is affected.
+        assert_eq!(max_depth("<a><!-- never closed"), 1);
+        assert_eq!(max_depth("<a"), 1);
+    }
 
     #[test]
     fn base64_matches_rfc_4648_vectors() {

@@ -74,7 +74,7 @@ impl Code {
 
 impl core::fmt::Display for Code {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.pad(&self.0)
+        crate::fmt::padded(f, &self.0)
     }
 }
 

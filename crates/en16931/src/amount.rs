@@ -284,7 +284,7 @@ impl fmt::Display for InvoiceAmount {
         // `unsigned_abs` so `i64::MIN` formats rather than panicking.
         let abs = self.0.unsigned_abs();
         let s = format!("{sign}{}.{:02}", abs / UNITS as u64, abs % UNITS as u64);
-        f.pad(&s)
+        crate::fmt::number(f, &s)
     }
 }
 
@@ -562,7 +562,7 @@ impl UnitPriceAmount {
 impl fmt::Display for UnitPriceAmount {
     /// The exact value, trailing zeros stripped.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad(&self.0.normalize().to_string())
+        crate::fmt::number(f, &self.0.normalize().to_string())
     }
 }
 

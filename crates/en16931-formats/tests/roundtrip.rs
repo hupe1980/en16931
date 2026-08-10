@@ -277,3 +277,56 @@ fn the_two_syntaxes_agree() {
         diffs.join("\n")
     );
 }
+
+/// **A library caller gets an error, not a dead process.**
+///
+/// `crates/en16931-cli/tests/cli.rs` asserts the same thing through the command;
+/// this asserts it of the API, because most users never see the command and the
+/// failure mode is not one they can guard against themselves. `roxmltree`
+/// recurses per level of nesting and overflows the stack a few hundred levels
+/// in — a stack overflow aborts the process, so there is nothing to catch and
+/// nothing to log. Both readers therefore refuse before parsing.
+///
+/// A depth just past the limit is used deliberately: a depth past the *overflow*
+/// would take the test runner with it if the guard ever regressed, and a suite
+/// that dies is a suite with no failure message.
+#[test]
+fn a_document_nested_past_the_limit_is_an_error_in_both_readers() {
+    fn nested(root: &str, ns: &str, n: usize) -> String {
+        format!(
+            "<{root} xmlns=\"{ns}\">{}{}</{root}>",
+            "<a>".repeat(n),
+            "</a>".repeat(n)
+        )
+    }
+
+    #[cfg(feature = "ubl")]
+    {
+        use en16931_formats::ubl;
+        let ns = "urn:oasis:names:specification:ubl:schema:xsd:Invoice-2";
+        let deep = nested("Invoice", ns, ubl::MAX_DEPTH + 1);
+        match ubl::from_str(&deep) {
+            Err(ubl::Error::TooDeep { depth, limit }) => {
+                assert_eq!(limit, ubl::MAX_DEPTH);
+                assert!(depth > limit, "{depth} vs {limit}");
+            }
+            other => panic!("expected TooDeep, got {other:?}"),
+        }
+        // …and one level inside the limit still reads.
+        let ok = nested("Invoice", ns, ubl::MAX_DEPTH - 1);
+        assert!(ubl::from_str(&ok).is_ok(), "the limit is off by one");
+    }
+
+    #[cfg(feature = "cii")]
+    {
+        use en16931_formats::cii;
+        let ns = "urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100";
+        let deep = nested("CrossIndustryInvoice", ns, cii::MAX_DEPTH + 1);
+        assert!(matches!(
+            cii::from_str(&deep),
+            Err(cii::Error::TooDeep { .. })
+        ));
+        let ok = nested("CrossIndustryInvoice", ns, cii::MAX_DEPTH - 1);
+        assert!(cii::from_str(&ok).is_ok(), "the limit is off by one");
+    }
+}

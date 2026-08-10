@@ -36,7 +36,7 @@ The composition, by family:
 | Family | Count | What |
 |---|---:|---|
 | `BR-*` and the nine VAT families | 156 | cardinality, presence, the category tables |
-| `PEPPOL-EN16931-*` | 47 | Peppol BIS Billing 3.0 |
+| `PEPPOL-EN16931-*` | 46 | Peppol BIS Billing 3.0 |
 | `BR-DE-*` | 27 | XRechnung |
 | `BR-CO-*` | 24 | the totals and derivation chain |
 | `BR-CL-*` | 23 | code-list membership |
@@ -193,6 +193,51 @@ been withdrawn; use 0204 instead]
 Present on a small minority of findings — only where the crate genuinely knows
 more than the rule text, never as filler.
 
+## Deviations are allowed — and loud
+
+Real counterparties demand them. A buyer who will not send BT-10 does not care
+that `BR-DE-15` requires it, and refusing outright pushes people to fork the rule
+set or ignore the validator, which is worse. So `Check` offers suppression, and
+makes it impossible to hide.
+
+```rust
+use en16931::profiles::XRechnung;
+use en16931::{Invoice, validation::Check};
+
+let report = Check::of::<XRechnung>()
+    .without("BR-DE-15")             // the buyer will not send BT-10
+    .run(&Invoice::default());
+
+assert_eq!(report.suppressed(), ["BR-DE-15"]);
+assert!(report.to_string().contains("suppressed and NOT checked"));
+```
+
+The suppressed ids are on the report, printed by `Display`, carried in the JSON,
+and `rules_checked` drops by the number of checks that were **actually** removed
+— not by the number of requests, which would let a name resolving to nothing
+deduct from a count of checks that were never going to run.
+
+### A proof has to be earned twice over
+
+`Check::prove` hands back a [`Validated<P>`](@/docs/profiles.md) only when two
+things hold, and refuses on either.
+
+| Refusal | Why |
+|---|---|
+| `ProveError::Suppressed` | a rule set with a hole may accept documents the full set rejects, so a proof derived from it claims something untrue |
+| `ProveError::WrongProfile` | `P` names a profile this `Check` does not run |
+
+The second was a real hole rather than a hypothetical one. `prove::<P>()` read
+only its type parameter, so `Check::new(&profiles::XRECHNUNG).prove::<En16931>(inv)`
+announced an XRechnung run, evaluated the bare core rule set, and returned a
+proof — and the mirror image silently ran the *stricter* set. The profile named
+and the profile that ran were unrelated choices, in the one method whose whole
+job is to say which rule set a document passed.
+
+`Check::of::<P>()` is the constructor that makes the mismatch unrepresentable:
+the marker **is** the profile. `Check::new` stays for the runtime case a CLI
+resolving `--profile`, or a service reading BT-24, actually has.
+
 ## Reports you can store, diff and ship
 
 Two shapes: a versioned JSON one, and — behind `features = ["svrl"]` — **SVRL**,
@@ -272,6 +317,26 @@ is **deterministic and stably ordered**, and never cites a rule id that
 `proptest` rather than `cargo-fuzz`, on purpose: it runs in the ordinary suite on
 every commit. A property that only runs when someone remembers is a property that
 regresses.
+
+### The one failure that is not a panic
+
+Those properties generate *models*, and a model cannot be nested. A **document**
+can, and `en16931-formats` had the one crash a property suite over the model was
+never going to find: `roxmltree` recurses once per level of XML nesting, and at
+a few hundred levels it overflows the stack. That is not a panic — Rust cannot
+unwind a stack overflow and cannot catch it, so the process **aborts**.
+`en16931 validate theirs.xml` exited `134`, and a service embedding the reader
+simply died.
+
+It cannot be handled afterwards, so it is refused before: both readers measure
+nesting in one linear scan and return `TooDeep` past
+[`MAX_DEPTH`](https://docs.rs/en16931-formats/latest/en16931_formats/ubl/constant.MAX_DEPTH.html).
+The limit is 64 and the deepest of the 487 published instances is **9**, which
+the corpus suite measures rather than assumes.
+
+Two neighbouring attacks were already closed, and by the same principle of
+refusing rather than coping: `roxmltree` rejects any document carrying a DTD, so
+billion-laughs entity expansion and XXE file disclosure are both unreachable.
 
 ## What is next
 

@@ -89,7 +89,7 @@ impl Edition {
 
 impl fmt::Display for Edition {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad(self.designation())
+        crate::fmt::padded(f, self.designation())
     }
 }
 

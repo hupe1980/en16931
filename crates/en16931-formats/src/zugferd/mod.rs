@@ -99,7 +99,7 @@
 //! releases; a feature that does not exist is worse documentation than an
 //! absence, so it is gone. This section is the answer it was standing in for.
 //!
-//! # ⚠ Provenance
+//! # ⚠ Provenance, and what has since been corroborated
 //!
 //! [`en16931`]'s design was written against artefacts fetched into `spec/` and
 //! verified there. **The ZUGFeRD and Factur-X specifications are not among
@@ -110,6 +110,43 @@
 //! That warning is not boilerplate. This project already had one incident where
 //! two plausible specification identifiers were invented and an argument built
 //! on them; the fix was to check every transcribed value against its source.
+//!
+//! **The warning worked.** A downstream user building a writer needed exactly
+//! these values, went and checked them against the reference implementation, and
+//! reported back: every ⚠ value in this module is correct —
+//! [`Profile::as_str`]'s five Factur-X level names including the space in
+//! `EN 16931`, [`FILENAMES`] and their preference order, the four `fx:`
+//! properties and their spellings, and the observation behind
+//! [`Divergence::Relationship`] that the published sources genuinely disagree
+//! between `Alternative` and `Source` so this crate is right not to pick.
+//!
+//! One was **wrong**, and is fixed: `fx:Version` is the version of the Factur-X
+//! *XMP schema* — constant `1.0` — and was documented here as the ZUGFeRD
+//! version. See [`Xmp::version`].
+//!
+//! The two artefacts they checked against, for anyone repeating it:
+//!
+//! | | |
+//! |---|---|
+//! | [`facturx.py`](https://raw.githubusercontent.com/akretion/factur-x/master/src/facturx/facturx.py) | `FACTURX_LEVEL2xmp`, `XML_AFRelationship`, the filenames, and the hardcoded `"version": "1.0"` |
+//! | [`Factur-X_extension_schema.xmp`](https://raw.githubusercontent.com/akretion/factur-x/master/src/facturx/xmp/Factur-X_extension_schema.xmp) | the PDF/A extension schema, authored by PDFlib for the Factur-X 1.0 info package |
+//!
+//! Neither is the specification, so **the ⚠ stays**: these are the artefacts
+//! every implementation is built against, which is a different claim from the
+//! normative text and a weaker one. But it is a great deal better than one
+//! person's recollection, and the marks now mean "corroborated against the
+//! reference implementation, not against CEN" rather than "unchecked".
+//!
+//! One value a writer needs that is **not** in this crate, recorded here because
+//! it is the first thing to get wrong: the XMP namespace URI is
+//! `urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#`. The mixed case in
+//! `CrossIndustryDocument` and the trailing `#` are both load-bearing, and the
+//! PDFlib file notes that the sample PDFs in the Factur-X 1.0 info package use
+//! an all-lowercase spelling that is *not* correct.
+//!
+//! [`Profile::as_str`]: crate::zugferd::Profile::as_str
+//! [`Xmp::version`]: crate::zugferd::Xmp::version
+//! [`Divergence::Relationship`]: crate::zugferd::Divergence::Relationship
 
 mod extract;
 mod profile;

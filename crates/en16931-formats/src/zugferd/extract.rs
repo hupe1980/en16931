@@ -49,7 +49,26 @@ pub struct Xmp {
     /// `fx:DocumentFileName` — the embedded file's name, as the metadata
     /// claims it. May disagree with the file actually attached. ⚠
     pub document_filename: Option<String>,
-    /// `fx:Version` — the ZUGFeRD / Factur-X version. ⚠
+    /// `fx:Version` — the version of the Factur-X **XMP schema**, *not* of
+    /// ZUGFeRD.
+    ///
+    /// Constant `1.0` since Factur-X 1.0. A ZUGFeRD 2.3 file carries `1.0` here,
+    /// and so does every other conforming file: the reference implementation
+    /// hardcodes it beside the producer string and the timestamp, and never
+    /// derives it from the profile or the document version.
+    ///
+    /// ```python
+    /// # akretion/factur-x, src/facturx/facturx.py, _prepare_pdf_metadata_xml
+    /// key2value = { …, "version": "1.0", … }
+    /// ```
+    ///
+    /// This was documented as *"the ZUGFeRD / Factur-X version"*, which invites
+    /// exactly the wrong check: code comparing it against `"2.3"` rejects every
+    /// conforming ZUGFeRD 2.3 file it is given. Reported by a downstream user
+    /// who had built a writer, and confirmed here against the source above.
+    /// There is no XMP property carrying the ZUGFeRD version — the profile is
+    /// [`conformance_level`](Self::conformance_level), and the document version
+    /// is only in the payload's BT-24.
     pub version: Option<String>,
     /// `fx:ConformanceLevel` — the profile, in the XMP's own vocabulary. ⚠
     pub conformance_level: Option<String>,

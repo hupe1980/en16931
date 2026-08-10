@@ -157,15 +157,26 @@ and someone will eventually go looking for it in CEN's index.
 
 ## Releasing
 
-All three crates share one version, so one tag releases all of them:
+All three crates share one version, so one tag releases all of them, and
+[`CHANGELOG.md`](https://github.com/hupe1980/en16931/blob/main/CHANGELOG.md)
+carries one entry for the three:
 
 ```sh
-git tag v0.3.0 && git push --tags
+# 1. move the Unreleased section of CHANGELOG.md under the new version
+# 2. bump `[workspace.package] version` and the two dependency requirements
+git tag v0.4.0 && git push --tags
 ```
 
 They publish in dependency order, and that order is not a convention to remember:
 each crate requires the one below it by version as well as by path, so crates.io
 rejects a publish until the model crate is up.
+
+Changelog entries say **why**, not only what — a line reading *"fixed rule
+count"* tells a reader upgrading nothing about whether it affected them. The
+changelog is also the one document the [documented-number
+suite](#the-documentation-is-tested) does not scan: recording what was true at
+each release means holding superseded figures on purpose, and that is the one
+thing a drift scanner cannot tell from drift.
 
 ## This site
 
