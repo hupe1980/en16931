@@ -73,17 +73,23 @@
 //! | [`profiles`] | Rules run | Artefact coverage |
 //! |---|---:|---|
 //! | EN 16931 core | 227 | 223 / 223 CEN syntax-independent |
-//! | XRechnung 3.0 | 282 | **55 / 55** KoSIT asserts + **21 / 21** merged Peppol |
+//! | XRechnung 3.0 | 282 | **55 / 55** KoSIT UBL asserts + **21 / 21** merged Peppol |
 //! | XRechnung 3.0 CVD | 290 | + all 8 Clean Vehicles Directive rules |
-//! | XRechnung 3.0 Extension | 296 | + all 14 `BR-DEX-*` |
+//! | XRechnung 3.0 Extension | 296 | + 14 of the 15 `BR-DEX-*`; `BR-DEX-15` is a CII element check |
 //! | Peppol BIS Billing 3.0 | 273 | **46 / 46** `PEPPOL-EN16931-*` |
 //!
-//! …and at the severities those authorities publish. KoSIT re-levels nine CEN
-//! rules across its three scenarios — `BR-CL-23` to *warning* even for the plain
-//! CIUS, because CEN's unit-code table lags UN/ECE's — and
-//! [`Profile::levels`] carries all nine, checked against
-//! `scenarios.xml` by `tests/codelists.rs`. Reporting them as fatal, which this
-//! crate did, rejects invoices the German reference validator accepts.
+//! …and at the severities those authorities publish, which are not the
+//! severities the rules carry and are not written down in one place.
+//!
+//! | Where a severity is published | What it re-levels |
+//! |---|---|
+//! | `validator-configuration-xrechnung/scenarios.xml` `<customLevel>` | nine of **CEN's** rules across KoSIT's three scenarios — `BR-CL-23` to *warning* even for the plain CIUS, because CEN's unit-code table lags UN/ECE's |
+//! | the XRechnung Schematron's own `flag` | five of **KoSIT's** rules: `BR-DE-17`, `-21`, `-26`, `-27`, `-28` are `warning`, and `BR-DE-TMP-32` is `information` |
+//!
+//! Both are read. `tests/codelists.rs` compares the first against
+//! `scenarios.xml` and the second against all 121 severities the two
+//! Schematrons publish, because reporting any of them as fatal — which this
+//! crate did — rejects invoices the German reference validator accepts.
 //!
 //! [`Profile::levels`]: validation::profile::Profile::levels
 //!

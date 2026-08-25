@@ -19,26 +19,17 @@
 //! **profile** — because a profile is what a document declares in BT-24, and
 //! every deployed usage specification pins exactly one edition.
 //!
-//! # What is deliberately not here yet
+//! # What an [`Edition`] does not carry
 //!
-//! There is a rule that belongs with this:
+//! **No term assignments.** Knowing that a business term was introduced in a
+//! later edition than the target profile's would need a map from term to
+//! edition, and that map can only be built from the EN 16931-1:2026 normative
+//! text. `spec/` holds the 2017+A1 English text and nothing else, so any such
+//! map would be written from plausibility rather than from a source — which is
+//! the one thing this project does not do with transcribed values.
 //!
-//! ```text
-//! EN-EDITION-01 (fatal): a business term introduced in a later edition than the
-//!                        target profile's edition shall not be populated.
-//! ```
-//!
-//! It is **not implemented**, and the reason is not effort. That rule needs a
-//! map from business term to introducing edition, and building one requires the
-//! EN 16931-1:2026 normative text. This crate's `spec/` holds the 2017+A1
-//! English text and nothing else, so any such map would be reconstructed from
-//! memory — which is precisely the mistake this project has already made once,
-//! when two specification identifiers were written from plausibility and then
-//! reasoned from.
-//!
-//! [`Edition::En2026`] therefore exists as a classification a profile can carry,
-//! and carries **no term assignments**. When the text is in hand, the term map
-//! and `EN-EDITION-01` land together.
+//! So [`Edition::En2026`] is a classification a profile can carry, and
+//! [`Edition::is_implemented`] answers `false` for it.
 
 use core::fmt;
 
@@ -60,8 +51,8 @@ pub enum Edition {
     En2017A1,
     /// EN 16931-1:2026 — the ViDA / B2B revision.
     ///
-    /// Published, and no profile here targets it yet. See the module docs for
-    /// why the term-level half is deliberately absent.
+    /// Published, and no profile here targets it. See the module docs for why
+    /// it carries no term assignments.
     En2026,
 }
 

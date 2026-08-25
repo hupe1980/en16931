@@ -25,15 +25,14 @@
 //! # Ok(()) }
 //! ```
 //!
-//! # The three traps, and where they went
+//! # Three traps, and the accessor that avoids each
 //!
-//! Each of these was a genuine problem in `billing` 0.8 that the adapter had to
-//! work around with heuristics. All three were fixed upstream, in the only place
-//! they *could* be fixed — the engine knows which layer produced which position
-//! and which predicate selected its base; an adapter looking at a finished
-//! document never can.
+//! Each is a `billing` field whose obvious EN 16931 counterpart is the wrong
+//! one. The engine answers all three itself — it knows which layer produced
+//! which position and which predicate selected its base, and an adapter looking
+//! at a finished document never can.
 //!
-//! | Trap | Where it went |
+//! | Trap | Read this instead |
 //! |---|---|
 //! | `tax_total` is **not** BT-110 — a levy is a BG-21 charge inside the taxable base, so mapping it to BT-110 breaks `BR-CO-14` on every levy-bearing invoice | `vat_total()` / `charge_total()` |
 //! | `net_total` is neither BT-106 nor BT-109 — it is `BT-106 − BT-107`, which EN 16931 has no term for | `line_total()` / `taxable_total()` |
@@ -50,6 +49,7 @@
 //! | BT-20 | `meta.payment_terms` | header, terminator checked |
 //! | BT-29, BT-46 | `meta.issuer_id` / `recipient_id` | merged into the caller's [`Party`] |
 //! | BG-1 (BT-21, BT-22) | `meta.notes` | notes, with their subject codes |
+//! | BG-3 (BT-25, BT-26) | `meta.preceding` | preceding invoice references |
 //! | BG-14 | `meta.period` | header |
 //! | BG-25 | `net_positions()` | lines |
 //! | BG-20 | `discount_positions()` | allowances, sign flipped |
@@ -62,12 +62,23 @@
 //! `meta.period_label` and `meta.labels` are display text and arbitrary
 //! key/value pairs, with no business term at all.
 //!
-//! Two rows are newer than the rest and were unmappable before `billing` 0.13.
-//! BT-29 and BT-46 needed the ISO 6523 scheme to travel with the value — a bare
-//! string documented as "MP-ID, GLN, BDEW code, or free-form" cannot be given a
-//! `@schemeID` without guessing, and `BR-CL-10` checks that guess. BG-1 needed
-//! notes to be `0..n` with a subject code, because BT-21 is what a routing
-//! system reads and one uncoded string cannot carry it.
+//! A **late-payment penalty** is not mapped for a sharper reason. `billing`
+//! models one — simple interest under art. 2(6) of Directive 2011/7/EU plus the
+//! art. 6(1) recovery fee — and deliberately keeps it off `PaymentTerms`,
+//! because `BR-DE-18` gives a Skonto a micro-syntax inside BT-20 and gives a
+//! penalty none. Rendering it into BT-20 anyway would produce a `#…#` line the
+//! German regex rejects; putting it in the prose half would make it text no
+//! system reads. Default interest is generally outside the scope of VAT
+//! (art. 63 of the VAT Directive; CJEU C-222/81 *BAZ Bausystem*), so a penalty
+//! billed later is its own document with its own totals.
+//!
+//! Three rows depend on the engine modelling more than a string. BT-29 and
+//! BT-46 need the ISO 6523 scheme to travel with the value — "MP-ID, GLN, BDEW
+//! code, or free-form" cannot be given a `@schemeID` without guessing, and
+//! `BR-CL-10` checks that guess. BG-1 needs notes to be `0..n` with a subject
+//! code, because BT-21 is what a routing system reads. BG-3 is filled in by
+//! `reverse` from the document it reverses, which is why a credit note arrives
+//! here already saying what it credits.
 //!
 //! # What the adapter still owes
 //!
@@ -82,14 +93,21 @@
 //! 3. **Check BT-20's terminator.** See below. `billing` supplies it now; the
 //!    adapter verifies it rather than assuming it.
 //!
+//! `PEPPOL-EN16931-R120` is deliberately *not* a fourth. Both crates can check
+//! it and only one should: BT-146 crosses as an uncapped `UnitPriceAmount` and
+//! BT-131 as an `InvoiceAmount`, so the rule sees the same two numbers either
+//! way — and its tolerance belongs to a *profile*, not to a conversion.
+//! Peppol allows ±0.02, XRechnung ±0.5 in HUF, and the core model never ties
+//! BT-131 to price × quantity at all. [`crate::Profile::validate`] is where
+//! that question has an answer.
+//!
 //! # The BT-20 newline, which is not a nicety
 //!
 //! `billing::PaymentTerms` renders EN 16931's BT-20 including Germany's Skonto
-//! micro-syntax. Up to and including 0.12 it rendered it *without* a trailing
-//! newline:
+//! micro-syntax:
 //!
 //! ```text
-//! Zahlbar in 30 Tagen.\n#SKONTO#TAGE=10#PROZENT=2.00#
+//! Zahlbar in 30 Tagen.\n#SKONTO#TAGE=10#PROZENT=2.00#\n
 //! ```
 //!
 //! `BR-DE-18` has two halves, and the second is easy to miss because it is
@@ -106,11 +124,10 @@
 //! `tokenize(…)[last()]` is the empty string, the second `matches` is false, and
 //! every German invoice carrying a Skonto is rejected — fatally.
 //!
-//! This adapter appended the newline for one release. `billing` 0.13 terminates
-//! it upstream, which is where it belongs: the `#SKONTO#…#` syntax has no core
-//! EN 16931 form, so a rendering that omits the terminator is valid nowhere.
-//! What is left here is a **guard**, not a fix — idempotent, and paired with a
-//! test that asserts upstream still does it.
+//! `billing` terminates the field upstream, which is where it belongs: the
+//! `#SKONTO#…#` syntax has no core EN 16931 form, so a rendering that omits the
+//! terminator is valid nowhere. What is here is a **guard**, idempotent, and
+//! paired with a test that asserts the upstream behaviour.
 
 use billing::{BillingDocument, LineItem, Sign};
 use rust_decimal::Decimal;
@@ -311,23 +328,16 @@ fn period(
 
 /// BT-20, checked for the terminator `BR-DE-18` requires.
 ///
-/// # This used to add the newline, and no longer has to
-///
-/// `billing` ≤ 0.12 rendered the field and stopped at the closing `#`, so every
-/// XRechnung carrying a Skonto failed `BR-DE-18` — see the module documentation
-/// for the XPath and why the second half of that rule is so easy to read past.
-/// The adapter appended the newline itself.
-///
-/// 0.13 terminates it upstream, which is the right place: the `#SKONTO#…#`
-/// micro-syntax **is** the German CIUS convention and has no core EN 16931 form,
-/// so a rendering without the terminator is valid nowhere at all.
-///
-/// The guard stays, because the alternative is trusting a convention across a
-/// crate boundary with nothing checking it — and this is the one field where
-/// getting it wrong is invisible until a counterparty's validator says no.
-/// `billing_renders_bt_20_with_the_terminator_br_de_18_needs` asserts upstream
-/// still does it, so a regression there fails our build rather than a customer's
-/// invoice.
+/// A **guard**, not a fix. `billing` terminates the field itself, which is the
+/// right place: the `#SKONTO#…#` micro-syntax *is* the German CIUS convention
+/// and has no core EN 16931 form, so a rendering without the terminator is
+/// valid nowhere. The guard is idempotent, and stays because the alternative is
+/// trusting a convention across a crate boundary with nothing checking it —
+/// and this is the one field where getting it wrong is invisible until a
+/// counterparty's validator says no.
+/// `billing_renders_bt_20_with_the_terminator_br_de_18_needs` asserts the
+/// upstream behaviour, so a regression there fails this build rather than a
+/// customer's invoice.
 fn payment_terms(t: Option<&billing::terms::PaymentTerms>) -> Option<String> {
     let t = t.filter(|t| !t.is_empty())?;
     let rendered = t.to_string();
@@ -501,14 +511,11 @@ impl<'a> FromBilling<'a> {
         // in one place.
         let mut inv = Invoice {
             // **Not derived from BT-3.** `billing::DocumentKind::is_credit_note`
-            // is the semantic statement; the code is its rendering. The adapter
-            // used to leave this at the default, so a `billing` credit note
-            // became an EN 16931 *invoice* carrying BT-3 = 381 — which fails
-            // `BR-CL-01` (381 is a credit-note code and not an invoice one),
-            // wrongly runs `BR-CO-25` (which must not fire on a credit note),
-            // and, worst of all, serialises as `<ubl:Invoice>` because
-            // `en16931-formats` picks the root element from this field. A credit
-            // note on the wire wearing an invoice's document element.
+            // is the semantic statement; the code is its rendering. Leaving this
+            // at the default turns a `billing` credit note into an EN 16931
+            // *invoice* carrying BT-3 = 381 — which fails `BR-CL-01`, wrongly
+            // runs `BR-CO-25`, and serialises as `<ubl:Invoice>`, because
+            // `en16931-formats` picks the root element from this field.
             kind: if doc.meta.kind.is_credit_note() {
                 crate::DocumentKind::CreditNote
             } else {
@@ -531,12 +538,11 @@ impl<'a> FromBilling<'a> {
                 .vat_accounting_currency()
                 .map(|a| Code::new(a.currency().code())),
             invoicing_period: period(doc.meta.period.as_ref(), "period")?,
-            // BG-1, both terms. `billing` 0.13 models notes as `0..n` with an
-            // optional UNCL 4451 subject code, which is what the standard has —
-            // before that it was one uncoded string, and BT-21 could not cross
-            // at all. BT-21 is not decoration: a reverse-charge sentence and a
-            // payment instruction are both free text, and only the code says
-            // which is which to a system routing on it.
+            // BG-1, both terms. Notes are `0..n` with an optional UNCL 4451
+            // subject code on both sides, which is what the standard has.
+            // BT-21 is not decoration: a reverse-charge sentence and a payment
+            // instruction are both free text, and only the code says which is
+            // which to a system routing on it.
             notes: doc
                 .meta
                 .notes
@@ -548,14 +554,36 @@ impl<'a> FromBilling<'a> {
                 .collect(),
             // BG-4 / BG-7 are the caller's — a tariff engine has no business
             // knowing a postal address — but BT-29 and BT-46 are the document's,
-            // and `billing` 0.13 carries them with the ISO 6523 scheme that
-            // makes them mappable at all. Merged rather than overwritten: the
+            // and they carry the ISO 6523 scheme that makes them mappable at
+            // all. Merged rather than overwritten: the
             // caller's master data and the document's party code are both real,
             // and neither is a substitute for the other.
             seller: with_identifier(self.seller.clone(), doc.meta.issuer_id.as_ref()),
             buyer: with_identifier(self.buyer.clone(), doc.meta.recipient_id.as_ref()),
             ..Default::default()
         };
+
+        // BG-3 — what this document credits or corrects. `reverse` fills it in
+        // from the document being reversed, so a credit note arrives here
+        // already knowing which invoice it answers: the difference between a
+        // credit note and an unexplained payment.
+        //
+        // BT-25 is not an `Option` upstream and its constructor refuses a blank
+        // string, so `BR-55` is satisfied by construction and there is nothing
+        // to check here. BT-26 is parsed like every other date rather than
+        // carried as text — a preceding invoice's date that will not parse is a
+        // conversion failure, not a field to drop.
+        for p in &doc.meta.preceding {
+            inv.preceding_invoices
+                .push(crate::invoice::PrecedingInvoice {
+                    reference: crate::DocumentReference::new(p.number()),
+                    // The field name is fixed rather than indexed because
+                    // `UnparsableDate` already carries the offending value, and
+                    // a BG-3 is identified by its number far better than by its
+                    // position.
+                    issue_date: date(p.issue_date(), "preceding invoice issue_date (BT-26)")?,
+                });
+        }
 
         // BG-25 — the net positions become invoice lines.
         for (i, item) in doc.net_positions().iter().enumerate() {

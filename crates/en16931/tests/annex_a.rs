@@ -362,6 +362,69 @@ fn the_two_cen_tolerance_regimes_are_not_interchangeable() {
     assert!(validate(&inv).has("BR-CO-17"));
 }
 
+/// A VAT rate of exactly half a per cent is a rate, not a zero rate.
+///
+/// The artefact picks its zero-rate branch on `round(Percent) = 0`, and that
+/// `round` is **XPath's**: ties go towards +∞, so `round(0.5)` is `1`. This
+/// crate used `Decimal::round`, which is banker's, so `round(0.5)` was `0` — it
+/// took the zero-rate branch, demanded a tax amount of nothing, and rejected an
+/// invoice every deployed validator accepts. Spain's *recargo de equivalencia*
+/// on reduced-rate goods is 0.5 %, so the rate is ordinary rather than exotic.
+#[test]
+fn br_co_17_accepts_a_rate_of_half_a_per_cent() {
+    let breakdown = |taxable: &str, tax: &str, rate: Percentage| {
+        vec![VatBreakdown {
+            taxable_amount: amount(taxable),
+            tax_amount: amount(tax),
+            category: Code::new("S"),
+            rate: Some(rate),
+            exemption_reason: None,
+            exemption_reason_code: None,
+        }]
+    };
+    let half = Percentage::new(dec!(0.5));
+    let inv = shell(
+        vec![line("1", dec!(1), "1000.00", "1000.00", "S", Some(half))],
+        breakdown("1000.00", "5.00", half),
+        DocumentTotals {
+            line_total: amount("1000.00"),
+            allowance_total: None,
+            charge_total: None,
+            taxable_total: amount("1000.00"),
+            vat_total: Some(amount("5.00")),
+            vat_total_accounting: None,
+            gross_total: amount("1005.00"),
+            paid: None,
+            rounding: None,
+            due: amount("1005.00"),
+        },
+    );
+    let report = validate(&inv);
+    assert!(!report.has("BR-CO-17"), "{report}");
+    assert!(!report.has("BR-S-09"), "{report}");
+    assert!(report.is_valid(), "{report}");
+
+    // …and a rate that really does round to zero still takes the zero branch.
+    let quarter = Percentage::new(dec!(0.4));
+    let inv = shell(
+        vec![line("1", dec!(1), "1000.00", "1000.00", "S", Some(quarter))],
+        breakdown("1000.00", "4.00", quarter),
+        DocumentTotals {
+            line_total: amount("1000.00"),
+            allowance_total: None,
+            charge_total: None,
+            taxable_total: amount("1000.00"),
+            vat_total: Some(amount("4.00")),
+            vat_total_accounting: None,
+            gross_total: amount("1004.00"),
+            paid: None,
+            rounding: None,
+            due: amount("1004.00"),
+        },
+    );
+    assert!(validate(&inv).has("BR-CO-17"), "round(0.4) is 0");
+}
+
 /// `abs()` on both sides of BR-CO-17 is what lets a credit note pass. Without
 /// it, every negative breakdown would be reported.
 #[test]

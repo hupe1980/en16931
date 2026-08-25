@@ -48,12 +48,11 @@ how 486 unread documents stay green.
 
 Four of those are less obvious than they look.
 
-**`just deps`** measures the dependency-graph sizes the documentation quotes.
-They had already drifted once — the ZUGFeRD graph was documented as 56 in three
-places and 57 in two, and it is 57. A number repeated in five files is a number
-nobody rechecks, so it is checked here instead. Raising a limit is a decision,
-not a chore: the small graph is why `en16931` reaches `wasm32`, and why the PDF
-parser is behind a non-default feature.
+**`just deps`** measures the dependency-graph sizes the documentation quotes. A
+number repeated in five files is a number nobody rechecks, so it is checked
+here instead. Raising a limit is a decision, not a chore: the small graph is why
+`en16931` reaches `wasm32`, and why the PDF parser is behind a non-default
+feature.
 
 **`just features`** exists because `just lint` runs `--all-features`, which is
 the one combination where nothing is `cfg`-ed out. It cannot see code that is
@@ -88,28 +87,18 @@ model crate. Running it per crate is not tidiness, it *is* the assertion.
 Every figure in this project is measured — and then written down, in as many as
 six places: three crate READMEs, two `lib.rs` headers and this site. Measuring
 once and copying six times is how a project ends up asserting, in prose, things
-that stopped being true. It is not hypothetical; all of these had drifted:
-
-<!-- doc-numbers: historical -->
-
-| | was documented | measured |
-|---|---|---|
-| profile check counts | 226 / 281 / 289 / 295 / 272 | one higher, all five |
-| rules retired by the types | 36 | 53 |
-| rules registered | 149 | 317 |
-| declared divergences | 13 | 11 |
-| this crate's own rules | three | four |
-| published corpus documents | 490 | 486 |
-
-<!-- /doc-numbers -->
+that stopped being true: a rule is added, a pin moves, a category is renamed,
+and five of the six copies stay as they were.
 
 So the prose stays — it is what makes a number mean something — and the numbers
 in it are read back and compared against the code that produces them. The
 scanner walks every README, every `lib.rs` and every page of this site, so a
 *new* mention of a figure is checked the day it is written.
 
-If you reword a sentence containing one of these numbers, the test will tell you
-it stopped matching rather than silently checking nothing.
+If you reword a sentence containing one of these numbers, the test tells you it
+stopped matching rather than silently checking nothing. And a documentation page
+never quotes a superseded figure: prose describing a past state belongs in the
+[changelog](https://github.com/hupe1980/en16931/blob/main/CHANGELOG.md).
 
 ## An ignored advisory is asserted, not trusted
 

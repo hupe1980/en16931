@@ -301,11 +301,9 @@ mod tests {
     /// The check above is only as good as [`LISTS`], so [`LISTS`] is checked.
     ///
     /// Against [`generated::TABLES`], which the generator emits alongside the
-    /// tables themselves and therefore cannot omit one of. This used to read the
-    /// generated *source* and count `pub static` lines, which worked until the
-    /// generator emitted a nineteenth static that was the index — a test that
-    /// parses its subject's syntax breaks on a change to the syntax rather than
-    /// to the subject.
+    /// tables themselves and therefore cannot omit one of — rather than by
+    /// counting `pub static` lines in the generated source, which breaks on a
+    /// change to the syntax rather than to the subject.
     ///
     /// [`LISTS`] stays hand-written: it is the list this module promises to
     /// binary-search, and deriving it from the same source it is checking

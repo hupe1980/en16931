@@ -499,7 +499,7 @@ fn set_attribute(elem: &str, attr: &str, value: &str) -> String {
     match elem.find(&needle) {
         Some(i) => {
             let rest = &elem[i + needle.len()..];
-            let end = rest.find('"').map_or(rest.len(), |e| e);
+            let end = rest.find('"').unwrap_or(rest.len());
             format!("{}{needle}{value}\"{}", &elem[..i], &rest[end + 1..])
         }
         None => elem.to_owned(),
@@ -512,7 +512,7 @@ fn drop_attribute(elem: &str, attr: &str) -> String {
     match elem.find(&needle) {
         Some(i) => {
             let rest = &elem[i + needle.len()..];
-            let end = rest.find('"').map_or(rest.len(), |e| e);
+            let end = rest.find('"').unwrap_or(rest.len());
             format!("{}{}", &elem[..i], &rest[end + 1..])
         }
         None => elem.to_owned(),
@@ -893,10 +893,10 @@ fn the_authorities_example_invoices_are_valid() {
     for s in &skipped {
         eprintln!("    skipped: {s}");
     }
-    // `checked == 0` used to return early here with a "skipping" line, which
-    // was a second silent-pass path: `common::require` has already established
-    // that `spec/` exists, so zero documents means the *directories* moved, not
-    // that the artefacts are absent. That is a failure, not a skip.
+    // `checked == 0` is a **failure**, not a skip. `common::require` has
+    // already established that `spec/` exists, so zero documents means the
+    // directories moved — and returning early with a "skipping" line here
+    // would be a second silent-pass path.
     assert!(
         checked >= MIN_EXAMPLE_INVOICES,
         "only {checked} published example invoices were checked, against a floor \

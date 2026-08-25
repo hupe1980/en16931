@@ -276,10 +276,9 @@ impl Party {
 ///
 /// # Why this is not derived from BT-3
 ///
-/// It used to be, and CEN's conformance suite says that is not enough:
-/// `BR-CO-25` must not fire on a credit note, and the suite's credit-note cases
-/// carry **no BT-3 at all**. A model that infers the kind from the type code
-/// cannot answer the question those cases ask.
+/// CEN's conformance suite settles it: `BR-CO-25` must not fire on a credit
+/// note, and the suite's credit-note cases carry **no BT-3 at all**. A model
+/// that infers the kind from the type code cannot answer what those cases ask.
 ///
 /// It is also what the syntaxes actually carry. UBL has two root elements,
 /// `ubl-invoice:Invoice` and `ubl-creditnote:CreditNote`, and several CEN rules
@@ -1543,9 +1542,8 @@ impl InvoiceBuilder {
     /// BG-22 — the document totals.
     ///
     /// A setter like every other, and [`build`](Self::build) is the only way to
-    /// finish. It used to return `Invoice` directly, which made it the terminal
-    /// method *and* a setter — so `.totals(…).build()` did not compile and
-    /// nothing in its name said why.
+    /// finish — returning `Invoice` here would make one method both a setter
+    /// and the terminal, so `.totals(…).build()` would not compile.
     #[must_use]
     pub fn totals(mut self, totals: DocumentTotals) -> Self {
         self.inv.totals = totals;

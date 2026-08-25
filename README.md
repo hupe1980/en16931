@@ -54,12 +54,13 @@ Reach for `en16931-formats` only when a document has to cross a wire.
 ```sh
 cargo install en16931-cli
 
-en16931 validate rechnung.xml          # UBL, CII or a ZUGFeRD PDF; BT-24 picks the rule set
-en16931 inspect  rechnung.pdf          # what *is* this file?
-en16931 convert  rechnung.xml --to cii # through the model, not element by element
-en16931 diff     ours.xml theirs.xml   # as invoices, not as XML — syntax is not a difference
-en16931 explain  BR-CO-14              # what does this rule say, and who runs it?
-en16931 rules --format json            # the whole catalogue, to diff across releases
+en16931 validate rechnung.xml                # UBL, CII or a ZUGFeRD PDF; BT-24 picks the rule set
+en16931 validate rechnung.xml -p xrechnung   # …or ask a different question of it
+en16931 inspect  rechnung.pdf                # what *is* this file, and would anyone detect it?
+en16931 convert  rechnung.xml --to cii       # through the model, not element by element
+en16931 diff     ours.xml theirs.xml         # as invoices, not as XML — syntax is not a difference
+en16931 explain  BR-CO-14                    # what does this rule say, and who runs it?
+en16931 rules --format json                  # the whole catalogue, to diff across releases
 ```
 
 Exit `0` valid, `1` invalid, `2` unreadable — so a pipeline can tell "this
@@ -103,11 +104,11 @@ licence, and keeping them out of the tree is what keeps every crate here
 does the same locally. A skipped conformance run and a passing one are the same
 summary line, which is exactly how 486 unread documents stay green.
 
-All four sources are pinned to **release tags**. Three used to track `master`,
-which is not merely irreproducible: an authority's `master` is its *next*
-release, and KoSIT's carried two severity overrides that appear in no published
-one — so a crate claiming to report rules at the severities the authorities
-publish was reading severities nobody had published.
+All four sources are pinned to **release tags**, not branches, for a reason
+sharper than reproducibility: an authority's `master` is its *next* release.
+KoSIT's has carried severity overrides that appear in no published one, and a
+crate claiming to report rules at the severities the authorities publish must
+not read severities nobody has published.
 
 Five files are generated from those artefacts and none is written by hand: the
 code lists for `en16931`, and the element-order and prohibition tables for each
@@ -127,7 +128,7 @@ all of them, and [`CHANGELOG.md`](CHANGELOG.md) carries one entry for the three:
 ```sh
 # 1. move the Unreleased section of CHANGELOG.md under the new version
 # 2. bump `[workspace.package] version` and the two dependency requirements
-git tag v0.4.0 && git push --tags
+git tag "v$(cargo pkgid -p en16931 | sed 's/.*#//')" && git push --tags
 ```
 
 They publish in dependency order. That order is not a convention to remember:

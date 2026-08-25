@@ -14,6 +14,21 @@ use assert_cmd::Command;
 use predicates::prelude::PredicateBooleanExt as _;
 use predicates::str::contains;
 
+/// Run the command, expect success, and return its standard output.
+///
+/// Hoisted out of the four tests that each declared their own closure: a
+/// helper copied four times is four places to fix when the invocation changes.
+fn stdout(args: &[&str]) -> String {
+    let out = cli()
+        .args(args)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    String::from_utf8(out).expect("the CLI writes UTF-8")
+}
+
 /// A minimal but *core-valid* UBL invoice, written from the model rather than
 /// pasted — a fixture that drifts out of validity tests nothing.
 fn valid_ubl() -> String {
@@ -152,7 +167,30 @@ fn an_unknown_profile_is_refused_with_the_list() {
         .assert()
         .code(2)
         .stderr(contains("unknown profile"))
-        .stderr(contains("Peppol BIS Billing 3.0"));
+        // The list offers the *slugs*, because those are what a person types.
+        .stderr(contains("xrechnung-extension"))
+        .stderr(contains("peppol"));
+}
+
+/// A profile is selectable by the name that needs no quoting.
+///
+/// `--profile "XRechnung 3.0"` was the only spelling that worked, which is a
+/// selector every shell needs quoted and every person gets wrong once.
+#[test]
+fn a_profile_is_selectable_by_slug_name_or_bt24() {
+    let path = write_temp("slug.xml", &valid_ubl());
+    let file = path.to_str().expect("utf-8 path");
+    for spelling in [
+        "xrechnung",
+        "XRECHNUNG",
+        "XRechnung 3.0",
+        en16931::profiles::XRECHNUNG.specification_id,
+    ] {
+        cli()
+            .args(["validate", file, "--profile", spelling, "--format", "json"])
+            .assert()
+            .stdout(contains("XRechnung 3.0"));
+    }
 }
 
 #[test]
@@ -355,22 +393,11 @@ fn strict_turns_advisories_into_failures() {
 /// The rule catalogue is derived from the registry, so it cannot drift from
 /// what the validator runs — **including the restrictions**.
 ///
-/// It used to list the rules only, so `--profile "XRechnung 3.0"` printed 270 of
-/// the 282 checks the profile declares and the twelve missing were the German
-/// ones every counterparty quotes. This test allowed it, by adding
-/// `p.restrictions.len()` back before comparing.
+/// Listing the rules alone would print 270 of XRechnung's 282 checks, and the
+/// twelve missing would be the German narrowings every counterparty quotes — so
+/// the comparison is against `check_ids()`, not against `extra_rules`.
 #[test]
 fn the_catalogue_matches_what_each_profile_actually_runs() {
-    let stdout = |args: &[&str]| -> String {
-        let out = cli()
-            .args(args)
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        String::from_utf8(out).expect("UTF-8")
-    };
     let total = |args: &[&str]| -> usize {
         let text = stdout(args);
         text.lines()
@@ -408,6 +435,60 @@ fn the_catalogue_matches_what_each_profile_actually_runs() {
     );
 }
 
+/// An id that names two rules does not get one severity in the header.
+///
+/// `PEPPOL-EN16931-R120` is Peppol's rule, *fatal*, and it is also XRechnung's,
+/// which KoSIT's build rewrites to *warning* on the way in — same id, same
+/// text, different consequence. Printing whichever instance the registry meets
+/// first would answer a Peppol document with the German severity, which is the
+/// opposite of the question being asked.
+#[test]
+fn a_rule_with_two_instances_reports_both() {
+    let text = stdout(&["explain", "PEPPOL-EN16931-R120"]);
+    assert!(text.contains("varies by profile"), "{text}");
+    assert!(text.contains("Peppol BIS Billing 3.0 (fatal)"), "{text}");
+    assert!(text.contains("XRechnung 3.0 (warning)"), "{text}");
+
+    // …and the catalogue reports each profile's own instance.
+    let peppol = stdout(&["rules", "--profile", "peppol"]);
+    let xr = stdout(&["rules", "--profile", "xrechnung"]);
+    let row = |s: &str| {
+        s.lines()
+            .find(|l| l.starts_with("PEPPOL-EN16931-R120"))
+            .unwrap_or_default()
+            .to_owned()
+    };
+    assert!(row(&peppol).contains("fatal"), "{}", row(&peppol));
+    assert!(row(&xr).contains("warning"), "{}", row(&xr));
+}
+
+/// A rule every profile agrees on keeps its plain header.
+#[test]
+fn a_rule_with_one_severity_says_so_plainly() {
+    let text = stdout(&["explain", "BR-CO-14"]);
+    assert!(text.contains("[fatal]"), "{text}");
+    assert!(!text.contains("varies"), "{text}");
+    // No per-profile annotation when there is nothing to distinguish.
+    assert!(text.contains("run by: EN 16931, XRechnung 3.0,"), "{text}");
+}
+
+/// A restriction says which profiles run it and at what severity.
+///
+/// Printing the narrowing and stopping leaves *"why did `BR-DE-17` not reject
+/// my invoice?"* unanswered — and the answer is that KoSIT publishes it at
+/// warning, because a lawful EN 16931 type code XRechnung does not admit is a
+/// scoping question rather than a malformed document.
+#[test]
+fn a_restriction_reports_the_severity_each_profile_runs_it_at() {
+    let text = stdout(&["explain", "BR-DE-17"]);
+    assert!(text.contains("[restriction]"), "{text}");
+    assert!(text.contains("XRechnung 3.0 (warning)"), "{text}");
+
+    // …and one nobody re-levels still says fatal rather than saying nothing.
+    let text = stdout(&["explain", "BR-DE-3"]);
+    assert!(text.contains("XRechnung 3.0 (fatal)"), "{text}");
+}
+
 /// `--profile` reports the severity that profile uses, not the rule's own.
 ///
 /// This is the whole XRechnung finding, made greppable: `BR-CL-23` is fatal in
@@ -416,22 +497,14 @@ fn the_catalogue_matches_what_each_profile_actually_runs() {
 #[test]
 fn the_catalogue_reports_the_profiles_own_severity() {
     let row = |args: &[&str]| -> String {
-        let out = cli()
-            .args(args)
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        String::from_utf8(out)
-            .expect("UTF-8")
+        stdout(args)
             .lines()
             .find(|l| l.starts_with("BR-CL-23 "))
             .unwrap_or_else(|| panic!("BR-CL-23 not listed"))
             .to_owned()
     };
-    assert!(row(&["rules", "--profile", "EN 16931"]).contains("fatal"));
-    assert!(row(&["rules", "--profile", "XRechnung 3.0"]).contains("warning"));
+    assert!(row(&["rules", "--profile", "en16931"]).contains("fatal"));
+    assert!(row(&["rules", "--profile", "xrechnung"]).contains("warning"));
 }
 
 #[test]

@@ -106,14 +106,16 @@ mod tests {
     use crate::{Date, InvoiceAmount, Percentage, Quantity, UnitPriceAmount};
     use rust_decimal::dec;
 
-    /// The regression, stated as the wrong answers it used to give.
+    /// `{:.n}` is a minimum width for these types, never a truncation:
+    /// `Formatter::pad` would cut `1190.00` to `11`, which is a different
+    /// amount.
     #[test]
     fn precision_never_truncates_a_value() {
         let a = InvoiceAmount::parse("1190.00").expect("amount");
-        assert_eq!(format!("{a:.2}"), "1190.00", "was \"11\"");
-        assert_eq!(format!("{a:.3}"), "1190.000", "was \"119\"");
+        assert_eq!(format!("{a:.2}"), "1190.00");
+        assert_eq!(format!("{a:.3}"), "1190.000");
         assert_eq!(format!("{a:.0}"), "1190.00", "precision is a minimum");
-        assert_eq!(format!("{a:>12.4}"), "   1190.0000", "was \"        1190\"");
+        assert_eq!(format!("{a:>12.4}"), "   1190.0000");
 
         let d = Date::parse("2026-07-31").expect("date");
         assert_eq!(format!("{d:.4}"), "2026-07-31", "was \"2026\"");

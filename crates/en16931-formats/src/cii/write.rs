@@ -657,9 +657,9 @@ fn payment_means(x: &mut Xml, p: &PaymentInstructions) {
     // (`TradeSettlementPaymentMeansType` in the XSD) — several accounts are
     // several payment-means elements, exactly as in UBL, where CEN's own
     // `guide-example1.xml` repeats `cac:PaymentMeans` per account. Two
-    // accounts inside one aggregate fails the schema; this writer emitted
-    // that for two releases, and the reader kept only the last element's
-    // accounts, so a round trip never noticed.
+    // accounts inside one aggregate fails the schema — and a reader that keeps
+    // only the last element's accounts makes a round trip agree with itself
+    // while losing one, which is why both halves are pinned by tests.
     let head = |x: &mut Xml| {
         if let Some(c) = &p.means_code {
             x.leaf("ram:TypeCode", &[], c.as_str());

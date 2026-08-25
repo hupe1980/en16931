@@ -24,6 +24,212 @@ reader upgrading nothing about whether it affected them.
 
 Nothing yet.
 
+## [0.6.0] — 2026-08-25
+
+A correctness release, and every fix in it belongs to one of two families.
+
+**Stricter than the authorities it implements** — rejecting documents everyone
+else accepts, which stops invoices nobody else would have stopped: five KoSIT
+checks reported as fatal that Germany publishes as warnings, `BR-CO-17` on a
+0.5 % VAT rate, and a UBL date carrying the time zone `xs:date` allows.
+
+**Silently wrong about what a document says** — the worse family, because there
+is nothing to notice: a charge written `1` read as an allowance, a price-level
+charge read as a discount, a ZUGFeRD metadata check that was dead for the
+commonest profile, and a catalogue reporting one profile's severity for
+another's rule.
+
+None of it was reachable by the existing suites, which is its own finding. The
+conformance suites measure whether a rule *fires*, not what firing means; the
+round-trip suites read what this crate writes, and this crate never wrote `1`
+for a boolean or an offset on a date. Four new tests close those gaps against
+the artefacts rather than against our own output.
+
+### Fixed
+
+- **Five XRechnung checks ran as fatal that KoSIT publishes as warnings.**
+  Severity has two sources and only one was being read. `scenarios.xml`'s
+  `<customLevel>` re-levels *CEN's* rules and was checked against; KoSIT's own
+  rules carry their severity in the Schematron's `flag` attribute, and nothing
+  compared that. So `BR-DE-26` (a corrected invoice *should* cite the original),
+  `BR-DE-27` / `BR-DE-28` (a telephone number with two digits, an address that
+  is not quite one) and the `BR-DE-17` / `BR-DE-21` scoping restrictions all
+  rejected invoices the German reference validator merely warns about. The
+  conformance suite could not see it: it measures whether a rule *fires*, not
+  what firing means. `every_kosit_check_runs_at_the_severity_kosit_publishes`
+  now compares all **121** severities the three XRechnung profiles run against
+  both of KoSIT's Schematrons.
+
+- **`BR-CO-17` rejected a VAT rate of exactly 0.5 %.** The artefacts pick the
+  zero-rate branch on `round(Percent) = 0`, and that `round` is **XPath's** —
+  ties go towards +∞, so `round(0.5)` is `1`. This crate used
+  `Decimal::round`, which is banker's rounding, so `round(0.5)` was `0`: the
+  rule took the zero-rate branch, demanded a tax amount of nothing, and failed
+  a correct invoice. Spain's *recargo de equivalencia* on reduced-rate goods is
+  0.5 %, so the rate is ordinary rather than exotic. XPath's `fn:round` is now
+  implemented as `floor(x + 0.5)` — its definition, which no
+  `rust_decimal::RoundingStrategy` reproduces — and shared by `BR-CO-17` and
+  the `-08` / `-09` rows of all nine category tables, along with the ±1.00
+  tolerance that had been declared twice.
+
+- **A charge written as `1` was read as an allowance.** `cbc:ChargeIndicator`
+  and CII's `udt:Indicator` are `xs:boolean`, whose lexical space is
+  `{true, false, 1, 0}`; the UBL reader knew only the two words. A schema-valid
+  `<cbc:ChargeIndicator>1</cbc:ChargeIndicator>` therefore read as *false*, and
+  this is the one element that decides whether an amount is **added to or
+  subtracted from** the invoice — so a handling fee arrived as a discount, the
+  same money on the other side of the total, with nothing in the reader's
+  output to say so. `en16931 convert` then wrote the inversion into the target
+  syntax. Both readers now accept all four forms, and an indicator that is not
+  a boolean at all is recorded in `malformed` rather than folded into
+  "allowance": there is no safe default, so the answer is to say the document
+  could not be read.
+
+- **A price-level *charge* was read as a BT-147 discount.** UBL hides BG-29
+  inside `cac:Price/cac:AllowanceCharge`, and EN 16931 gives that group only a
+  discount — `PEPPOL-EN16931-R044` forbids a charge there outright. The reader
+  ignored the indicator entirely and mapped the amount, so a price *increase*
+  was filed as a *reduction*, under the core profile where no rule objects. It
+  is now reported in `malformed` and not mapped: the model has no term for it,
+  and inventing one from the wrong sign is worse than saying so.
+
+- **A UBL date carrying the time zone `xs:date` allows lost its business term.**
+  `<cbc:IssueDate>2026-07-31+02:00</cbc:IssueDate>` is schema-valid, no
+  Schematron rule objects to it, and Java's `XMLGregorianCalendar` — which a
+  great many UBL producers are built on — writes the offset by default. The
+  reader refused the value, so BT-2 came back absent and `BR-03` fired on an
+  invoice that states its issue date perfectly well. The zone is now dropped
+  rather than applied (`2026-07-31+02:00` **is** the day 2026-07-31), because
+  EN 16931-1 §6.5.9 has no term for one. A date that is merely wrong still
+  fails and is still reported in `malformed`.
+
+- **`zugferd::Profile::parse("EN 16931")` answered `Unknown`** — the exact
+  string a conforming PDF's `fx:ConformanceLevel` carries, and the one
+  `Profile::as_str` produces. A URN cannot contain a space and the XMP writes
+  one, and the parser only knew the URN spelling. The consequence was worse
+  than the lookup: `extract`'s profile-mismatch check compares XMP against
+  BT-24 *through* `parse`, so it was silently dead for the commonest ZUGFeRD
+  profile — a PDF whose metadata claimed EN 16931 over a MINIMUM payload was
+  reported as agreeing with itself. Comparison is now on letters and digits
+  only, `COMFORT` (ZUGFeRD 1.0's name for the same profile) resolves, and
+  `every_profile_name_parses_back_to_its_profile` pins the round trip that was
+  missing. The test that claimed to cover this put a URN in the XMP, where no
+  producer writes one, and so asserted nothing; it now uses the real spelling.
+
+- **A `/Filespec` was named by its `/Desc`** when it carried no `/F` or `/UF`.
+  `/Desc` is a human-readable description, not a name, and falling back to it
+  meant an attachment *described* as `factur-x.xml` was extracted as the
+  invoice however it was actually named — name confusion in the one place where
+  the name decides which bytes a receiver treats as the document.
+
+- **`Profile::severity_of` answered with another profile's rule.** An id can
+  name two rules: `PEPPOL-EN16931-R120` is Peppol's, *fatal*, and it is also
+  XRechnung's, which KoSIT's build rewrites to *warning* on the way in. The
+  method went through the global registry and returned whichever instance it
+  met first, so `PEPPOL_BIS_3.severity_of("PEPPOL-EN16931-R120")` answered
+  *warning* — the German instance, for a Peppol document, in the one method
+  whose entire job is to say what a *particular* profile does about a rule.
+  Validation was never wrong (it reads the rule it holds), but
+  `en16931 rules --profile peppol` printed `warning` beside a rule Peppol
+  rejects on, and the catalogue is what a person consults instead of reading
+  the Schematron. It now looks in the profile's own `extra_rules` first, then
+  the core set, and never elsewhere. `en16931 explain` says
+  `[varies by profile]` where instances differ and annotates every profile's
+  severity, rather than stating one authority's answer as if it were the
+  answer. A new test compares all 46 Peppol severities against OpenPeppol's
+  Schematron and reads the R120 rewrite out of `peppol-into-xr.xsl`.
+
+- **`Profile::severity_of` answered `None` for restrictions.** Twelve German
+  narrowings are checks XRechnung runs on every document, and every caller that
+  pairs `severity_of` with `check_ids` — `en16931 explain`'s "run by" line among
+  them — dropped all twelve.
+
+- **`en16931 explain <restriction>` did not say what a restriction costs.** It
+  printed the narrowing and stopped, so *"why did `BR-DE-17` not reject my
+  invoice?"* had no answer — and the answer is that KoSIT publishes it at
+  warning. Restrictions now carry the same `run by:` line rules do.
+
+- **`en16931 profiles` printed one column out of true.** The `verified against`
+  block hard-coded a width of 44 and the longest repository name is 45. Widths
+  are measured now, so the next authority to rename a repository does not break
+  the table.
+
+### Added
+
+- **BG-3 crosses the `billing` seam** — `billing` 0.14 models
+  `DocumentMeta::preceding`, and `reverse` fills it in from the document being
+  reversed, so a credit note arrives already knowing which invoice it credits.
+  The number used to live in `meta.labels`, which the adapter deliberately does
+  not map, so a caller had to copy it back by hand; a credit note that does not
+  say what it credits is an unexplained payment. `BR-55` is satisfied by the
+  *type* — BT-25 is not an `Option` upstream and its constructor refuses a blank
+  string — so nothing is checked here. BT-26 is parsed like every other date
+  rather than carried as text.
+
+- **Every profile carries a `slug`** — `xrechnung`, `xrechnung-cvd`, `peppol` —
+  and `--profile` takes it. The only spelling that worked was
+  `--profile "XRechnung 3.0"`: a selector every shell needs quoted, and one
+  every person gets wrong once. `profiles::lookup` accepts slug, display name
+  or BT-24, and `en16931 profiles` prints the first two side by side.
+  `--profile` also has a short form, `-p`, on `validate`, `convert` and `rules`.
+
+- **Four structural checks on inbound hybrid PDFs.** Getting the invoice out is
+  the easy half; a ZUGFeRD file can be wrong in ways that nothing complains
+  about, and the failure arrives at the counterparty weeks later with no error
+  to search for. `extract` now also reports `NotAssociated` (the invoice is not
+  in the catalogue's `/AF` array — the commonest defect, because every PDF
+  library can *attach* a file and fewer can *associate* one),
+  `NotInEmbeddedFiles`, `NoRelationship` and `NotPdfA3`. None stops extraction;
+  the payload still comes back verbatim. `en16931 inspect invoice.pdf` prints
+  them, and `Xmp` now carries `pdfa_part` and `pdfa_conformance`.
+
+- **XMP properties are read in both RDF shapes.** A simple property may be an
+  element or an attribute, and the Factur-X reference implementation writes
+  `fx:*` as elements while most producers write the PDF/A identification as
+  attributes. Reading one shape means reading only some producers' files.
+
+- **KoSIT's CII Schematron is now measured too.** The coverage suite read one
+  of KoSIT's two files, so `BR-TMP-3` and `BR-DEX-15` — which exist only in the
+  CII one — were never counted: "55 / 55" was 55 of 57. Both are checks on the
+  *shape of a CII document* that a syntax-independent model cannot express, and
+  they are now out of scope by decision, named with their reasons in
+  `CII_ONLY_SYNTAX_RULES`, rather than by oversight.
+
+### Changed
+
+- **`billing` is now `0.14`.** The dependency-graph claim is unchanged — the
+  engine still costs nothing beyond `rust_decimal` and `thiserror`, which this
+  crate already has — and `just deps` still measures it. The release also fixes
+  a rounding bias in `DynamicPricing::calculate` and two panics reachable from
+  deserialised input, none of which the adapter could have worked around.
+- **Breaking: `Profile` gained a `slug` field.** Anyone constructing a custom
+  `Profile` must supply one; `profiles::lookup` asserts uniqueness.
+- **Breaking: `Divergence` gained four variants.** It is `#[non_exhaustive]`, so
+  a `match` with a fallback arm is unaffected.
+- **Breaking: `Xmp` gained two fields.** Also `#[non_exhaustive]`.
+- `BR-DE-26`, `BR-DE-27` and `BR-DE-28` are warnings, so documents that used to
+  be rejected now pass. `--strict` still fails on them.
+
+### Documentation
+
+- The severity section of both READMEs and the site now shows **both** files
+  that publish severity, with the five KoSIT rules and why each is not fatal.
+- The tolerance section gained the rounding regime — XPath's `fn:round` against
+  banker's and half-away-from-zero, with the midpoint table that shows why
+  neither will do.
+- The reader documentation gained a section on the schema being wider than the
+  model, with `xs:date`'s time zone as the case in point.
+- `en16931-formats`' architecture diagram claimed EDIFACT among the inbound
+  formats. Nothing in this workspace reads EDIFACT.
+- The adapter's "deliberately not mapped" list gained the **late-payment
+  penalty** `billing` 0.14 models, with the reason: `BR-DE-18` gives a Skonto a
+  micro-syntax inside BT-20 and gives a penalty none, so a field with no
+  representation in the syntax would vanish on the way out, silently.
+- The ZUGFeRD example built a PDF with no `/AF` and no XMP — a demonstration of
+  a file that would not be detected as an e-invoice — and printed divergences
+  through a `match` that duplicated their `Display` sentences. It now builds a
+  conforming file and prints the type's own prose.
+
 ## [0.5.0] — 2026-08-10
 
 ### Fixed
@@ -423,7 +629,8 @@ directions, ZUGFeRD / Factur-X extraction, and the command.
 - `en16931-cli`: `validate`, `convert`, `diff`, `extract`, `inspect`, `explain`,
   `rules`, `profiles`, and CI-shaped exit codes.
 
-[Unreleased]: https://github.com/hupe1980/en16931/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/hupe1980/en16931/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/hupe1980/en16931/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/hupe1980/en16931/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/hupe1980/en16931/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/hupe1980/en16931/compare/v0.2.0...v0.3.0

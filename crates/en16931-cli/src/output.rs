@@ -182,7 +182,31 @@ pub fn inspect_json(o: &mut String, docs: &[Loaded]) {
 
 /// One rule, with its provenance and the terms it touches.
 pub fn rule(o: &mut String, r: &'static Rule) {
-    let _ = writeln!(o, "{}  [{}]  {}", r.id, r.severity, provenance(r.source));
+    // Which profiles run it, and at what severity — the answer to "why did my
+    // validator not object to this?"
+    let carried: Vec<(&'static str, en16931::Severity)> = en16931::profiles::ALL
+        .iter()
+        .filter_map(|p| {
+            let level = p.severity_of(r.id.as_str())?;
+            p.check_ids()
+                .any(|id| r.id.matches(id))
+                .then_some((p.id, level))
+        })
+        .collect();
+
+    // An id can name two rules with two consequences — `PEPPOL-EN16931-R120` is
+    // Peppol's *fatal* rule and XRechnung's *warning* one, because KoSIT's build
+    // rewrites the flag on the way in. Printing either instance's severity in
+    // the header states one authority's answer as if it were the answer, so
+    // where they differ the header declines to and the `run by` line carries
+    // every profile's.
+    let varies = carried.iter().any(|(_, level)| *level != r.severity);
+    let header = if varies {
+        "varies by profile".to_owned()
+    } else {
+        r.severity.to_string()
+    };
+    let _ = writeln!(o, "{}  [{header}]  {}", r.id, provenance(r.source));
     let _ = writeln!(o);
     for line in wrap(r.text, 88) {
         let _ = writeln!(o, "  {line}");
@@ -191,22 +215,18 @@ pub fn rule(o: &mut String, r: &'static Rule) {
         let terms: Vec<String> = r.terms.iter().map(ToString::to_string).collect();
         let _ = writeln!(o, "\n  terms: {}", terms.join(", "));
     }
-    // Which profiles run it, and at what severity — the answer to "why did my
-    // validator not object to this?"
-    let mut carried = Vec::new();
-    for p in en16931::profiles::ALL {
-        if let Some(level) = p.severity_of(r.id.as_str())
-            && p.check_ids().any(|id| r.id.matches(id))
-        {
-            carried.push(if level == r.severity {
-                p.id.to_owned()
-            } else {
-                format!("{} ({level})", p.id)
-            });
-        }
-    }
     if !carried.is_empty() {
-        let _ = writeln!(o, "  run by: {}", carried.join(", "));
+        let list: Vec<String> = carried
+            .iter()
+            .map(|(id, level)| {
+                if varies {
+                    format!("{id} ({level})")
+                } else {
+                    (*id).to_owned()
+                }
+            })
+            .collect();
+        let _ = writeln!(o, "  run by: {}", list.join(", "));
     }
 }
 
@@ -222,6 +242,25 @@ pub fn restriction(o: &mut String, profile: &'static Profile, r: &'static Restri
     let _ = writeln!(o, "  term: {:?}", r.term());
     if let Restriction::CodeValues { allowed, .. } = r {
         let _ = writeln!(o, "  allowed: {}", allowed.join(", "));
+    }
+    // Which profiles run it, and at what severity — the same line `explain`
+    // gives for a rule, and the answer to "why did this not reject my
+    // invoice?". A restriction is fatal by construction, so a lower severity
+    // here is always an authority's published `flag`, and always the thing the
+    // reader wanted to know: `BR-DE-17` is a **warning** in Germany because a
+    // lawful EN 16931 type code XRechnung does not admit is a scoping question
+    // rather than a malformed document.
+    let carried: Vec<String> = en16931::profiles::ALL
+        .iter()
+        .filter_map(|p| {
+            let level = p.severity_of(r.id())?;
+            p.check_ids()
+                .any(|id| en16931::validation::RuleId::new(id).matches(r.id()))
+                .then(|| format!("{} ({level})", p.id))
+        })
+        .collect();
+    if !carried.is_empty() {
+        let _ = writeln!(o, "  run by: {}", carried.join(", "));
     }
     let _ = writeln!(
         o,
@@ -462,15 +501,22 @@ pub fn diff_json(
 
 /// Every profile this build can validate against.
 pub fn profiles(o: &mut String) {
+    // Column widths are measured, never guessed. The `verified against` block
+    // below was written with a hard-coded `{:<44}`, and the longest repository
+    // name is 45 characters — so the table shipped one column out of true, and
+    // would have again the next time an authority renamed a repository.
+    let name = width(en16931::profiles::ALL.iter().map(|p| p.slug), "PROFILE");
+    let id = width(en16931::profiles::ALL.iter().map(|p| p.id), "NAME");
     let _ = writeln!(
         o,
-        "{:<26} {:>6}  {:<8}  BT-24",
-        "PROFILE", "CHECKS", "CIUS?"
+        "{:<name$}  {:<id$}  {:>6}  {:<5}  BT-24",
+        "PROFILE", "NAME", "CHECKS", "CIUS?"
     );
     for p in en16931::profiles::ALL {
         let _ = writeln!(
             o,
-            "{:<26} {:>6}  {:<8}  {}",
+            "{:<name$}  {:<id$}  {:>6}  {:<5}  {}",
+            p.slug,
             p.id,
             p.check_ids().count(),
             // §4.4.2 asks this of a CIUS, and the core model is not one — "no"
@@ -489,9 +535,10 @@ pub fn profiles(o: &mut String) {
     }
     let _ = writeln!(
         o,
-        "\nCHECKS counts the rules and restrictions a profile declares, and a report\n\
-         says the same number for every document: every check runs, whether or not\n\
-         it has anything to report. `en16931 rules --profile <NAME>` lists them."
+        "\nPROFILE is what `--profile` takes; NAME is what a report prints. CHECKS\n\
+         counts the rules and restrictions a profile declares, and a report says the\n\
+         same number for every document: every check runs, whether or not it has\n\
+         anything to report. `en16931 rules --profile <PROFILE>` lists them."
     );
     let _ = writeln!(o, "\nedition: {}", en16931::DEFAULT_EDITION);
 
@@ -514,10 +561,28 @@ pub fn profiles(o: &mut String) {
         }
     }
     let _ = writeln!(o, "verified against:");
-    for a in seen {
-        let _ = writeln!(o, "  {:<10}  {:<44}  {}", a.authority, a.repo, a.git_ref);
+    let authority = width(seen.iter().map(|a| a.authority), "");
+    let repo = width(seen.iter().map(|a| a.repo), "");
+    for a in &seen {
+        let _ = writeln!(
+            o,
+            "  {:<authority$}  {:<repo$}  {}",
+            a.authority, a.repo, a.git_ref
+        );
     }
     let _ = writeln!(o, "({})", en16931::ATTRIBUTION);
+}
+
+/// The widest of `values` and `header`, in characters.
+///
+/// Characters rather than bytes: a repository name is ASCII today and a profile
+/// name need not be, and `{:<n}` counts characters.
+fn width<'a>(values: impl Iterator<Item = &'a str>, header: &str) -> usize {
+    values
+        .map(|v| v.chars().count())
+        .chain(std::iter::once(header.chars().count()))
+        .max()
+        .unwrap_or(0)
 }
 
 // ── text wrapping ────────────────────────────────────────────────────────────
@@ -745,10 +810,10 @@ mod tests {
 
     /// A scale difference is not a difference; a **leading zero** is.
     ///
-    /// The second half is the one that was wrong. Comparing parsed `Decimal`s
-    /// made `"0001"` and `"1"` the same invoice number, and `01067` and `1067`
-    /// the same Dresden post code — on a command whose exit code says whether a
-    /// conversion preserved the document.
+    /// Comparing parsed `Decimal`s would make `"0001"` and `"1"` the same
+    /// invoice number, and `01067` and `1067` the same Dresden post code — on a
+    /// command whose exit code says whether a conversion preserved the
+    /// document.
     #[test]
     fn only_a_trailing_fractional_zero_is_not_a_difference() {
         let s = |v: &str| serde_json::Value::String(v.to_owned());

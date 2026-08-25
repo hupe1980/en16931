@@ -62,16 +62,27 @@ pub struct Xmp {
     /// key2value = { …, "version": "1.0", … }
     /// ```
     ///
-    /// This was documented as *"the ZUGFeRD / Factur-X version"*, which invites
-    /// exactly the wrong check: code comparing it against `"2.3"` rejects every
-    /// conforming ZUGFeRD 2.3 file it is given. Reported by a downstream user
-    /// who had built a writer, and confirmed here against the source above.
-    /// There is no XMP property carrying the ZUGFeRD version — the profile is
-    /// [`conformance_level`](Self::conformance_level), and the document version
-    /// is only in the payload's BT-24.
+    /// Read as *"the ZUGFeRD / Factur-X version"* it invites exactly the wrong
+    /// check: code comparing it against `"2.3"` rejects every conforming
+    /// ZUGFeRD 2.3 file. No XMP property carries the ZUGFeRD version — the
+    /// profile is [`conformance_level`](Self::conformance_level), and the
+    /// document version is only in the payload's BT-24.
     pub version: Option<String>,
     /// `fx:ConformanceLevel` — the profile, in the XMP's own vocabulary. ⚠
     pub conformance_level: Option<String>,
+    /// `pdfaid:part` — which part of ISO 19005 the file claims.
+    ///
+    /// Not a ZUGFeRD property, and read anyway: **`3` is the only answer a
+    /// hybrid invoice may give.** PDF/A-1 and PDF/A-2 forbid embedding a file
+    /// of arbitrary type at all, so a PDF declaring either is not a conforming
+    /// ZUGFeRD or Factur-X document however good the rest of its metadata is.
+    /// See [`Divergence::NotPdfA3`].
+    pub pdfa_part: Option<String>,
+    /// `pdfaid:conformance` — `A`, `B` or `U`.
+    ///
+    /// All three are permitted; this is carried for diagnosis rather than
+    /// checked.
+    pub pdfa_conformance: Option<String>,
 }
 
 /// A disagreement between what the PDF declares and what it contains.
@@ -124,6 +135,42 @@ pub enum Divergence {
     /// Readable here, because the embedded file was found by name — but a
     /// counterparty scanning metadata first will not see an e-invoice.
     NoXmp,
+    /// The invoice is not listed in the document catalogue's `/AF` array.
+    ///
+    /// `/AF` is what makes an embedded file an **associated** file, and it is
+    /// the key a PDF/A-3-aware receiver reads first. Without it the XML is an
+    /// ordinary attachment: the file opens, a human sees the pages, and an
+    /// automated pipeline that asks the catalogue what is associated with this
+    /// document is told *nothing*.
+    ///
+    /// The commonest defect in the wild, because every PDF library can attach a
+    /// file and only some can associate one.
+    NotAssociated,
+    /// The invoice is not reachable from `/Names/EmbeddedFiles`.
+    ///
+    /// The other half of the same requirement, and the half that older tools
+    /// use: ZUGFeRD asks for the payload in the catalogue's embedded-files name
+    /// tree so that readers with no PDF/A-3 support still find it. Reached here
+    /// through a page annotation or a bare file specification instead.
+    NotInEmbeddedFiles,
+    /// The invoice's file specification carries no `/AFRelationship`.
+    ///
+    /// Lawful PDF, and a signal in itself: the file was attached by something
+    /// that does not know it is attaching an invoice. A receiver routing on the
+    /// relationship cannot tell whether the XML **is** the invoice or merely
+    /// accompanies one — which is the distinction the key exists for.
+    NoRelationship,
+    /// The PDF does not claim PDF/A-3.
+    ///
+    /// ZUGFeRD 2.x and Factur-X both make PDF/A-3 normative, and it is not
+    /// decoration: parts 1 and 2 of ISO 19005 **forbid** embedding a file of
+    /// arbitrary type, so a document claiming either is self-contradictory, and
+    /// one claiming nothing has no conformance to lose but also none to offer.
+    /// A recipient that runs veraPDF on what arrives will reject it.
+    NotPdfA3 {
+        /// `pdfaid:part`, when the file states one at all.
+        part: Option<String>,
+    },
 }
 
 impl std::fmt::Display for Divergence {
@@ -153,6 +200,30 @@ impl std::fmt::Display for Divergence {
                 "the PDF carries no XMP invoice metadata; the payload was found by filename, and \
                  a counterparty scanning metadata first will not see an e-invoice here",
             ),
+            Self::NotAssociated => f.write_str(
+                "the invoice is not in the document catalogue's /AF array, so it is an ordinary \
+                 attachment rather than an associated file — a PDF/A-3 receiver asking what is \
+                 associated with this document is told nothing",
+            ),
+            Self::NotInEmbeddedFiles => f.write_str(
+                "the invoice is not reachable from /Names/EmbeddedFiles, where ZUGFeRD requires \
+                 it so that readers without PDF/A-3 support still find it",
+            ),
+            Self::NoRelationship => f.write_str(
+                "the invoice's file specification carries no /AFRelationship, so nothing in the \
+                 PDF says whether the XML is the invoice or merely accompanies one",
+            ),
+            Self::NotPdfA3 { part } => match part {
+                Some(p) => write!(
+                    f,
+                    "the PDF claims PDF/A-{p}; ZUGFeRD and Factur-X require PDF/A-3, and parts 1 \
+                     and 2 forbid embedding a file of arbitrary type at all"
+                ),
+                None => f.write_str(
+                    "the PDF claims no PDF/A conformance; ZUGFeRD and Factur-X require PDF/A-3, \
+                     and a recipient running veraPDF on what arrives will reject it",
+                ),
+            },
         }
     }
 }
@@ -244,41 +315,122 @@ fn collect_embedded(doc: &lopdf::Document) -> BTreeMap<String, Vec<u8>> {
     out
 }
 
-/// The `/AFRelationship` recorded for the attachment named `filename`.
+/// Where the PDF puts the invoice, structurally.
 ///
-/// # Why this is worth reading
+/// Three independent questions with three independent answers, which is exactly
+/// why they are three fields: a file can be an associated file and not in the
+/// name tree, or in the name tree with no relationship, and each combination
+/// fails a different receiver.
+#[derive(Debug, Default)]
+struct Placement {
+    /// Referenced from the document catalogue's `/AF` array.
+    associated: bool,
+    /// Reachable from the catalogue's `/Names/EmbeddedFiles` name tree.
+    in_name_tree: bool,
+    /// `/AFRelationship`, verbatim.
+    relationship: Option<String>,
+}
+
+/// How the file specification for `filename` is wired into the document.
 ///
-/// PDF/A-3 uses `/AFRelationship` to say *how* an attached file relates to the
-/// document, and for a hybrid invoice the value is legally load-bearing rather
-/// than descriptive: it is the difference between "this XML is the invoice,
-/// the pages are a rendering of it" and "the pages are the invoice, this XML is
-/// supplementary data".
-///
-/// `Data` is right for the profiles that carry **no lines** — MINIMUM and
-/// BASIC WL are booking aids attached to a PDF that is itself the invoice. For
-/// the profiles that carry a whole invoice it is wrong, and published guidance
-/// then splits: German sources say `Alternative`, and PDFlib documents `Source`
-/// for Factur-X to non-German recipients. This crate reports the value and
-/// takes no position where the sources disagree — see [`Divergence::Relationship`],
-/// which fires only on the case they agree about.
-fn af_relationship(doc: &lopdf::Document, filename: &str) -> Option<String> {
-    doc.objects.values().find_map(|object| {
+/// One pass over the objects rather than three: the same file specification
+/// answers all three questions, and finding it three times invites the three
+/// answers to be about three different objects.
+fn placement(doc: &lopdf::Document, filename: &str) -> Placement {
+    let Some((id, dict)) = doc.objects.iter().find_map(|(id, object)| {
         let dict = object.as_dict().ok()?;
-        if dict.get(b"Type").ok()?.as_name().ok()? != b"Filespec" {
-            return None;
+        (dict.get(b"Type").ok()?.as_name().ok()? == b"Filespec"
+            && filespec_name(dict).is_some_and(|n| n.eq_ignore_ascii_case(filename)))
+        .then_some((*id, dict))
+    }) else {
+        return Placement::default();
+    };
+    Placement {
+        associated: catalog_associated_files(doc).contains(&id),
+        in_name_tree: embedded_file_names(doc)
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case(filename)),
+        relationship: dict
+            .get(b"AFRelationship")
+            .ok()
+            .and_then(|o| o.as_name().ok())
+            .map(|raw| String::from_utf8_lossy(raw).into_owned()),
+    }
+}
+
+/// The object ids in the document catalogue's `/AF` array.
+///
+/// Empty when there is no `/AF` at all, which is the common defect rather than
+/// an exotic one — most PDF libraries can attach a file and fewer can associate
+/// one.
+fn catalog_associated_files(doc: &lopdf::Document) -> Vec<lopdf::ObjectId> {
+    let Ok(catalog) = doc.catalog() else {
+        return Vec::new();
+    };
+    let Ok(af) = catalog.get(b"AF").and_then(lopdf::Object::as_array) else {
+        return Vec::new();
+    };
+    af.iter()
+        .filter_map(|o| match o {
+            lopdf::Object::Reference(id) => Some(*id),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every name in the catalogue's `/Names/EmbeddedFiles` name tree.
+///
+/// A name tree is a *tree*: a small document holds its entries in one `/Names`
+/// array, and a large one splits them across `/Kids`. Reading only the flat
+/// case is the bug that makes a big invoice archive look empty.
+fn embedded_file_names(doc: &lopdf::Document) -> Vec<String> {
+    /// A name tree deep enough to need this is already malformed; the bound is
+    /// what makes a cyclic `/Kids` a wrong answer rather than a hung process.
+    const MAX_DEPTH: usize = 32;
+
+    fn walk(doc: &lopdf::Document, node: &lopdf::Dictionary, depth: usize, out: &mut Vec<String>) {
+        if depth > MAX_DEPTH {
+            return;
         }
-        if filespec_name(dict)?.eq_ignore_ascii_case(filename) {
-            let raw = dict.get(b"AFRelationship").ok()?.as_name().ok()?;
-            Some(String::from_utf8_lossy(raw).into_owned())
-        } else {
-            None
+        if let Ok(names) = node.get(b"Names").and_then(lopdf::Object::as_array) {
+            // `[name value name value …]` — the names are the even positions.
+            for entry in names.iter().step_by(2) {
+                if let Ok(raw) = entry.as_str() {
+                    out.push(String::from_utf8_lossy(raw).into_owned());
+                }
+            }
         }
-    })
+        if let Ok(kids) = node.get(b"Kids").and_then(lopdf::Object::as_array) {
+            for kid in kids {
+                if let Ok(dict) = doc.dereference(kid).and_then(|(_, o)| o.as_dict()) {
+                    walk(doc, dict, depth + 1, out);
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    if let Ok(catalog) = doc.catalog()
+        && let Ok(names) = catalog.get(b"Names").and_then(lopdf::Object::as_dict)
+        && let Ok(tree) = names
+            .get(b"EmbeddedFiles")
+            .and_then(|o| doc.dereference(o))
+            .and_then(|(_, o)| o.as_dict())
+    {
+        walk(doc, tree, 0, &mut out);
+    }
+    out
 }
 
 /// A `/Filespec`'s name, preferring `/UF` (Unicode) over `/F` (byte string).
+///
+/// `/Desc` is **not** consulted: it is a human-readable description, not a
+/// name, and falling back to it would extract an attachment *described* as
+/// "factur-x.xml" whatever it is actually named — name confusion in the one
+/// place where the name decides which bytes a receiver treats as the
+/// document.
 fn filespec_name(dict: &lopdf::Dictionary) -> Option<String> {
-    for key in [&b"UF"[..], &b"F"[..], &b"Desc"[..]] {
+    for key in [&b"UF"[..], &b"F"[..]] {
         if let Ok(obj) = dict.get(key)
             && let Ok(s) = obj.as_str()
         {
@@ -355,7 +507,8 @@ pub fn extract(pdf: &[u8]) -> Result<Extracted, Error> {
         Err(e) => (None, vec![e.to_string()]),
     };
 
-    let relationship = af_relationship(&doc, &filename);
+    let placement = placement(&doc, &filename);
+    let relationship = placement.relationship.clone();
 
     Ok(Extracted {
         divergence: diverge(
@@ -363,7 +516,7 @@ pub fn extract(pdf: &[u8]) -> Result<Extracted, Error> {
             &filename,
             profile,
             specification_id.as_deref(),
-            relationship.as_deref(),
+            &placement,
         ),
         #[cfg(feature = "cii")]
         invoice,
@@ -384,25 +537,50 @@ fn diverge(
     filename: &str,
     profile: Profile,
     specification_id: Option<&str>,
-    relationship: Option<&str>,
+    placement: &Placement,
 ) -> Vec<Divergence> {
     let mut out = Vec::new();
 
+    // ── how the file is wired in ─────────────────────────────────────────────
+    //
     // Checked before the XMP, and independently of it: a file can carry perfect
-    // metadata and still be attached in a way that says it is not the invoice.
-    // Only the case every source agrees on — `Data` on a profile that has lines.
-    if relationship.is_some_and(|r| r.eq_ignore_ascii_case("Data"))
-        && profile.is_en16931_invoice() == IsInvoice::Yes
-    {
-        out.push(Divergence::Relationship {
-            found: relationship.unwrap_or_default().to_owned(),
-            profile,
-        });
+    // metadata and still be attached in a way that no receiver recognises. Each
+    // of these is a document that opens, renders and is wrong in a way no PDF
+    // reader complains about.
+    if !placement.associated {
+        out.push(Divergence::NotAssociated);
+    }
+    if !placement.in_name_tree {
+        out.push(Divergence::NotInEmbeddedFiles);
+    }
+    match placement.relationship.as_deref() {
+        None => out.push(Divergence::NoRelationship),
+        // Only the case every source agrees on — `Data` on a profile that has
+        // lines. Where the sources disagree, this crate takes no position; see
+        // `Divergence::Relationship`.
+        Some(found)
+            if found.eq_ignore_ascii_case("Data")
+                && profile.is_en16931_invoice() == IsInvoice::Yes =>
+        {
+            out.push(Divergence::Relationship {
+                found: found.to_owned(),
+                profile,
+            });
+        }
+        Some(_) => {}
     }
 
+    // ── what the metadata says ───────────────────────────────────────────────
     if *xmp == Xmp::default() {
+        // A packet with nothing in it cannot state a PDF/A part either, and
+        // saying so twice adds no information.
         out.push(Divergence::NoXmp);
         return out;
+    }
+    if xmp.pdfa_part.as_deref() != Some("3") {
+        out.push(Divergence::NotPdfA3 {
+            part: xmp.pdfa_part.clone(),
+        });
     }
     if let Some(level) = &xmp.conformance_level {
         let claimed = Profile::parse(level);
@@ -443,6 +621,8 @@ fn read_xmp(doc: &lopdf::Document) -> Xmp {
         document_filename: xmp_field(&packet, "DocumentFileName"),
         version: xmp_field(&packet, "Version"),
         conformance_level: xmp_field(&packet, "ConformanceLevel"),
+        pdfa_part: xmp_field(&packet, "part"),
+        pdfa_conformance: xmp_field(&packet, "conformance"),
     }
 }
 
@@ -462,16 +642,43 @@ fn xmp_packet(doc: &lopdf::Document) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// One `fx:`-namespaced element's text.
+/// One namespaced property's value, in either of the two shapes RDF allows.
 ///
 /// The prefix is matched loosely — `fx:`, `zf:` and `pdfaExtension`-declared
-/// variants all appear in the wild ⚠ — by looking for the local name preceded
-/// by a colon.
+/// variants all appear in the wild — by looking for the local name preceded by
+/// a colon.
+///
+/// Both shapes, because both occur and mean the same thing. XMP is RDF, and RDF
+/// lets a simple property be an element or an attribute:
+///
+/// ```xml
+/// <rdf:Description pdfaid:part="3">          <!-- attribute form -->
+/// <rdf:Description><pdfaid:part>3</pdfaid:part>  <!-- element form -->
+/// ```
+///
+/// The Factur-X reference implementation writes `fx:*` as elements and the
+/// PDF/A identification as attributes, and other producers do the reverse.
+/// Reading only one shape means reading only some producers' files.
 fn xmp_field(packet: &str, local_name: &str) -> Option<String> {
+    element(packet, local_name).or_else(|| attribute(packet, local_name))
+}
+
+/// `<ns:Name>value</…>`.
+fn element(packet: &str, local_name: &str) -> Option<String> {
     let needle = format!(":{local_name}>");
     let start = packet.find(&needle)? + needle.len();
     let rest = &packet[start..];
     let end = rest.find("</")?;
+    let value = rest[..end].trim();
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+/// `ns:Name="value"`.
+fn attribute(packet: &str, local_name: &str) -> Option<String> {
+    let needle = format!(":{local_name}=\"");
+    let start = packet.find(&needle)? + needle.len();
+    let rest = &packet[start..];
+    let end = rest.find('"')?;
     let value = rest[..end].trim();
     (!value.is_empty()).then(|| value.to_owned())
 }

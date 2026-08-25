@@ -81,14 +81,11 @@ impl RuleId {
 ///
 /// # Why not build the canonical string
 ///
-/// It did, and it cost 24× on the hot path. `Profile::validate` asks
-/// `matches` once per rule per document — around 300 calls — and each one built
-/// up to three `String`s. On a five-line invoice that was 35 µs of profile
-/// validation against 1.5 µs of core validation, for a profile that adds no
-/// rules at all.
-///
-/// A validator is a thing you run millions of times a day. Comparing two ids is
-/// not an operation that should touch the allocator.
+/// It costs 24× on the hot path. `Profile::validate` asks `matches` once per
+/// rule per document — around 300 calls — and building up to three `String`s
+/// each time turns 1.5 µs of core validation into 35 µs of profile validation,
+/// for a profile that adds no rules at all. Comparing two ids should not touch
+/// the allocator.
 fn canonical_eq(a: &str, b: &str) -> bool {
     let (head_a, num_a) = split_trailing_number(a.trim());
     let (head_b, num_b) = split_trailing_number(b.trim());
@@ -685,15 +682,11 @@ fn sort_findings(findings: &mut [Finding]) {
 /// Every rule in the registry, unconditionally — so `rules_checked()` is
 /// [`rules::CORE`]`.len()`, which is the number the documentation quotes.
 ///
-/// It used to filter `EN-EXT-01` out whenever the invoice carried no extension
-/// data, on the reasoning that a rule with nothing to say has not been checked.
-/// That cost a 226-element `Vec` on the heap for the overwhelmingly common call,
-/// and it made every documented per-profile check count wrong by one against the
-/// tool's own output — a report reading `280 rule(s) checked` beside five files
-/// saying 282. `EN-EXT-01` is now evaluated like every other rule and simply
-/// finds nothing; [`profile::Profile::validate`] withdraws the *finding* where a
-/// profile can represent the data, which is the only place the distinction was
-/// ever load-bearing.
+/// `EN-EXT-01` included: a rule with nothing to say has still been checked, and
+/// filtering it out would make the count one lower than every published figure
+/// on any invoice without extension data.
+/// [`profile::Profile::validate`] withdraws the *finding* where a profile can
+/// represent the data, which is the only place the distinction is load-bearing.
 #[must_use]
 pub fn validate(invoice: &Invoice) -> ValidationReport {
     validate_with(invoice, &rules::CORE)
@@ -793,11 +786,11 @@ impl Check {
 
     /// Which of this profile's checks the suppressions actually remove.
     ///
-    /// Not `suppressed.len()`, which is what it used to be. That counted
-    /// *requests*: suppressing `BR-DE-15` against the bare core profile, or a
-    /// name that resolves to no rule at all, reduced `rules_checked` for a check
-    /// that was never going to run. A count that can be wrong in the safe-looking
-    /// direction is worse than no count.
+    /// Not `suppressed.len()`, which counts *requests*: suppressing
+    /// `BR-DE-15` against the bare core profile, or a name that resolves to no
+    /// rule at all, would reduce `rules_checked` for a check that was never
+    /// going to run. A count that can be wrong in the safe-looking direction is
+    /// worse than no count.
     fn skipped(&self) -> usize {
         self.profile
             .check_ids()
@@ -831,17 +824,15 @@ impl Check {
     ///
     /// # The proof is of `P`, so `P` has to be the profile that ran
     ///
-    /// `P` decides which rule set [`profile::Validated::new`] evaluates, and it
-    /// used to be the *only* thing that did: `self.profile` was never read here.
-    /// So `Check::new(&profiles::XRECHNUNG).prove::<En16931>(inv)` announced an
-    /// XRechnung run, checked the bare core rule set, and handed back a proof —
-    /// and the mirror image, `Check::new(&profiles::EN16931).prove::<XRechnung>`,
-    /// silently ran the stricter set. Either way the profile the caller named and
-    /// the profile that ran were unrelated, in the one method whose entire job is
-    /// to say *which* rule set a document passed.
+    /// `P` decides which rule set [`profile::Validated::new`] evaluates. If it
+    /// were the only thing that did,
+    /// `Check::new(&profiles::XRECHNUNG).prove::<En16931>(inv)` would announce
+    /// an XRechnung run, check the bare core set and hand back a proof — in the
+    /// one method whose entire job is to say *which* rule set a document
+    /// passed. So the two are compared.
     ///
-    /// [`Check::of`] makes the mismatch unrepresentable; this check catches it
-    /// for callers who came in through [`Check::new`].
+    /// [`Check::of`] makes the mismatch unrepresentable; this catches it for
+    /// callers who came in through [`Check::new`].
     ///
     /// # Errors
     /// [`ProveError::WrongProfile`] when `P` does not name this `Check`'s
@@ -935,10 +926,6 @@ mod tests {
     }
 
     /// A proof names the rule set that actually ran, or it is not produced.
-    ///
-    /// The hole this closes: `prove` read only its type parameter, so the
-    /// profile a `Check` was built for and the profile a proof claimed were
-    /// two unrelated choices.
     #[test]
     fn a_proof_cannot_name_a_profile_the_check_did_not_run() {
         use crate::profiles::{En16931, XRechnung};

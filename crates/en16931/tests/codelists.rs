@@ -277,6 +277,16 @@ fn the_profile_rule_sets_cover_their_artefacts() {
             // `profiles::XRECHNUNG_EXTENSION` and its rules are registered.
             |_| true,
         ),
+        // KoSIT publishes **two** Schematrons, and two assertions exist only
+        // in the CII one — so reading the UBL file alone makes "55 / 55" mean
+        // 55 of 57. Both are syntax rules by construction and stay out of
+        // scope, by decision rather than by oversight; see
+        // `CII_ONLY_SYNTAX_RULES`.
+        (
+            "XRechnung 3.0 (CII-only assertions)",
+            "xrechnung-schematron/src/validation/schematron/cii/XRechnung-CII-validation.sch",
+            |id| !CII_ONLY_SYNTAX_RULES.iter().any(|(r, _)| *r == id),
+        ),
         // KoSIT's `rule-list.xml` — the Peppol asserts its build merges in.
         // This file is the *only* place the merged set is written down, and
         // reading the Schematron alone would miss all 21.
@@ -373,6 +383,29 @@ fn the_profile_rule_sets_cover_their_artefacts() {
         );
     }
 }
+
+/// KoSIT assertions that exist only in the CII Schematron, and why a
+/// syntax-independent model cannot hold them.
+///
+/// Both are about the **shape of the CII document**, not about the invoice: the
+/// model has one item base quantity and one line structure, so neither
+/// condition is expressible in it, let alone violable. They belong to
+/// `en16931-formats`, which is where the CII binding lives.
+///
+/// Named here rather than filtered by a pattern, so adding a third CII-only
+/// rule fails this suite and forces the same decision to be made again.
+const CII_ONLY_SYNTAX_RULES: &[(&str, &str)] = &[
+    (
+        "BR-TMP-3",
+        "BT-149 / BT-150 must agree between CII's Gross and Net price paths — \
+         the model carries one base quantity, so the two cannot disagree",
+    ),
+    (
+        "BR-DEX-15",
+        "ram:ParentLineID must not appear — a CII element for sub invoice lines. \
+         The Extension model carries them; whether a syntax can is the syntax's question",
+    ),
+];
 
 /// The syntax-rule count this crate quotes is the one the artefacts carry.
 ///
@@ -557,17 +590,202 @@ fn custom_levels(xml: &str, scenario: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// KoSIT's Schematrons, relative to `spec/`. Both of them.
+const XR_SCHEMATRONS: [&str; 2] = [
+    "xrechnung-schematron/src/validation/schematron/ubl/XRechnung-UBL-validation.sch",
+    "xrechnung-schematron/src/validation/schematron/cii/XRechnung-CII-validation.sch",
+];
+
+/// Every `<assert>`/`<report>` id in KoSIT's own Schematrons, with its `flag`.
+///
+/// Parsed, not scanned: several `test` expressions contain a literal `>`
+/// (`count(cac:SubInvoiceLine) > 0`), so a regular expression over the tag
+/// stops early and reports the wrong flag for `BR-DEX-02`.
+fn kosit_flags(root: &std::path::Path) -> std::collections::BTreeMap<String, en16931::Severity> {
+    let mut out = std::collections::BTreeMap::new();
+    for file in XR_SCHEMATRONS {
+        let path = root.join(file);
+        if !path.exists() {
+            continue;
+        }
+        let xml = std::fs::read_to_string(&path).expect("read Schematron");
+        let doc = roxmltree::Document::parse(&xml).expect("Schematron is XML");
+        for n in doc.descendants() {
+            if !matches!(n.tag_name().name(), "assert" | "report") {
+                continue;
+            }
+            let (Some(id), flag) = (n.attribute("id"), n.attribute("flag").unwrap_or("fatal"))
+            else {
+                continue;
+            };
+            if !id.starts_with("BR-DE") && !id.starts_with("BR-TMP") {
+                continue; // CEN's and Peppol's rules; their own files own them
+            }
+            let level = match flag {
+                "fatal" => en16931::Severity::Fatal,
+                "warning" => en16931::Severity::Warning,
+                "information" => en16931::Severity::Info,
+                other => panic!("{id}: unknown flag {other:?}"),
+            };
+            if let Some(prev) = out.insert(id.to_owned(), level) {
+                assert_eq!(
+                    prev, level,
+                    "{id} carries two flags across the two syntaxes"
+                );
+            }
+        }
+    }
+    out
+}
+
+/// Every KoSIT rule must run at the severity **KoSIT's Schematron** gives it.
+///
+/// # A second file publishes severity, and it was never read
+///
+/// [`the_severity_overrides_are_kosits_own`] checks `scenarios.xml`, which
+/// re-levels *CEN's* rules. KoSIT's own rules carry their severity in the
+/// Schematron's `flag` attribute instead, and nothing compared that — so five
+/// checks ran as fatal that KoSIT publishes as warnings:
+///
+/// | | |
+/// |---|---|
+/// | `BR-DE-26` | *"soll … übermittelt werden"* — a corrected invoice **should** cite the original |
+/// | `BR-DE-27`, `BR-DE-28` | a telephone number with two digits, an address that is not quite one |
+/// | `BR-DE-17`, `BR-DE-21` | scoping: a lawful EN 16931 type code or another CIUS's BT-24 |
+///
+/// Each of those rejected an invoice the German reference validator accepts,
+/// which is the exact failure this crate exists not to have.
+#[test]
+fn every_kosit_check_runs_at_the_severity_kosit_publishes() {
+    let Some(root) = common::require("XRechnung rule severities") else {
+        return;
+    };
+    let published = kosit_flags(&root);
+    if published.is_empty() {
+        eprintln!("note: KoSIT Schematrons absent — skipped");
+        return;
+    }
+
+    let mut checked = 0usize;
+    for profile in [
+        &en16931::profiles::XRECHNUNG,
+        &en16931::profiles::XRECHNUNG_CVD,
+        &en16931::profiles::XRECHNUNG_EXTENSION,
+    ] {
+        for id in profile.check_ids() {
+            let Some(want) = published.get(id) else {
+                continue; // CEN's or Peppol's; a different authority, a different file
+            };
+            let got = profile
+                .severity_of(id)
+                .unwrap_or_else(|| panic!("{}: {id} runs but has no severity", profile.id));
+            assert_eq!(
+                got, *want,
+                "{} reports {id} as {got}, and KoSIT publishes {want}",
+                profile.id
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked > 100, "only {checked} severities compared");
+    eprintln!("KoSIT rule severities: {checked} compared against the Schematron");
+}
+
+/// Peppol publishes every one of its rules as **fatal**, and one of them stops
+/// being fatal when XRechnung merges it.
+///
+/// The companion to
+/// [`every_kosit_check_runs_at_the_severity_kosit_publishes`], for the other
+/// authority whose rules this crate carries. It also pins the single
+/// consequence-changing rewrite in KoSIT's `peppol-into-xr.xsl`:
+///
+/// ```xslt
+/// <xsl:when test="@id='PEPPOL-EN16931-R120'">
+///   <xsl:attribute name="flag">warning</xsl:attribute>
+/// ```
+///
+/// Same id, same text, different consequence — a line whose net amount does not
+/// follow from its price **rejects** a Peppol invoice and merely annotates an
+/// XRechnung one. That is why severity belongs to the rule instance a profile
+/// holds rather than to a global registry, and why this is asserted from the
+/// stylesheet rather than remembered.
+#[test]
+fn every_peppol_rule_runs_at_the_severity_its_authority_publishes() {
+    let Some(root) = common::require("Peppol rule severities") else {
+        return;
+    };
+    let sch = root.join("peppol-bis-invoice-3/rules/sch/PEPPOL-EN16931-UBL.sch");
+    if !sch.exists() {
+        eprintln!("note: {} absent — skipped", sch.display());
+        return;
+    }
+    let xml = std::fs::read_to_string(&sch).expect("read Peppol Schematron");
+    let doc = roxmltree::Document::parse(&xml).expect("Schematron is XML");
+    let mut published = std::collections::BTreeMap::new();
+    for n in doc.descendants() {
+        if !matches!(n.tag_name().name(), "assert" | "report") {
+            continue;
+        }
+        if let Some(id) = n
+            .attribute("id")
+            .filter(|i| i.starts_with("PEPPOL-EN16931"))
+        {
+            published.insert(id.to_owned(), n.attribute("flag").unwrap_or("fatal"));
+        }
+    }
+    assert!(!published.is_empty(), "no Peppol assertions found");
+
+    let mut checked = 0usize;
+    for id in en16931::profiles::PEPPOL_BIS_3.check_ids() {
+        let Some(flag) = published.get(id) else {
+            continue;
+        };
+        assert_eq!(*flag, "fatal", "{id}: Peppol publishes everything fatal");
+        assert_eq!(
+            en16931::profiles::PEPPOL_BIS_3.severity_of(id),
+            Some(en16931::Severity::Fatal),
+            "{id} under Peppol BIS Billing 3.0"
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 46, "every Peppol rule this crate runs");
+
+    // …and the one XRechnung's build rewrites, read out of the stylesheet that
+    // rewrites it rather than trusted from a comment.
+    let xsl = std::fs::read_to_string(root.join("xrechnung-schematron/src/xsl/peppol-into-xr.xsl"))
+        .expect("read peppol-into-xr.xsl");
+    let rewrite = xsl
+        .find("@id='PEPPOL-EN16931-R120'")
+        .map(|i| &xsl[i..i + 400])
+        .expect("the R120 branch");
+    assert!(
+        rewrite.contains(r#"name="flag">warning"#),
+        "the stylesheet no longer downgrades R120:\n{rewrite}"
+    );
+    assert_eq!(
+        en16931::profiles::XRECHNUNG.severity_of("PEPPOL-EN16931-R120"),
+        Some(en16931::Severity::Warning),
+    );
+    eprintln!("Peppol rule severities: {checked} compared, plus XRechnung's R120 rewrite");
+}
+
 /// The profiles' [`Profile::levels`] must be what KoSIT publishes — not a
 /// reconstruction of "which core rule does each `BR-DEX-*` widen?".
 ///
-/// That reconstruction is what the crate used to carry, and it was wrong twice:
-/// it named `PEPPOL-EN16931-CL001`, a rule XRechnung's build does not merge in,
-/// where it meant CEN's `BR-CL-24`; and it omitted `BR-CL-21` and `BR-CL-23`
-/// entirely, so this crate reported as **fatal** two rules the German reference
-/// validator reports as warnings — rejecting documents KoSIT accepts.
+/// That reconstruction goes wrong twice over: it names
+/// `PEPPOL-EN16931-CL001`, a rule XRechnung's build does not merge in, where
+/// CEN's `BR-CL-24` is meant; and it misses `BR-CL-21` and `BR-CL-23`
+/// entirely, which reports as **fatal** two rules the German reference
+/// validator reports as warnings. So the mapping is measured against
+/// `scenarios.xml`, the file the validator actually loads.
 ///
-/// So the mapping is measured against `scenarios.xml`, which is the file the
-/// validator actually loads.
+/// # `levels` has two sources, and this test owns one of them
+///
+/// `scenarios.xml`'s `customLevel` covers CEN's rules. KoSIT's *own* rules
+/// carry their severity in the Schematron `flag`, and two of them are
+/// restrictions with no severity of their own, so `levels` states theirs —
+/// see `XR_LEVELS`. Those entries are partitioned out here and checked by
+/// [`every_kosit_check_runs_at_the_severity_kosit_publishes`] instead.
 #[test]
 fn the_severity_overrides_are_kosits_own() {
     let Some(root) = common::require("XRechnung severity overrides") else {
@@ -614,6 +832,8 @@ fn the_severity_overrides_are_kosits_own() {
         let mut got: Vec<_> = profile
             .levels
             .iter()
+            // KoSIT's own ids are the Schematron's business, not this file's.
+            .filter(|(id, _)| !id.starts_with("BR-DE") && !id.starts_with("BR-TMP"))
             .map(|(id, level)| ((*id).to_owned(), *level))
             .collect();
         got.sort();

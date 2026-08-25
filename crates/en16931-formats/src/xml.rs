@@ -396,12 +396,10 @@ fn order_children(parent: &str, children: &mut Vec<Node>, dropped: &mut Vec<Stri
 
 /// Render `node`, sorting each level **in place**.
 ///
-/// `&mut Node`, not `&Node`. It used to clone `node.children` at every level so
-/// that [`order_children`] had something mutable to sort — and `Node` is a
-/// recursive type, so each of those clones was a deep copy of the whole subtree.
-/// Rendering a thousand-line invoice therefore copied the document once per
-/// level of nesting, every string in it, before writing a byte. Sorting the real
-/// children costs nothing and reads the same.
+/// `&mut Node`, not `&Node`, so [`order_children`] sorts the real children.
+/// Cloning them per level to get something mutable would deep-copy the whole
+/// subtree — `Node` is recursive — and rendering a thousand-line invoice would
+/// copy the document once per level of nesting before writing a byte.
 fn render(
     node: &mut Node,
     path: &str,

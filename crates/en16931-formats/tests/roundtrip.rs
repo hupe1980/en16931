@@ -130,10 +130,10 @@ macro_rules! syntaxes {
 
             /// Several BG-17 accounts survive — which takes several
             /// payment-means elements on the wire, because both schemas put
-            /// the creditor account at 0..1 per element. The writer packed
-            /// them into one element (schema-invalid) and the reader kept
-            /// only the last element's account for two releases, and the two
-            /// bugs were mirror images, so the round trip never noticed.
+            /// the creditor account at 0..1 per element. A writer that packs
+            /// them into one element and a reader that keeps only the last are
+            /// mirror images, so `tests/fidelity.rs` pins the **wire shape**
+            /// as well as the round trip.
             #[test]
             fn several_credit_transfer_accounts_survive_the_round_trip() {
                 use en16931::invoice::{CreditTransfer, PaymentMeans};
@@ -243,6 +243,152 @@ fn a_cii_credit_note_keeps_what_ubl_would_drop() {
     let back = cii::from_str(&out.xml).expect("readable").invoice;
     assert_eq!(back.due_date, cn.due_date);
     assert_eq!(back.project_reference, cn.project_reference);
+}
+
+/// An allowance/charge indicator written as a digit keeps the sign of the money.
+///
+/// `cbc:ChargeIndicator` and `udt:Indicator` are `xs:boolean`, whose lexical
+/// space is `{true, false, 1, 0}`. The UBL reader knew only the two words, so a
+/// schema-valid `<cbc:ChargeIndicator>1</cbc:ChargeIndicator>` read as *false*
+/// and a **fee arrived as a discount** — the same amount, moved to the other
+/// side of the total, with nothing in the reader's own output to say so.
+#[cfg(all(feature = "ubl", feature = "cii"))]
+#[test]
+fn a_charge_written_as_a_digit_is_still_a_charge() {
+    let mut inv = en16931::Invoice::default();
+    inv.charges.push(en16931::invoice::DocumentAllowanceCharge {
+        amount: en16931::InvoiceAmount::parse("10.00").expect("amount"),
+        base_amount: None,
+        percentage: None,
+        vat: en16931::invoice::LineVat {
+            category: en16931::invoice::Code::new("S"),
+            rate: Some(en16931::Percentage::new(rust_decimal::Decimal::from(19))),
+        },
+        reason: Some("Handling fee".to_owned()),
+        reason_code: None,
+    });
+
+    for (syntax, written, word, digit) in [
+        (
+            "UBL",
+            en16931_formats::ubl::to_string(&inv),
+            "<cbc:ChargeIndicator>true</cbc:ChargeIndicator>",
+            "<cbc:ChargeIndicator>1</cbc:ChargeIndicator>",
+        ),
+        (
+            "CII",
+            en16931_formats::cii::to_string(&inv),
+            "<udt:Indicator>true</udt:Indicator>",
+            "<udt:Indicator>1</udt:Indicator>",
+        ),
+    ] {
+        assert!(
+            written.contains(word),
+            "{syntax} writes the word: {written}"
+        );
+        let as_digit = written.replace(word, digit);
+        let (invoice, malformed) = if syntax == "UBL" {
+            let r = en16931_formats::ubl::from_str(&as_digit).expect("readable");
+            (r.invoice, r.malformed)
+        } else {
+            let r = en16931_formats::cii::from_str(&as_digit).expect("readable");
+            (r.invoice, r.malformed)
+        };
+        assert_eq!(invoice.charges.len(), 1, "{syntax}: still a charge");
+        assert!(invoice.allowances.is_empty(), "{syntax}: not an allowance");
+        assert!(malformed.is_empty(), "{syntax}: {malformed:?}");
+    }
+}
+
+/// A **charge** at price level is not a BT-147 discount.
+///
+/// UBL hides BG-29 inside `cac:Price/cac:AllowanceCharge`, and EN 16931 gives
+/// that group only a discount — `PEPPOL-EN16931-R044` forbids a charge there
+/// outright. The reader ignored the indicator and mapped the amount anyway, so
+/// a price *increase* was filed as a *reduction*: the same money, subtracted
+/// instead of added, under the core profile where no rule objects.
+#[cfg(feature = "ubl")]
+#[test]
+fn a_price_level_charge_is_reported_rather_than_read_as_a_discount() {
+    let mut inv = en16931::Invoice::default();
+    let mut line = en16931::InvoiceLine::new(
+        "1",
+        "Widget",
+        en16931::Quantity::ONE,
+        "C62",
+        en16931::InvoiceAmount::parse("90.00").expect("amount"),
+        "S",
+        None,
+    );
+    line.price.gross_price = Some(en16931::UnitPriceAmount::new(rust_decimal::dec!(100.00)));
+    line.price.price_discount = Some(en16931::UnitPriceAmount::new(rust_decimal::dec!(10.00)));
+    inv.lines.push(line);
+
+    let xml = en16931_formats::ubl::to_string(&inv);
+    let read = en16931_formats::ubl::from_str(&xml).expect("readable");
+    assert_eq!(
+        read.invoice.lines[0].price.price_discount,
+        Some(en16931::UnitPriceAmount::new(rust_decimal::dec!(10.00))),
+        "the discount round-trips"
+    );
+
+    // Flip the price-level indicator to `true`, which R044 rejects.
+    let as_charge = xml.replacen(
+        "<cbc:ChargeIndicator>false</cbc:ChargeIndicator>",
+        "<cbc:ChargeIndicator>true</cbc:ChargeIndicator>",
+        1,
+    );
+    assert_ne!(as_charge, xml, "the price-level indicator was found");
+    let read = en16931_formats::ubl::from_str(&as_charge).expect("readable");
+    assert_eq!(
+        read.invoice.lines[0].price.price_discount, None,
+        "a charge is not a discount"
+    );
+    assert!(
+        read.malformed.iter().any(|m| m.contains("R044")),
+        "{:?}",
+        read.malformed
+    );
+}
+
+/// …and an indicator that is not a boolean at all is **reported**, not folded
+/// into "allowance".
+#[cfg(all(feature = "ubl", feature = "cii"))]
+#[test]
+fn an_unreadable_charge_indicator_is_reported() {
+    let mut inv = en16931::Invoice::default();
+    inv.charges.push(en16931::invoice::DocumentAllowanceCharge {
+        amount: en16931::InvoiceAmount::parse("10.00").expect("amount"),
+        base_amount: None,
+        percentage: None,
+        vat: en16931::invoice::LineVat {
+            category: en16931::invoice::Code::new("S"),
+            rate: None,
+        },
+        reason: None,
+        reason_code: None,
+    });
+    let ubl = en16931_formats::ubl::to_string(&inv).replace(
+        "<cbc:ChargeIndicator>true</cbc:ChargeIndicator>",
+        "<cbc:ChargeIndicator>yes</cbc:ChargeIndicator>",
+    );
+    let read = en16931_formats::ubl::from_str(&ubl).expect("readable");
+    assert!(
+        read.malformed.iter().any(|m| m.contains("ChargeIndicator")),
+        "{:?}",
+        read.malformed
+    );
+
+    let cii = en16931_formats::cii::to_string(&inv).replace(
+        "<udt:Indicator>true</udt:Indicator>",
+        "<udt:Indicator>yes</udt:Indicator>",
+    );
+    let read = en16931_formats::cii::from_str(&cii).expect("readable");
+    assert!(
+        read.malformed.iter().any(|m| m.contains("ChargeIndicator")),
+        "{:?}",
+        read.malformed
+    );
 }
 
 /// Each reader refuses the *other* syntax rather than returning an empty

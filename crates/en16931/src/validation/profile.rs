@@ -315,12 +315,9 @@ impl Restriction {
                 ),
                 Self::NotUsed { .. } => (
                     // Blank counts as absent, symmetrically with `Mandatory`.
-                    //
-                    // It used to be `value.is_none()`, which made the two
-                    // variants disagree about what "present" means: a term set
-                    // to `"  "` failed `Mandatory` *and* `NotUsed`, so no
-                    // document could satisfy either reading of it. Whitespace is
-                    // not a value in any of these terms.
+                    // If the two variants disagreed about what "present" means,
+                    // a term set to `"  "` would fail both and no document
+                    // could satisfy either. Whitespace is not a value here.
                     value.as_deref().is_none_or(|v| v.trim().is_empty()),
                     format!("{} shall not be used", acc.label()),
                     None,
@@ -419,6 +416,18 @@ impl fmt::Display for ArtefactRef {
 pub struct Profile {
     /// Short name, for reports.
     pub id: &'static str,
+    /// The same profile, spelled for a command line or a config file.
+    ///
+    /// [`id`](Self::id) is written for a person reading a verdict — *"XRechnung
+    /// 3.0"* — and a name with a space in it is a name every shell needs
+    /// quoted. So a profile also carries the form a flag takes:
+    /// `--profile xrechnung`.
+    ///
+    /// Lower-case ASCII, hyphen-separated, unique across
+    /// [`crate::profiles::ALL`], and stable: it is an interface, so it changes
+    /// only when the profile does. `tests/profiles.rs` asserts all four
+    /// properties.
+    pub slug: &'static str,
     /// The BT-24 value a document declaring this profile carries.
     ///
     /// §7.6: *"The invoice instance document itself should carry the assigned
@@ -466,11 +475,8 @@ pub struct Profile {
     ///
     /// # Authorities re-level; they do not withdraw
     ///
-    /// This used to be `suppressed: &[&str]` — a list of rules to drop. No
-    /// authority does that, and modelling it that way was wrong twice over.
-    ///
-    /// KoSIT's validator configuration states the real mechanism outright, once
-    /// per scenario:
+    /// No authority drops a rule. KoSIT's validator configuration states the
+    /// mechanism outright, once per scenario:
     ///
     /// ```xml
     /// <!-- overwrites CEN severity level "fatal" to enable use of mime codes defined per BR-DEX-01 -->
@@ -481,12 +487,26 @@ pub struct Profile {
     /// changes. Dropping it instead loses the one line a reader needs to
     /// understand why an unusual mime code is present and not objected to.
     ///
-    /// And the list drawn up from "which rules does a `BR-DEX-*` replace?" was
-    /// not the list the authority publishes. XRechnung 3.0 — the plain CIUS,
-    /// with no Extension in sight — re-levels `BR-CL-21` and `BR-CL-23` to
-    /// **warning**, because CEN's ISO 6523 and Rec 20 tables lag the registries
-    /// they track. A validator that reports those as fatal rejects invoices the
-    /// German reference validator accepts, which this crate did.
+    /// The list is transcribed from the configuration, not reconstructed from
+    /// "which rule does a `BR-DEX-*` replace?" — XRechnung 3.0, the plain CIUS
+    /// with no Extension in sight, re-levels `BR-CL-21` and `BR-CL-23` to
+    /// **warning** because CEN's ISO 6523 and Rec 20 tables lag the registries
+    /// they track.
+    ///
+    /// # Two sources, not one
+    ///
+    /// `customLevel` re-levels rules an authority did **not** write — CEN's, in
+    /// KoSIT's case. An authority's own rules carry their severity in the
+    /// Schematron `flag` beside them, and a [`Rule`] holds that directly. So
+    /// this field is only the *difference* between the two, and mostly holds
+    /// `customLevel` entries.
+    ///
+    /// The exception is a [`Restriction`]: it is §7.3.2 data rather than a
+    /// predicate and has no severity to carry, so failing one is fatal by
+    /// construction. Where an authority publishes otherwise — `BR-DE-17` and
+    /// `BR-DE-21` are `flag="warning"`, because a lawful EN 16931 type code
+    /// this CIUS does not admit is a scoping question rather than a malformed
+    /// document — the profile states it here.
     ///
     /// # Consequences
     ///
@@ -520,12 +540,12 @@ impl Profile {
         // can represent nothing. A profile that can hold every group the invoice
         // carries withdraws the finding.
         //
-        // Withdrawing the finding, not skipping the rule. Filtering it out of
-        // the rule sequence is what it used to do, and that made `rules_checked`
-        // one lower than every published count for any invoice without extension
-        // data — which is nearly all of them. The check ran; it had nothing to
-        // report. A plain `==` on the id is right: this one is written by this
-        // crate and a user's spelling never reaches here.
+        // Withdrawing the *finding*, not skipping the rule: filtering it out
+        // of the rule sequence would make `rules_checked` one lower than every
+        // published count on any invoice without extension data, which is
+        // nearly all of them. The check ran; it had nothing to report. A plain
+        // `==` on the id is right — this one is written by this crate, so a
+        // user's spelling never reaches here.
         if invoice
             .extensions
             .populated()
@@ -545,15 +565,65 @@ impl Profile {
         report
     }
 
-    /// The severity this profile reports `rule` at, which is the rule's own
-    /// unless [`levels`](Self::levels) says otherwise.
+    /// The severity **this profile** reports `rule` at.
+    ///
+    /// # Which instance, not which id
+    ///
+    /// An id can name two rules. `PEPPOL-EN16931-R120` is Peppol's, *fatal*,
+    /// and it is also XRechnung's, which KoSIT's build rewrites to *warning* on
+    /// the way in — same id, same text, different consequence. So the answer is
+    /// looked up in this profile's own [`extra_rules`](Self::extra_rules)
+    /// first, then in the core set, and never in another profile's.
+    ///
+    /// Searching the whole registry instead would return whichever instance it
+    /// met first, so a Peppol document would be told the German severity — in
+    /// the one method whose job is to say what a *particular* profile does.
+    ///
+    /// Answers for **restrictions** as well as rules, which is what
+    /// [`check_ids`](Self::check_ids) yields alongside them.
+    ///
+    /// `None` means this profile runs no such check.
+    ///
+    /// ```
+    /// use en16931::{Severity, profiles};
+    ///
+    /// let id = "PEPPOL-EN16931-R120";
+    /// assert_eq!(profiles::PEPPOL_BIS_3.severity_of(id), Some(Severity::Fatal));
+    /// assert_eq!(profiles::XRECHNUNG.severity_of(id), Some(Severity::Warning));
+    /// assert_eq!(profiles::EN16931.severity_of(id), None);   // core runs neither
+    /// ```
     #[must_use]
     pub fn severity_of(&self, rule: &str) -> Option<Severity> {
-        self.levels
-            .iter()
-            .find(|(id, _)| crate::validation::RuleId::new(id).matches(rule))
-            .map(|(_, level)| *level)
-            .or_else(|| super::rules::explain(rule).map(|r| r.severity))
+        let id = crate::validation::RuleId::new;
+        let declared = || {
+            self.extra_rules
+                .iter()
+                .find(|r| r.id.matches(rule))
+                .or_else(|| super::rules::CORE.iter().find(|r| r.id.matches(rule)))
+                .map(|r| r.severity)
+                // A restriction is a §7.3.2 narrowing rather than a predicate,
+                // so it carries no severity of its own: failing one means the
+                // document is outside the profile, which is fatal by
+                // construction. Where an authority publishes otherwise —
+                // `BR-DE-17` and `BR-DE-21` are `flag="warning"` — `levels`
+                // says so, and that branch is taken first.
+                .or_else(|| {
+                    self.restrictions
+                        .iter()
+                        .any(|r| id(r.id()).matches(rule))
+                        .then_some(Severity::Fatal)
+                })
+        };
+        // An override only applies to a check this profile actually runs, so it
+        // is consulted *after* establishing that one exists — otherwise a
+        // profile's `levels` would answer for rules it does not carry.
+        let declared = declared()?;
+        Some(
+            self.levels
+                .iter()
+                .find(|(over, _)| id(over).matches(rule))
+                .map_or(declared, |(_, level)| *level),
+        )
     }
 
     /// The id of every rule and restriction this profile evaluates.
@@ -842,6 +912,7 @@ mod restriction_tests {
     /// their own profile can reach it, which means it needs a test.
     static EVERY_VARIANT: Profile = Profile {
         id: "test",
+        slug: "test",
         edition: crate::Edition::En2017A1,
         specification_id: "urn:test",
         artefacts: &[],
@@ -897,8 +968,8 @@ mod restriction_tests {
         inv.seller.address.city = Some("Berlin".to_owned());
         assert!(EVERY_VARIANT.validate(&inv).has("T-NOTUSED"));
 
-        // The symmetry that was wrong: blank must read as absent here too, or a
-        // whitespace value fails `Mandatory` *and* `NotUsed` at once.
+        // Blank must read as absent here too, or a whitespace value fails
+        // `Mandatory` *and* `NotUsed` at once.
         inv.seller.address.city = Some("  ".to_owned());
         assert!(
             !EVERY_VARIANT.validate(&inv).has("T-NOTUSED"),

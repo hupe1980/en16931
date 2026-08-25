@@ -370,8 +370,7 @@ pub(crate) fn write_waiving(inv: &Invoice, waived: &'static [&'static str]) -> W
     // BG-DEX-09, the XRechnung Extension's third-party payment. `UBL-CR-470`
     // forbids `cac:PrepaidPayment` in core EN 16931, so this is emitted and the
     // serialiser decides: dropped and reported for a core document, kept for a
-    // profile that declares the group. It used to be neither written nor
-    // reported, which lost the data in silence — and this is the very data
+    // profile that declares the group. Never silently: this is the data
     // `EN-EXT-01` exists to warn about, because in Germany losing it is a §14c
     // Abs. 1 UStG liability.
     for (i, p) in inv.extensions.third_party_payments.iter().enumerate() {
@@ -950,13 +949,10 @@ fn price(x: &mut Xml, p: &PriceDetails, i: usize, ccy: &str) {
         if let Some(q) = p.base_quantity {
             // **No `unitCode` when BT-150 is absent**, rather than an empty one.
             //
-            // It used to write `unitCode=""`, and the cost of that was not
-            // cosmetic: the reader read it back as `Some("")`, and
-            // `PEPPOL-EN16931-R130` — *"unit code of price base quantity MUST be
-            // the same as invoiced quantity"* — then fired on a document that
-            // had been perfectly valid before the round trip. A writer that
-            // introduces a fatal finding by writing what it just read is the
-            // worst kind of bug, because both documents look right.
+            // An empty `unitCode` is not cosmetic: the reader takes it back as
+            // `Some("")`, and `PEPPOL-EN16931-R130` — *"unit code of price base
+            // quantity MUST be the same as invoiced quantity"* — then fires on
+            // a document that was valid before the round trip.
             //
             // Omitting the attribute is what 29 of the published instances do,
             // `unitCode` is optional on UBL's `QuantityType`, and no `UBL-DT-*`

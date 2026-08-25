@@ -26,10 +26,10 @@ pub fn workspace_root() -> PathBuf {
 /// repository.
 ///
 /// `CHANGELOG.md` is deliberately **not** here. Its job is to record what was
-/// true at each release, so the current value of a figure and a superseded one
-/// sit in the same file by design, and a scanner cannot tell them apart. That is
-/// exactly what [`HISTORICAL_OPEN`] exists for in the other files — but there it
-/// marks the exception, and here it would have to mark almost everything.
+/// true at each release, so a superseded figure and a current one sit in the
+/// same file by design and a scanner cannot tell them apart. Nothing else in
+/// the tree quotes a superseded figure: prose that describes a past state
+/// belongs in the changelog, not in documentation.
 pub fn documentation() -> Vec<(String, String)> {
     let root = workspace_root();
     let mut out = Vec::new();
@@ -197,51 +197,13 @@ pub fn find_all(pattern: &str, text: &str) -> Vec<usize> {
         .collect()
 }
 
-/// Opening and closing markers for prose that quotes a figure **on purpose**.
-///
-/// The documentation explains why this checking exists by listing the numbers
-/// that were once wrong, so the files contain both current and historical
-/// values of the same figure — and a scanner cannot tell them apart.
-///
-/// An HTML comment rather than a sentence: it is invisible in rendered
-/// markdown and in rustdoc, so the reader sees the table and not the
-/// bookkeeping. Marking the *region* rather than each line keeps a six-row
-/// table from carrying six annotations.
-pub const HISTORICAL_OPEN: &str = "<!-- doc-numbers: historical -->";
-/// See [`HISTORICAL_OPEN`].
-pub const HISTORICAL_CLOSE: &str = "<!-- /doc-numbers -->";
-
-/// Blank out every marked region, preserving byte offsets so nothing else
-/// shifts.
-///
-/// An unclosed marker blanks the rest of the file, which would silently switch
-/// the checking off — so it panics instead.
-fn strip_historical(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(i) = rest.find(HISTORICAL_OPEN) {
-        out.push_str(&rest[..i]);
-        let after = &rest[i..];
-        let end = after.find(HISTORICAL_CLOSE).unwrap_or_else(|| {
-            panic!("a `{HISTORICAL_OPEN}` region is never closed, which would turn off every check below it")
-        }) + HISTORICAL_CLOSE.len();
-        out.extend(std::iter::repeat_n(' ', end));
-        rest = &after[end..];
-    }
-    out.push_str(rest);
-    out
-}
-
 /// Check a set of claims against every documentation file, and fail with all
 /// of the mismatches at once.
 ///
 /// All of them, not the first: a number that moved usually moved in six places,
 /// and reporting one per run turns a five-minute fix into six.
 pub fn check(claims: &[Claim]) {
-    let docs: Vec<(String, String)> = documentation()
-        .into_iter()
-        .map(|(f, t)| (f, strip_historical(&t)))
-        .collect();
+    let docs = documentation();
     let mut wrong = Vec::new();
     let mut never_matched = Vec::new();
     for claim in claims {
@@ -257,11 +219,11 @@ pub fn check(claims: &[Claim]) {
                 }
             }
         }
-        // **Per claim**, not in aggregate. The total used to be compared against
-        // `claims.len()`, which one popular pattern matching a dozen times
-        // satisfies on its own — so a claim whose sentence had been reworded
-        // stopped checking anything and the suite stayed green. Every pattern
-        // has to find its own sentence.
+        // **Per claim**, not in aggregate: comparing the total against
+        // `claims.len()` is satisfied by one popular pattern matching a dozen
+        // times, so a claim whose sentence had been reworded would stop
+        // checking anything and the suite would stay green. Every pattern has
+        // to find its own sentence.
         if matched == 0 {
             never_matched.push(format!(
                 "  {:?} — for {}; measured {}",

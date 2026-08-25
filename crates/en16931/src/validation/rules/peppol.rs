@@ -398,10 +398,9 @@ mod tests {
                 "{} is not namespaced",
                 r.id
             );
-            // Against `CORE` directly. This used to call `explain`, which
-            // searched `CORE` and so happened to mean the same thing — until
-            // `explain` was fixed to resolve profile rules too, at which point
-            // the proxy stopped matching the intent. Assert the thing meant.
+            // Against `CORE` directly rather than through `explain`, which
+            // resolves profile rules too and would therefore find every id
+            // here. Assert the thing meant.
             assert!(
                 !super::super::CORE.iter().any(|c| c.id == r.id),
                 "{} leaked into CORE",

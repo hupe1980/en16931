@@ -255,11 +255,11 @@ fn bt_90_survives_the_crossing_in_both_directions() {
 /// A CII credit note is detected from the **whole** UNTDID 1001 credit-note
 /// list, not from `381` alone.
 ///
-/// CII has one document element, so BT-3 is the only signal. Checking `381` by
-/// itself was wrong in a way the corpus could not show — every published CII
-/// credit note uses `381` — and `396`, `532` and `83` read back as *invoices*,
-/// whereupon `BR-CL-01` compared them against the 50 invoice codes and reported
-/// a violation that is not one.
+/// CII has one document element, so BT-3 is the only signal — and checking
+/// `381` alone is wrong in a way the corpus cannot show, because every
+/// published CII credit note uses `381`. `396`, `532` and `83` would read back
+/// as *invoices*, whereupon `BR-CL-01` compares them against the 50 invoice
+/// codes and reports a violation that is not one.
 #[test]
 fn cii_reads_every_credit_note_code_as_a_credit_note() {
     use en16931::DocumentKind;

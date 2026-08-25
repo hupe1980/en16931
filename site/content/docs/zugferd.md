@@ -38,6 +38,29 @@ and both behave correctly.
 So both are read and compared. `Divergence::NoXmp` says when a counterparty
 scanning metadata first will not see an e-invoice at all.
 
+## What else the read checks
+
+Getting the invoice out is the easy half. The hard half is that a hybrid PDF can
+be **structurally wrong in ways nothing complains about**: it opens, it renders,
+every viewer shows the attachment — and the counterparty's intake never sees an
+e-invoice. Those defects come back as a rejected invoice weeks later, with no
+error message to search for.
+
+Every extraction therefore reports how the payload is wired in, as `Divergence`
+values:
+
+| | What breaks |
+|---|---|
+| `NotAssociated` — absent from the catalogue's `/AF` | a PDF/A-3 receiver asking what is associated with this document is told nothing. The commonest defect: every PDF library can *attach* a file, fewer can *associate* one |
+| `NotInEmbeddedFiles` — absent from `/Names/EmbeddedFiles` | readers without PDF/A-3 support never find it |
+| `NoRelationship` — no `/AFRelationship` | nothing says whether the XML *is* the invoice or accompanies one |
+| `NotPdfA3` — `pdfaid:part` is not `3` | parts 1 and 2 of ISO 19005 forbid embedding a file of arbitrary type at all, so the file contradicts itself and veraPDF will say so |
+| `Relationship`, `Profile`, `Filename`, `NoXmp` | the metadata and the payload disagree |
+
+None of these stops extraction: the payload still comes back verbatim, which is
+what you diagnose with. They are what a **sender** wants to know before the file
+leaves, and `en16931 inspect invoice.pdf` prints them.
+
 ## Not every ZUGFeRD profile is an EN 16931 invoice
 
 This is the trap in the profile matrix. **MINIMUM and BASIC WL carry no lines**,
@@ -54,11 +77,9 @@ match got.profile.is_en16931_invoice() {
 An unrecognised profile is `Unknown`, never quietly the core model. A type system
 that says MINIMUM is an EN 16931 invoice is worse than no type system.
 
-## Writing PDFs: not implemented, and the reason is not effort
+## Writing PDFs: out of scope, and not for want of effort
 
-There is no `embed(pdf_bytes, &invoice) -> Vec<u8>`, and asking for one is
-entirely reasonable — so here is what stands in the way, because "not yet"
-without a reason is the least useful thing a crate can say.
+There is no `embed(pdf_bytes, &invoice) -> Vec<u8>`.
 
 A ZUGFeRD file is not "a PDF with an attachment". It is a **PDF/A-3** document,
 and the conformance is normative: a file that is no longer valid PDF/A is no
@@ -108,44 +129,37 @@ Most of the way there, and the half this crate can guarantee is the half it does
 
 The rest of this project is written against artefacts fetched and verified
 locally. **The ZUGFeRD and Factur-X specifications are not among them** — the
-profile names, attachment filenames and XMP structure here are stated from
-knowledge rather than from a fetched specification, and the crate marks them ⚠.
-
-**The marks worked.** A downstream team building a PDF/A-3 writer needed exactly
-these values, checked them against the Factur-X reference implementation, and
-reported back. Everything matched — the five level names including the space in
-`EN 16931`, the filenames and their preference order, the four `fx:` XMP
-properties, and the finding that published guidance genuinely disagrees on
-`/AFRelationship`, so declining to pick a default is right rather than evasive.
-
-One did not, and is fixed: **`fx:Version` is the version of the Factur-X XMP
-schema, not of ZUGFeRD.** It has been the constant `1.0` since Factur-X 1.0, and
-a ZUGFeRD 2.3 file still carries `1.0`. It was documented as "the ZUGFeRD /
-Factur-X version", which invites comparing it against `2.3` — a check that
-rejects every conforming file.
-
-So the ⚠ stays, and now means *"corroborated against the reference
-implementation, not against CEN"*. That is a weaker claim than the normative
-text and a much stronger one than recollection. The two artefacts, for anyone
-repeating it: [`facturx.py`](https://github.com/akretion/factur-x/blob/master/src/facturx/facturx.py)
+profile names, attachment filenames and XMP structure here are corroborated
+against the Factur-X *reference implementation* rather than against the
+normative text, and the crate marks them ⚠. That is a weaker claim than the
+specification and a much stronger one than recollection. The two artefacts, for
+anyone repeating it:
+[`facturx.py`](https://github.com/akretion/factur-x/blob/master/src/facturx/facturx.py)
 and its [XMP extension schema](https://github.com/akretion/factur-x/blob/master/src/facturx/xmp/Factur-X_extension_schema.xmp).
 
-One value a writer needs and this crate does not hold: the XMP namespace URI is
+One property is easy to misread: **`fx:Version` is the version of the Factur-X
+XMP schema, not of ZUGFeRD.** It has been the constant `1.0` since Factur-X 1.0,
+and a ZUGFeRD 2.3 file still carries `1.0` — so a check comparing it against
+`2.3` rejects every conforming file.
+
+## Two things a writer gets wrong first
+
+Recorded here because neither is in this crate.
+
+**The XMP namespace URI** is
 `urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#`. The mixed case and the
 trailing `#` are both load-bearing, and the sample PDFs in the Factur-X 1.0 info
 package spell it in lowercase, which is wrong.
 
-And a second writer pitfall the same team hit, found only by veraPDF: **the
-Factur-X extension-schema block cannot be pasted into an arbitrary XMP packet as
-its own `rdf:Description`.** XMP allows each property once per packet, and
-`pdfaExtension:schemas` is a property — a PDF generator that already writes
-extension schemas of its own already carries that bag, and a second one makes
-Adobe-lineage parsers and veraPDF reject the whole packet, so the file silently
-stops being PDF/A. Merge the fx schema's `rdf:li` into the existing
-`pdfaExtension:schemas` bag; a standalone description is only correct when the
-generator writes no extension schemas at all. The defect is invisible to every
-XML parser and to `en16931 validate` — it is not an XML defect — which is
-exactly why a writer is checkable only against veraPDF.
+**The Factur-X extension-schema block cannot be pasted into an arbitrary XMP
+packet as its own `rdf:Description`.** XMP allows each property once per packet
+and `pdfaExtension:schemas` is a property — so a PDF generator that already
+writes extension schemas of its own already carries that bag, and a second one
+makes Adobe-lineage parsers and veraPDF reject the whole packet, silently
+ending the file's PDF/A conformance. Merge the fx schema's `rdf:li` into the
+existing bag; a standalone description is only correct when the generator writes
+no extension schemas at all. The defect is invisible to every XML parser and to
+`en16931 validate`, which is why a writer is checkable only against veraPDF.
 
 ## What is next
 

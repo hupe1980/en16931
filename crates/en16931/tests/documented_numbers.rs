@@ -7,22 +7,7 @@
 //! the documentation site. Measuring something once and copying it six times is
 //! how a project ends up asserting, in prose, things that stopped being true.
 //!
-//! It is not hypothetical. Every one of these had already drifted:
-//!
-//! | | was documented | measured |
-//! |---|---|---|
-//! | profile check counts | 226 / 281 / 289 / 295 / 272 | one higher, all five |
-//! | rules retired by the types | 36 | 53 |
-//! | rules registered | 149 | 317 |
-//! | declared divergences | 13 | 11 |
-//! | this crate's own rules | three | four |
-//! | published corpus documents | 490 | 486 |
-//!
-//! Six of those came from one root cause each, and none of them from
-//! carelessness: a rule was added, a pin moved, a category was renamed. The
-//! copies are the problem, not the people.
-//!
-//! So the prose stays — it is what makes the numbers mean something — and the
+//! The prose stays — it is what makes the numbers mean something — and the
 //! numbers in it are read back and compared. `just deps` does the same for the
 //! dependency-graph sizes, and `tests/artefact_pin.rs` for the artefact
 //! revision; this covers what is countable from the library itself.
@@ -36,18 +21,6 @@
 //! `crates/en16931-formats/tests/subset.rs` asserts the prohibition total,
 //! `tests/codelists.rs` the syntax-rule total, `tests/conformance.rs` the
 //! agreement figures.
-//!
-//! # Quoting a figure on purpose
-//!
-//! The table above is exactly the problem this test looks for — old values of
-//! current figures, written down deliberately. Wrap such a passage in
-//! [`HISTORICAL_OPEN`] / [`HISTORICAL_CLOSE`]; the markers are HTML comments, so
-//! they are invisible in rendered markdown and in rustdoc, and they mark a
-//! region rather than a line so a six-row table needs two of them rather than
-//! six annotations.
-//!
-//! [`HISTORICAL_OPEN`]: common::docs::HISTORICAL_OPEN
-//! [`HISTORICAL_CLOSE`]: common::docs::HISTORICAL_CLOSE
 //!
 //! # Scanning rather than listing
 //!
@@ -186,12 +159,10 @@ fn every_number_the_documentation_quotes_is_the_one_the_code_produces() {
 /// The family table is a **partition** of the registry, and is checked as one.
 ///
 /// Nine rows of "how many rules start with this prefix" is nine numbers that can
-/// each be wrong on their own — and one of them was: the site listed 47
-/// `PEPPOL-EN16931-*` where the registry holds 46 distinct ids, so the
-/// composition of 317 rules added up to 318 and had done for two releases. The
-/// duplicate is real and deliberate (`PEPPOL-EN16931-R120` exists twice, once
-/// fatal for Peppol and once rewritten to a warning for XRechnung) which is
-/// exactly why counting it by hand went wrong.
+/// each be wrong on their own, and one of them is easy to get wrong by hand:
+/// `PEPPOL-EN16931-R120` exists **twice**, once fatal for Peppol and once
+/// rewritten to a warning for XRechnung, so counting instances rather than
+/// distinct ids makes the nine rows sum to 318 against a registry of 317.
 ///
 /// So this does not check nine numbers. It classifies every registered rule into
 /// exactly one bucket, asserts the buckets sum to the registry, and *then*

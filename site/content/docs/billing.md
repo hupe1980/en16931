@@ -95,11 +95,12 @@ it. Schema-valid, and wrong.
 
 ## What crosses
 
-BT-1, BT-2, BT-3, BT-5, BT-6, BT-9, BT-20, BT-21, BT-22, BT-29, BT-46, BT-111,
-BG-1, BG-14, BG-20, BG-21, BG-22, BG-23, BG-25 and ZUGFeRD's `BG-X-45` — plus the
-document kind, which is not a business term and decides the root element.
+BT-1, BT-2, BT-3, BT-5, BT-6, BT-9, BT-20, BT-21, BT-22, BT-25, BT-26, BT-29,
+BT-46, BT-111, BG-1, BG-3, BG-14, BG-20, BG-21, BG-22, BG-23, BG-25 and
+ZUGFeRD's `BG-X-45` — plus the document kind, which is not a business term and
+decides the root element.
 
-Two pairs are worth naming:
+Three are worth naming:
 
 - **BT-6 and BT-111 cross together.** `BR-53` makes the second mandatory whenever
   the first is present, so mapping only the currency would manufacture a finding
@@ -110,9 +111,19 @@ Two pairs are worth naming:
   precisely because a party has more than one identity. The scheme is compared
   alongside the value, because the same digits under `0088` and under `0293` are
   two registries saying two different things.
+- **BG-3 arrives filled in.** A credit note that does not say what it credits is
+  an unexplained payment, and `billing`'s `reverse` populates BT-25 and BT-26
+  from the document it reverses. `BR-55` is satisfied by the *type*: BT-25 is
+  not an `Option` upstream and its constructor refuses a blank string, so a BG-3
+  without a reference is not constructible.
 
 Display text and arbitrary key/value labels do not cross: they have no business
-term at all.
+term at all. Neither does a **late-payment penalty**, for a sharper reason —
+`BR-DE-18` gives a Skonto a micro-syntax inside BT-20 and gives a penalty none,
+so a field with no representation in the syntax would vanish on the way out,
+silently. Default interest is generally outside the scope of VAT anyway
+(art. 63 of the VAT Directive; CJEU C-222/81 *BAZ Bausystem*), so a penalty
+billed later is its own document.
 
 Units are resolved from the quantity's own code first, falling back to a small
 resolver table. An unresolvable label is an **error**: guessing produces an

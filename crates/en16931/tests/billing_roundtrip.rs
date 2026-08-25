@@ -617,10 +617,9 @@ fn prose_only_payment_terms_are_passed_through_unchanged() {
 /// BT-6 and BT-111 cross together, or `BR-53` fires on a document that carries
 /// both.
 ///
-/// The adapter used to map neither, so an invoice reporting VAT in a second
-/// currency lost that fact entirely. Mapping only the currency would have been
-/// worse: `BR-53` makes BT-111 mandatory whenever BT-6 is present, so a
-/// half-mapping manufactures a finding out of a complete document.
+/// Mapping only the currency is worse than mapping neither: `BR-53` makes
+/// BT-111 mandatory whenever BT-6 is present, so a half-mapping manufactures a
+/// finding out of a complete document.
 #[test]
 fn the_vat_accounting_currency_and_its_total_cross_together() {
     use billing::VatAccountingCurrency;
@@ -682,14 +681,68 @@ fn the_vat_accounting_currency_and_its_total_cross_together() {
     );
 }
 
+/// A reversal arrives already knowing which invoice it credits — **BG-3**.
+///
+/// `billing::reverse` fills `meta.preceding` in from the document it reverses,
+/// so BT-25 and BT-26 cross the seam without the caller copying the number back
+/// out of `labels` — which is where it lived, and which this adapter
+/// deliberately does not map. A credit note that does not say what it credits
+/// is an unexplained payment, and `BR-55` is satisfied by construction: BT-25
+/// is not an `Option` upstream and its constructor refuses a blank string.
+#[test]
+fn a_reversal_carries_the_preceding_invoice_reference() {
+    let original = simple_document(meta());
+    let credit = original
+        .reverse(DocumentMeta {
+            invoice_number: "STORNO-1".into(),
+            currency: Currency::EUR,
+            issue_date: Some("2026-08-15".into()),
+            ..DocumentMeta::default()
+        })
+        .expect("reverses");
+
+    let inv = FromBilling::new(&credit)
+        .specification_id(profiles::EN16931.specification_id)
+        .seller(party("Seller GmbH", "DE"))
+        .buyer(party("Buyer GmbH", "DE"))
+        .build()
+        .expect("converts");
+
+    let [bg3] = &inv.preceding_invoices[..] else {
+        panic!("expected one BG-3, got {:?}", inv.preceding_invoices);
+    };
+    assert_eq!(bg3.reference.as_str(), "INV-2026-001"); // BT-25
+    assert_eq!(
+        bg3.issue_date.map(|d| d.to_string()).as_deref(),
+        Some("2026-06-30"),
+        "BT-26 is the *original's* issue date, not the credit note's"
+    );
+    assert!(!bg3.reference.is_blank(), "BR-55");
+
+    let report = validate(&inv);
+    assert!(!report.has("BR-55"), "{report}");
+}
+
+/// An ordinary invoice states no BG-3, and the adapter invents none.
+#[test]
+fn a_document_with_no_preceding_reference_produces_no_bg3() {
+    let inv = FromBilling::new(&simple_document(meta()))
+        .specification_id(profiles::EN16931.specification_id)
+        .seller(party("Seller GmbH", "DE"))
+        .buyer(party("Buyer GmbH", "DE"))
+        .build()
+        .expect("converts");
+    assert!(inv.preceding_invoices.is_empty());
+}
+
 /// A `billing` credit note becomes an EN 16931 **credit note**, not an invoice
 /// carrying a credit note's BT-3.
 ///
-/// The adapter used to leave `Invoice::kind` at its default, and the failure was
-/// not subtle once you looked: BT-3 = `381` is a credit-note code, so `BR-CL-01`
-/// fires on the invoice list; `BR-CO-25` runs when it must not; and
-/// `en16931-formats` picks the UBL document element from this field, so the
-/// document went out as `<ubl:Invoice>` with a credit note inside it.
+/// Leaving `Invoice::kind` at its default fails three ways at once: BT-3 =
+/// `381` is a credit-note code, so `BR-CL-01` fires on the invoice list;
+/// `BR-CO-25` runs when it must not; and `en16931-formats` picks the UBL
+/// document element from this field, so the document goes out as
+/// `<ubl:Invoice>` with a credit note inside it.
 #[test]
 fn a_billing_credit_note_becomes_an_en16931_credit_note() {
     use en16931::DocumentKind as EnKind;

@@ -43,15 +43,14 @@ check:
 
 # Clippy over the feature combinations a consumer can actually select.
 #
-# `just lint` runs `--all-features`, which is the one combination where nothing
-# is `cfg`-ed out — so it cannot see code that is dead without a feature, or
-# code that fails to compile without one. Both have reached CI: `Xml::waiving`
-# is called only by the UBL writer, and under `--features cii` alone it is dead
-# code that `-D warnings` rejects.
+# `just lint` runs `--all-features`, the one combination where nothing is
+# `cfg`-ed out — so it cannot see code that is dead without a feature, or code
+# that fails to compile without one. `Xml::waiving` is called only by the UBL
+# writer, and under `--features cii` alone it is dead code `-D warnings`
+# rejects.
 #
-# The same list as `.github/workflows/ci.yml`, deliberately. Two copies is one
-# too many, and the alternative — CI calling this recipe — would put a `just`
-# install in front of every job for one step's worth of sharing.
+# The same list as `.github/workflows/ci.yml`: CI calling this recipe would put
+# a `just` install in front of every job for one step's worth of sharing.
 [doc("Clippy over every feature combination CI checks.")]
 features:
     #!/usr/bin/env bash
@@ -124,18 +123,12 @@ wasm:
     rustup target add wasm32-unknown-unknown
     cargo build -p en16931 --target wasm32-unknown-unknown --no-default-features --features svrl,serde
 
-# Every dependency-graph size the documentation claims, measured.
-#
-# Both READMEs, both `lib.rs` headers and two `Cargo.toml` feature docs quote
-# these numbers, and they had already drifted — the ZUGFeRD graph was documented
-# as 56 in three places and 57 in two, and it is 57. A number repeated in five
-# files is a number nobody rechecks, so it is checked here instead.
+# Every dependency-graph size the documentation claims, measured. A number
+# repeated in five files is a number nobody rechecks.
 #
 # `--edges normal` excludes dev and build edges: this is the graph a *consumer*
-# gets, which is the only one worth quoting. Counts include the crate itself.
-#
-# Raising a limit is a decision, not a chore. The small graph is why `en16931`
-# reaches `wasm32`, and why the PDF parser is behind a non-default feature.
+# gets. Counts include the crate itself. Raising a limit is a decision — the
+# small graph is why `en16931` reaches `wasm32`.
 [doc("Every dependency-graph size the documentation claims, measured.")]
 deps:
     #!/usr/bin/env bash
@@ -176,20 +169,13 @@ deps:
 
 # Fail if a source file is gitignored, or is tracked but should not be.
 #
-# This exists because of a bug that cost a green local build and a red CI one.
-# `.gitignore` carried a bare filename for a local working note — and a bare
-# pattern matches at **any depth**, on a case-insensitive filesystem in **any
-# case**. It matched a documentation page whose name collided, and that page was
-# silently untracked: it existed here, the site built here, and CI failed on a
-# broken link to a page that had never been pushed.
+# A bare `.gitignore` pattern matches at **any depth**, and on a
+# case-insensitive filesystem in **any case** — so one can silently swallow a
+# source file that exists locally and was never pushed. `git status` does not
+# list an ignored file, so the working tree looks clean.
 #
-# The reason nobody saw it is the sharp bit: `git status` does not list an
-# ignored file. The working tree looked clean because the file was invisible,
-# not because it was committed. Anchoring the patterns fixed that instance; this
-# recipe is what makes the next one impossible.
-#
-# CI cannot catch this — it only ever has the tracked files, so the missing one
-# simply is not there to notice. It has to run where the file exists.
+# CI cannot catch this: it only ever has the tracked files, so the missing one
+# is not there to notice. It has to run where the file exists.
 [doc("Fail if a source file is gitignored, or is missing from git.")]
 tracked:
     #!/usr/bin/env bash
@@ -288,18 +274,15 @@ site-card:
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
 
-# Security advisories — and a re-check of every advisory we have set aside.
+# Security advisories — and a re-check of every advisory set aside.
 #
-# `cargo audit` reads `Cargo.lock`, which is feature-independent: it lists the
-# optional dependencies of every package whether or not anything enables them.
-# So it can flag a crate that is never compiled. `.cargo/audit.toml` ignores one
-# such advisory, with the reasoning written out.
+# `cargo audit` reads `Cargo.lock`, which is feature-independent, so it can flag
+# a crate that is never compiled. `.cargo/audit.toml` ignores one such advisory.
 #
 # An ignore nobody rechecks is how a real exposure ends up filed under a
-# resolved one, so the justification is asserted rather than trusted: every
-# crate named there must be absent from the **build** graph, across the whole
-# workspace with every feature on. If one ever appears, the ignore is no longer
-# true and this fails.
+# resolved one, so every crate named there must be absent from the **build**
+# graph across the whole workspace with every feature on. If one appears, the
+# ignore is no longer true and this fails.
 [doc("Security advisories, and a re-check of every ignore in .cargo/audit.toml.")]
 audit:
     #!/usr/bin/env bash

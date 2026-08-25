@@ -21,58 +21,34 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-## UBL 2.1 — `Invoice` and `CreditNote`, both directions.
-##
-## On by default: it is the syntax XRechnung is overwhelmingly sent in, and a
-## default build that could not read one would surprise everybody.
+# UBL 2.1, both directions. On by default: it is the syntax XRechnung is
+# overwhelmingly sent in.
 default = ["ubl"]
 ubl = ["dep:roxmltree"]
-## UN/CEFACT CII D16B — `rsm:CrossIndustryInvoice`, both directions.
-##
-## One binding serving two consumers is the reason this is one crate: XRechnung
-## is carried in CII as well as UBL, and every ZUGFeRD payload is CII — which is
-## why `zugferd` enables this feature rather than duplicating the binding.
+# UN/CEFACT CII D16B, both directions. One binding serves two consumers —
+# XRechnung is carried in CII as well as UBL, and every ZUGFeRD payload is CII.
 cii = ["dep:roxmltree"]
-## ZUGFeRD / Factur-X — **reading only**: pull the CII invoice out of a hybrid
-## PDF, with its XMP metadata and any disagreement between the two.
-##
-## There is no writer, and the name does not say so. A downstream user read
-## `zugferd` on crates.io, assumed it meant both directions, found no
-## `embed`-shaped function, concluded the feature was useless to them, and
-## reimplemented the extractor by hand. The module docs explain the absence at
-## length; the feature list is what people see first, so it says it here.
-##
-## **Off by default, and that matters.** `lopdf` brings AES, ChaCha20, SHA-2,
-## `getrandom` and `libc` — a graph of 57 crates against 13 for `ubl` alone,
-## and one that does not build for `wasm32-unknown-unknown`. Nobody reading a
-## UBL invoice should pay for a PDF parser.
+# ZUGFeRD / Factur-X, **reading only** — there is no writer; see `zugferd`'s
+# module docs. Off by default: `lopdf` takes the graph from 13 crates to 57 and
+# does not build for `wasm32-unknown-unknown`.
 zugferd = ["dep:lopdf", "cii"]
-## `serde` on this crate's own public types.
+# `serde` on this crate's own public types.
 serde = ["dep:serde", "en16931/serde"]
 
 [dependencies]
-# Declared in `[workspace.dependencies]`: a path *and* a version, so `cargo
-# publish` resolves it from crates.io while everything here builds against the
-# sibling. No `[patch.crates-io]`, and no publish-ordering hazard — a breaking
-# change to the model and its use here land in one commit.
 en16931.workspace   = true
 thiserror.workspace = true
-# The model's amounts are `rust_decimal`-backed and the reader parses into them.
-# Pinned to `en16931`'s version deliberately: two `Decimal` types in one graph
-# is a compile error nobody enjoys diagnosing. The pin lives in
-# `[workspace.dependencies]`, so the two cannot drift.
+# Pinned to `en16931`'s version in `[workspace.dependencies]`: two `Decimal`
+# types in one graph is a compile error nobody enjoys diagnosing.
 rust_decimal.workspace = true
 
-# Reading XML only. The writers build strings and need nothing at all.
-#
-# `roxmltree` rather than `quick-xml`: arena-allocated rather than
-# allocation-per-node, no panics on hostile input, and — the deciding point —
-# the reader CEN's conformance suites already validate was written against it.
+# Reading XML only — the writers build strings and need nothing at all.
+# `roxmltree` rather than `quick-xml`: arena-allocated, no panics on hostile
+# input, and the reader CEN's conformance suites already validate.
 roxmltree = { workspace = true, optional = true }
 
 # PDF object parsing, for `zugferd`. `default-features = false` drops chrono,
-# jiff, rayon and time: a date library and a thread pool are not needed to
-# inflate one stream.
+# jiff, rayon and time — not needed to inflate one stream.
 lopdf = { version = "0.44", default-features = false, optional = true }
 
 serde = { workspace = true, optional = true }

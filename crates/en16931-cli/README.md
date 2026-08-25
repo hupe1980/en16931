@@ -54,10 +54,10 @@ en16931 validate out/*.xml --quiet || exit 1
 ```
 
 Hostile input lands on `2`, never on a crash. A document nested a few hundred
-elements deep used to abort the process — the XML parser recurses per level, and
-a stack overflow is not something Rust can catch — so `validate` exited `134`
-with no report. It is refused before parsing now. Entity expansion and XXE need a
-DTD, and the parser rejects any document carrying one.
+elements deep is refused **before** parsing: the XML parser recurses per level,
+and a stack overflow is not something Rust can catch, so it would abort the
+process with no report at all. Entity expansion and XXE need a DTD, and the
+parser rejects any document carrying one.
 
 
 ## The commands
@@ -66,7 +66,7 @@ DTD, and the parser rejects any document carrying one.
 
 ```sh
 en16931 validate INVOICE...
-    [--profile auto|<name>|<BT-24>]   # default: whatever the document declares
+    [-p|--profile auto|<name>|<BT-24>] # default: whatever the document declares
     [--format text|json|svrl]
     [--strict]                        # warnings and information count as failures
     [--without RULE]                  # skip a rule, loudly. Repeatable.
@@ -79,7 +79,24 @@ rules the sender generated under; validating an XRechnung against the bare core
 model is the most common way to ship a document a counterparty then rejects.
 
 Name a profile to ask a different question — *"would this pass in Germany?"* —
-about a document that does not claim to.
+about a document that does not claim to. A profile answers to three spellings,
+and `en16931 profiles` prints all of them:
+
+| | |
+|---|---|
+| `xrechnung` | the **slug** — lower case, no spaces, what you type (`-p xrechnung`) |
+| `"XRechnung 3.0"` | the display name, as a report prints it |
+| `urn:cen.eu:en16931:2017#compliant#…` | BT-24 verbatim, which a script has and a person does not |
+
+```console
+$ en16931 profiles
+PROFILE              NAME                     CHECKS  CIUS?  BT-24
+en16931              EN 16931                    227  n/a    urn:cen.eu:en16931:2017
+xrechnung            XRechnung 3.0               282  no     urn:cen.eu:en16931:2017#compliant#…
+xrechnung-cvd        XRechnung 3.0 CVD           290  no     …#compliant#…:xrechnung:cvd_0.9
+xrechnung-extension  XRechnung 3.0 Extension     296  no     …#conformant#…:extension:xrechnung_3.0
+peppol               Peppol BIS Billing 3.0      273  yes    urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:…
+```
 
 `--strict` is **off** by default, and that is deliberate. KoSIT reports
 `BR-CL-23` at warning on purpose, because CEN's unit-code table lags UN/ECE's;
@@ -93,7 +110,7 @@ XRechnung 3.0 validation (…) — 282 rule(s) checked, 1 finding(s), valid
 $ echo $?
 0
 
-$ en16931 validate rechnung.xml --profile "EN 16931"   # the core model
+$ en16931 validate rechnung.xml --profile en16931      # the core model
 EN 16931 validation (…) — 227 rule(s) checked, 1 finding(s), INVALID
   [BR-CL-23] BG-25[0]/BT-130 — Unit code MUST be coded according to …
 $ echo $?
@@ -111,7 +128,7 @@ deviation you cannot see in the artefact is worse than one you argued for.
 ### `convert`
 
 ```sh
-en16931 convert INVOICE --to ubl|cii [--profile <name>] [-o OUT]
+en16931 convert INVOICE --to ubl|cii [-p <profile>] [-o OUT]
 ```
 
 The conversion goes **through the semantic model**, so what comes out is what
@@ -210,7 +227,7 @@ invoice.pdf
 ```sh
 en16931 explain BR-CO-14        # or br-co-14, or BR-CO-3, or BR-IG-1
 en16931 profiles
-en16931 rules [--profile <name>] [--term BT-117] [--format text|json]
+en16931 rules [-p <profile>] [--term BT-117] [--format text|json]
 ```
 
 `explain` resolves rule ids in every spelling the standard and the artefacts use
@@ -218,10 +235,23 @@ en16931 rules [--profile <name>] [--term BT-117] [--format text|json]
 `BR-AF-*` / `BR-AG-*`. It answers for **profile restrictions** too, which are
 data rather than predicates and still appear in reports under their own ids.
 
-It also says which profiles run the rule and at what severity, which is the
-answer to *"why did my validator not object to this?"*
+It also says which profiles run the check and at what severity, which is the
+answer to *"why did my validator not object to this?"* — and where an id names
+two rules, it says so rather than picking one:
 
-`profiles` also prints the **authority releases** this build was verified
+```console
+$ en16931 explain PEPPOL-EN16931-R120
+PEPPOL-EN16931-R120  [varies by profile]  the artefacts only — an authority's addition
+  …
+  run by: XRechnung 3.0 (warning), … , Peppol BIS Billing 3.0 (fatal)
+```
+
+Same id, same text, different consequence: KoSIT's build rewrites the flag when
+it merges Peppol's rule into XRechnung's Schematron.
+
+`profiles` names each profile twice — the slug `--profile` takes and the
+display name a report prints — because the two differ and only one of them is
+typeable. It also prints the **authority releases** this build was verified
 against — CEN's, KoSIT's Schematron, KoSIT's validator configuration and
 OpenPeppol's, each at a release tag. The same list travels in every report, per
 profile, because `BR-DE-15` is KoSIT's rule on KoSIT's cadence and stamping
@@ -238,22 +268,21 @@ en16931 rules --format json > new.json && diff old.json new.json
 
 `rules --profile <name>` lists **every check that profile declares**, rules and
 §7.3.2 restrictions alike, and its total is the same number `profiles` prints in
-its CHECKS column and a report prints as `rule(s) checked`. It used to list the
-rules only, so XRechnung showed 270 of its 282 checks and the twelve missing were
-the `BR-DE-*` narrowings every German counterparty quotes. A restriction is
-marked `profile` in the SOURCE column, and carries `"restriction": "mandatory" |
-"not-used" | "code-values"` in the JSON — the wording is this crate's rendering
-of a narrowing, not an authority's sentence, and the catalogue does not pretend
-otherwise.
+its CHECKS column and a report prints as `rule(s) checked` — restrictions
+included, because the twelve `BR-DE-*` narrowings are the ones every German
+counterparty quotes. A restriction is marked `profile` in the SOURCE column and
+carries `"restriction": "mandatory" | "not-used" | "code-values"` in the JSON;
+its wording is this crate's rendering of a narrowing, not an authority's
+sentence, and the catalogue does not pretend otherwise.
 
 
 …and the shortest way to see the severity question the libraries spend a page
 on:
 
 ```console
-$ en16931 rules --profile "EN 16931"    | grep BR-CL-23
+$ en16931 rules --profile en16931    | grep BR-CL-23
 BR-CL-23    fatal      artefact    Unit code MUST be coded according to …
-$ en16931 rules --profile "XRechnung 3.0" | grep BR-CL-23
+$ en16931 rules --profile xrechnung  | grep BR-CL-23
 BR-CL-23    warning    artefact    Unit code MUST be coded according to …
 ```
 

@@ -58,10 +58,9 @@ mod tests {
     /// The tables must contain something, or every test that consults them
     /// passes for the wrong reason.
     ///
-    /// `TOTAL_PARAMS` counts **assertions**, not rows. It used to count rows and
-    /// unextracted assertions together, so it grew when the extractor got better
-    /// at reading the artefact — a total that moves for that reason is not a
-    /// total. The floor moved with it, from 1 000 to 600.
+    /// `TOTAL_PARAMS` counts **assertions**, not rows. Counting rows and
+    /// unextracted assertions together would make the total grow whenever the
+    /// extractor got better at reading the artefact, which is not a total.
     #[test]
     fn the_tables_are_populated() {
         assert!(FORBIDDEN_PATHS.len() > 1_000, "{}", FORBIDDEN_PATHS.len());

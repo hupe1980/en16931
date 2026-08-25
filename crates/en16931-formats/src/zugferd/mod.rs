@@ -36,11 +36,43 @@
 //! `examples/zugferd_extract.rs` is a runnable version that builds its own PDF
 //! when given no argument.
 //!
-//! # Writing: not implemented, and the reason is not effort
+//! # What else the read checks, and why it is worth checking
 //!
-//! There is **no `embed(pdf_bytes, &invoice) -> Vec<u8>`**, and asking for one
-//! is entirely reasonable — so here is what stands in the way, because "not
-//! yet" without a reason is the least useful thing a crate can say.
+//! Getting the invoice out is the easy half. The hard half is that a hybrid PDF
+//! can be **structurally wrong in ways nothing complains about**: it opens, it
+//! renders, every viewer shows the attachment — and the counterparty's intake
+//! never sees an e-invoice. Those defects arrive back as a rejected invoice
+//! weeks later, with no error to search for.
+//!
+//! So every extraction also reports how the payload is wired in, as
+//! [`Divergence`] values on [`Extracted::divergence`]:
+//!
+//! | | What breaks |
+//! |---|---|
+//! | [`NotAssociated`] — absent from the catalogue's `/AF` | a PDF/A-3 receiver asking what is associated with this document is told nothing. The commonest defect: every PDF library can *attach* a file and fewer can *associate* one |
+//! | [`NotInEmbeddedFiles`] — absent from `/Names/EmbeddedFiles` | readers without PDF/A-3 support never find it |
+//! | [`NoRelationship`] — no `/AFRelationship` | nothing says whether the XML *is* the invoice or accompanies one |
+//! | [`NotPdfA3`] — `pdfaid:part` is not `3` | parts 1 and 2 of ISO 19005 forbid embedding a file of arbitrary type at all, so the file is self-contradictory and veraPDF will say so |
+//! | [`Relationship`], [`Profile`], [`Filename`], [`NoXmp`] | the metadata and the payload disagree |
+//!
+//! None of these stops extraction: the payload still comes back verbatim, which
+//! is what you diagnose with. They are what a sender wants to know **before**
+//! the file leaves, and `en16931 inspect` prints them.
+//!
+//! [`Divergence`]: crate::zugferd::Divergence
+//! [`Extracted::divergence`]: crate::zugferd::Extracted::divergence
+//! [`NotAssociated`]: crate::zugferd::Divergence::NotAssociated
+//! [`NotInEmbeddedFiles`]: crate::zugferd::Divergence::NotInEmbeddedFiles
+//! [`NoRelationship`]: crate::zugferd::Divergence::NoRelationship
+//! [`NotPdfA3`]: crate::zugferd::Divergence::NotPdfA3
+//! [`Relationship`]: crate::zugferd::Divergence::Relationship
+//! [`Profile`]: crate::zugferd::Divergence::Profile
+//! [`Filename`]: crate::zugferd::Divergence::Filename
+//! [`NoXmp`]: crate::zugferd::Divergence::NoXmp
+//!
+//! # Writing: out of scope, and not for want of effort
+//!
+//! There is **no `embed(pdf_bytes, &invoice) -> Vec<u8>`**.
 //!
 //! A ZUGFeRD file is not "a PDF with an attachment". It is a **PDF/A-3**
 //! document, and the conformance is normative: ZUGFeRD 2.x and Factur-X both
@@ -94,74 +126,46 @@
 //! validated the model against the profile you name — and have that toolchain
 //! embed it. The half this crate can guarantee is the half it does.
 //!
-//! There was a `render` feature declared for the visible half of the same job.
-//! It enabled nothing, gated nothing and shipped in the feature table for two
-//! releases; a feature that does not exist is worse documentation than an
-//! absence, so it is gone. This section is the answer it was standing in for.
+//! # ⚠ Provenance
 //!
-//! # ⚠ Provenance, and what has since been corroborated
+//! Everything else in this crate is derived from artefacts fetched into
+//! `spec/` and verified there. **The ZUGFeRD and Factur-X specifications are
+//! not among them**, so the claims this module marks ⚠ — profile names,
+//! attachment filenames, the XMP structure — are corroborated against the
+//! *reference implementation* rather than against the normative text. That is
+//! a weaker claim, and the mark says so.
 //!
-//! [`en16931`]'s design was written against artefacts fetched into `spec/` and
-//! verified there. **The ZUGFeRD and Factur-X specifications are not among
-//! them.** Claims marked ⚠ — profile names, attachment filenames, the XMP
-//! structure — are stated from knowledge rather than a fetched specification,
-//! and are the first thing to check before relying on them.
-//!
-//! That warning is not boilerplate. This project already had one incident where
-//! two plausible specification identifiers were invented and an argument built
-//! on them; the fix was to check every transcribed value against its source.
-//!
-//! **The warning worked.** A downstream user building a writer needed exactly
-//! these values, went and checked them against the reference implementation, and
-//! reported back: every ⚠ value in this module is correct —
-//! [`Profile::as_str`]'s five Factur-X level names including the space in
-//! `EN 16931`, [`FILENAMES`] and their preference order, the four `fx:`
-//! properties and their spellings, and the observation behind
-//! [`Divergence::Relationship`] that the published sources genuinely disagree
-//! between `Alternative` and `Source` so this crate is right not to pick.
-//!
-//! One was **wrong**, and is fixed: `fx:Version` is the version of the Factur-X
-//! *XMP schema* — constant `1.0` — and was documented here as the ZUGFeRD
-//! version. See [`Xmp::version`].
-//!
-//! The two artefacts they checked against, for anyone repeating it:
+//! The two artefacts to check against:
 //!
 //! | | |
 //! |---|---|
 //! | [`facturx.py`](https://raw.githubusercontent.com/akretion/factur-x/master/src/facturx/facturx.py) | `FACTURX_LEVEL2xmp`, `XML_AFRelationship`, the filenames, and the hardcoded `"version": "1.0"` |
 //! | [`Factur-X_extension_schema.xmp`](https://raw.githubusercontent.com/akretion/factur-x/master/src/facturx/xmp/Factur-X_extension_schema.xmp) | the PDF/A extension schema, authored by PDFlib for the Factur-X 1.0 info package |
 //!
-//! Neither is the specification, so **the ⚠ stays**: these are the artefacts
-//! every implementation is built against, which is a different claim from the
-//! normative text and a weaker one. But it is a great deal better than one
-//! person's recollection, and the marks now mean "corroborated against the
-//! reference implementation, not against CEN" rather than "unchecked".
+//! # Two things a writer gets wrong first
 //!
-//! One value a writer needs that is **not** in this crate, recorded here because
-//! it is the first thing to get wrong: the XMP namespace URI is
+//! Recorded here because neither is in this crate and both cost a working
+//! afternoon.
+//!
+//! **The XMP namespace URI** is
 //! `urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#`. The mixed case in
 //! `CrossIndustryDocument` and the trailing `#` are both load-bearing, and the
-//! PDFlib file notes that the sample PDFs in the Factur-X 1.0 info package use
-//! an all-lowercase spelling that is *not* correct.
+//! sample PDFs in the Factur-X 1.0 info package use an all-lowercase spelling
+//! that is *not* correct.
 //!
-//! And a second writer pitfall, reported back by the same downstream user after
-//! running their output through veraPDF: **the Factur-X extension-schema block
-//! is not a self-contained fragment you can paste into an arbitrary packet.**
-//! The XMP data model (ISO 16684-1) allows each property at most once per
-//! packet, and `pdfaExtension:schemas` *is* a property. A PDF generator that
-//! already writes extension schemas of its own — Typst/krilla does — already
-//! carries a `pdfaExtension:schemas` bag, and adding the Factur-X description
-//! as a second `rdf:Description` duplicates the property. Every XML parser
-//! accepts the result; Adobe-lineage XMP parsers and veraPDF reject the entire
-//! packet (clause 6.6.2.1, with the PDF/A identification of 6.6.4 then reported
-//! missing), so the file silently stops being PDF/A. The fx schema's `rdf:li`
-//! must be **merged into whatever `pdfaExtension:schemas` bag is already
-//! there**; a standalone `rdf:Description` is only right for a generator that
-//! writes no extension schemas at all. Neither this crate's reader nor
-//! `en16931 validate` can see the defect — it is not an XML defect, and the
-//! payload is reached through the embedded-files tree, not the XMP — which is
-//! exactly why the section above says a writer is checkable only against
-//! veraPDF.
+//! **The Factur-X extension-schema block is not a self-contained fragment.**
+//! XMP (ISO 16684-1) allows each property at most once per packet, and
+//! `pdfaExtension:schemas` *is* a property — so a generator that already writes
+//! extension schemas of its own (Typst/krilla does) already carries the bag,
+//! and adding the Factur-X description as a second `rdf:Description` duplicates
+//! it. Every XML parser accepts the result; Adobe-lineage XMP parsers and
+//! veraPDF reject the whole packet (clause 6.6.2.1, then reporting the PDF/A
+//! identification of 6.6.4 missing), and the file silently stops being PDF/A.
+//! The fx schema's `rdf:li` must be **merged into whatever
+//! `pdfaExtension:schemas` bag is already there**. Neither this crate's reader
+//! nor `en16931 validate` can see the defect — it is not an XML defect, and the
+//! payload is reached through the embedded-files tree rather than the XMP —
+//! which is why a writer is checkable only against veraPDF.
 //!
 //! [`Profile::as_str`]: crate::zugferd::Profile::as_str
 //! [`Xmp::version`]: crate::zugferd::Xmp::version

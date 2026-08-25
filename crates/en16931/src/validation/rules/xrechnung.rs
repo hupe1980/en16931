@@ -243,7 +243,12 @@ rule!(BR_DE_31, "BR-DE-31", Fatal, terms: [BtId(91)],
 
 // ── BR-DE-26 — a corrected invoice references the original ────────────────────
 
-rule!(BR_DE_26, "BR-DE-26", Fatal, terms: [bt::TYPE_CODE, bt::PRECEDING_INVOICE],
+// `Warning`, and the German text says why: *"**soll** … übermittelt werden"* —
+// should, not must. KoSIT ships it `flag="warning"`, and a validator that
+// rejects a corrected invoice over a missing BG-3 rejects documents the German
+// reference validator accepts. See `XR_LEVELS` for the four others in this
+// class.
+rule!(BR_DE_26, "BR-DE-26", Warning, terms: [bt::TYPE_CODE, bt::PRECEDING_INVOICE],
 "Wenn im Element \"Invoice type code\" (BT-3) der Code 384 (Corrected invoice) übergeben \
  wird, soll PRECEDING INVOICE REFERENCE (BG-3) mindestens einmal übermittelt werden.",
 |inv, f| {
@@ -354,8 +359,13 @@ rule!(BR_DE_20, "BR-DE-20", Warning, terms: [BtId(91)],
 });
 
 // ── BR-DE-27 / BR-DE-28 — contact formats ─────────────────────────────────────
+//
+// Both `Warning`, as KoSIT ships them. A telephone number with two digits and
+// an address that is not quite an address are data-quality problems, not
+// grounds for refusing an invoice, and the rule texts say *"sollen"* rather
+// than *"müssen"* for exactly that reason.
 
-rule!(BR_DE_27, "BR-DE-27", Fatal, terms: [BtId(42)],
+rule!(BR_DE_27, "BR-DE-27", Warning, terms: [BtId(42)],
 "In BT-42 sollen mindestens drei Ziffern enthalten sein.",
 |inv, f| {
     if let Some(phone) = inv.seller.contact.phone.as_deref()
@@ -365,7 +375,7 @@ rule!(BR_DE_27, "BR-DE-27", Fatal, terms: [BtId(42)],
     }
 });
 
-rule!(BR_DE_28, "BR-DE-28", Fatal, terms: [BtId(43)],
+rule!(BR_DE_28, "BR-DE-28", Warning, terms: [BtId(43)],
 "In BT-43 soll genau ein @-Zeichen enthalten sein, welches nicht von einem Leerzeichen oder \
  einem Punkt, aber von mindestens zwei Zeichen auf beiden Seiten flankiert wird. Ein Punkt \
  sollte nicht am Anfang oder am Ende stehen.",

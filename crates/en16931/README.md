@@ -44,24 +44,28 @@ parser would end that, and adding a PDF parser takes the graph to 57 crates and
 breaks `wasm32` outright.
 
 > **Status: complete against every rule set it claims.** Not "supports
-> XRechnung" — **41 of 41** KoSIT rules, asserted against KoSIT's own Schematron
-> by a test.
+> XRechnung" — every assertion in KoSIT's own Schematron, asserted against that
+> Schematron by a test.
 >
 > | Profile | Rules run | Coverage of its authority's artefact |
 > |---|---:|---|
 > | EN 16931 core | 227 | **223 / 223** CEN syntax-independent |
-> | XRechnung 3.0 | 282 | **55 / 55** KoSIT asserts + **21 / 21** merged Peppol |
+> | XRechnung 3.0 | 282 | **55 / 55** KoSIT UBL asserts + **21 / 21** merged Peppol |
 > | XRechnung 3.0 CVD | 290 | **+ 8 / 8** Clean Vehicles Directive |
-> | XRechnung 3.0 Extension | 296 | **+ 14 / 14** `BR-DEX-*` |
+> | XRechnung 3.0 Extension | 296 | **+ 14 of the 15** `BR-DEX-*` |
 > | Peppol BIS Billing 3.0 | 273 | **46 / 46** `PEPPOL-EN16931-*` |
 >
-> …and at the **severities those authorities publish**, which is a separate
-> claim and one this crate got wrong until it was measured. KoSIT's validator
-> configuration re-levels nine CEN rules across its three scenarios — see
-> [severity is the authority's, not ours](#️-severity-is-the-authoritys-not-ours).
+> KoSIT publishes two Schematrons. The 55 are the UBL one's; the CII one adds
+> `BR-TMP-3` and `BR-DEX-15`, both checks on the *shape of a CII document* that
+> a syntax-independent model cannot express — named in `tests/codelists.rs`
+> rather than quietly not counted.
 >
-> And — the part that matters — **the rules agree with the authorities' own
-> conformance suites**, not just with their rule lists:
+> …and at the **severities those authorities publish**, which is a separate
+> claim — see [severity is the authority's, not
+> ours](#️-severity-is-the-authoritys-not-ours).
+>
+> And the rules agree with the authorities' **own conformance suites**, not only
+> with their rule lists:
 >
 > | Suite | Assertions | Agreement |
 > |---|---:|---|
@@ -69,32 +73,13 @@ breaks `wasm32` outright.
 > | KoSIT XRechnung mutation suite | 381 run | **100 %** |
 > | Published example invoices | 58 documents | **100 % valid** |
 >
-> The totals move — two of those three suites are pinned to a moving upstream
-> branch — so the agreement is asserted exactly and the coverage as a floor.
+> Two of those three suites are pinned to a moving upstream branch, so the
+> agreement is asserted exactly and the coverage as a floor.
 >
 > 317 rules registered; 53 retired by the type system, 4 undecidable (CEN binds
 > them to `true()` too), and **every one of the remaining 260 exercised by its
-> own failing fixture**. Plus the ten semantic data types, eighteen generated
-> code lists, the typed `Validated<P>` proof, the standard's own Annex A worked
-> examples — **and the `billing` adapter**.
->
-> On top of the verdict, three things that use the same tables rather than a
-> second reading of them: a [**reconciler**](#-reconciling--the-arithmetic-every-hand-mapper-re-implements)
-> that derives BG-23 and BG-22 from the lines, [**guarded code
-> lists**](#️-guarded-code-lists--catching-9958-at-the-map-not-at-the-report)
-> that reject a withdrawn EAS scheme at the map and name its successor, and a
-> [**pre-flight**](#-pre-flight--which-fields-will-this-profile-ask-me-for) that
-> says which fields a profile will ask for before the data is fetched.
->
-> **4** of those are this crate's own, namespaced `EN-*` so they can never
-> be mistaken for CEN's:
->
-> | | |
-> |---|---|
-> | `EN-CURRENCY-01` | BT-5 is `XXX`, ISO 4217 for *no currency*. `BR-CL-04` accepts it because it is a real code, so an unconfigured document validates as an invoice denominated in nothing. |
-> | `EN-EXT-01` | the target profile cannot represent extension data the invoice carries — §14c Abs. 1 UStG, [below](#the-14c-hole). |
-> | `EN-EXT-02` | a sub-line group keyed to a BG-25 line that does not exist, which every consumer skips and no writer emits. |
-> | `EN-SEPA-01` | BT-90 does not look like a SEPA Creditor Identifier. `BR-DE-30` requires it to be *present* and no rule anywhere checks that it is well formed. |
+> own failing fixture**. **4** of those are this crate's own, namespaced `EN-*`
+> so they can never be mistaken for CEN's — [below](#four-rules-of-our-own).
 >
 > Out of scope and named rather than dropped: the 1 339 *syntax* rules
 > (`UBL-*`, `CII-*`) belong to
@@ -141,24 +126,19 @@ Running them needs a UBL reader, which lives in [`tests/ubl.rs`](tests/ubl.rs) �
 test-only, so it is not in this crate's API, dependency graph or wasm build. It
 records every element it does not map, and a test asserts that set is empty.
 
-**Five real bugs came out of the first run**, none of which any other test in
-this repository could have found:
+These are the only tests here not written from the same reading of the same
+documents as the code, and that is what makes them worth running. The class they
+catch is a rule implemented against its *English sentence* rather than against
+its **artefact context** — `BR-CL-15` names BT-80 in prose and binds to
+`cac:OriginCountry`, which is BT-159; `PEPPOL-EN16931-R003` reads as "BT-10 is
+mandatory" and is a disjunction with BT-13; `BR-CL-22` compares BT-121
+case-insensitively in the *released* artefact and case-sensitively in the source
+file. Every one of those looks right in review.
 
-| | |
-|---|---|
-| `BR-CL-15` | checked BT-80; its artefact context is `cac:OriginCountry` — **BT-159**. It had been duplicating `BR-CL-14` and leaving BT-159 unchecked. |
-| `BR-CO-09` | checked seller and buyer, **not BT-63** — which the rule text names. |
-| `BR-CO-25` | fired on credit notes. CEN has six cases titled *"Verify that rule does not fire on Credit Notes"*. |
-| `BR-CL-07` | covered BT-128 and not BT-18 — its context is a union of the two. |
-| `BR-DE-18` | missed the second half of the rule: the Skonto block must **end with a newline**. |
-| `PEPPOL-EN16931-R003` | modelled as "BT-10 is mandatory". It is a **disjunction** — BT-10 *or* BT-13 — and rejected eight of CEN's own published invoices. |
-| `PEPPOL-EN16931-R004` | modelled as "BT-24 is present". It constrains BT-24's **value** with `starts-with`, so any string passed. |
-| `BR-CL-22` | compared BT-121 case-sensitively. The **released** artefact wraps it in `upper-case()`; only the source file does not. |
-
-`BR-CO-25` forced a model change. CEN's credit-note cases carry **no BT-3 at
-all**, so inferring the document kind from the type code cannot answer the
-question they ask. [`DocumentKind`](src/invoice.rs) is now an explicit field —
-which is also what both syntaxes carry, and it makes `BR-CL-01` exact rather
+One of them settles a model question rather than a rule. CEN's credit-note cases
+carry **no BT-3 at all**, so inferring the document kind from the type code
+cannot answer what they ask — which is why [`DocumentKind`](src/invoice.rs) is an
+explicit field, as both syntaxes carry it, and why `BR-CL-01` is exact rather
 than permissive.
 
 ### The 11 divergences are declared, not ignored
@@ -612,6 +592,18 @@ assert_eq!(rules::explain("BR-CO-4").map(|r| r.id.as_str()), Some("BR-CO-04"));
 assert_eq!(rules::explain("br-1").map(|r| r.id.as_str()), Some("BR-01"));
 ```
 
+### Four rules of our own
+
+Namespaced `EN-*`, because inventing a `BR-` id would be indistinguishable from
+CEN's and a reader could not tell which document to look it up in.
+
+| | |
+|---|---|
+| `EN-CURRENCY-01` | BT-5 is `XXX`, ISO 4217 for *no currency*. `BR-CL-04` accepts it because it is a real code, so an unconfigured document validates as an invoice denominated in nothing. |
+| `EN-EXT-01` | the target profile cannot represent extension data the invoice carries — §14c Abs. 1 UStG, [below](#the-14c-hole). |
+| `EN-EXT-02` | a sub-line group keyed to a BG-25 line that does not exist, which every consumer skips and no writer emits. |
+| `EN-SEPA-01` | BT-90 does not look like a SEPA Creditor Identifier. `BR-DE-30` requires it to be *present*, and no rule anywhere checks that it is well formed. |
+
 ### The nine VAT category families
 
 EN 16931-1 §6.4.3 writes these as **nine parallel tables** with the same ten row
@@ -679,6 +671,31 @@ R120 under Profile::core()                           → not a rule at all
 so under the core profile a line whose amount does not follow from its price is
 perfectly valid. And `R046` is the trap — it looks like `R040`'s sibling and
 carries **no slack at all**.
+
+### …and a fifth thing that is not what it looks like: `round`
+
+The artefacts do not say "round to two decimals". They say it in XPath:
+
+```xpath
+round(abs(TaxableAmount) * (Percent div 100) * 10 * 10) div 100
+```
+
+and pick the zero-rate branch of `BR-CO-17` on `round(Percent) = 0`. Both are
+**XPath's** `fn:round`, which is *"the one closest to +∞"* — and no
+`rust_decimal::RoundingStrategy` reproduces it:
+
+| | `round(0.5)` | `round(2.5)` | `round(-0.5)` |
+|---|---|---|---|
+| XPath `fn:round` | `1` | `3` | `0` |
+| `Decimal::round` — banker's | `0` | `2` | `0` |
+| half away from zero | `1` | `3` | `-1` |
+
+Banker's and half-away-from-zero each get one of the two midpoint columns
+wrong, so the rules use `floor(x + 0.5)` — the definition rather than an
+approximation of it. It is not academic: a VAT rate of exactly **0.5 %**
+(Spain's *recargo de equivalencia* on reduced-rate goods) rounds to `1` for the
+artefact and to `0` for banker's, which sent `BR-CO-17` down its zero-rate
+branch and rejected a correct invoice every deployed validator accepts.
 
 [`ValidationReport`]: https://docs.rs/en16931/latest/en16931/validation/struct.ValidationReport.html
 [`Source`]: https://docs.rs/en16931/latest/en16931/validation/enum.Source.html
@@ -751,16 +768,15 @@ EN 16931 validation — 227 rule(s) checked, 1 finding(s), valid
 
 Not fatal: the invoice *is* lawful. But not silent either.
 
-### The BT-20 newline — a trap that moved upstream
+### The BT-20 newline
 
-The newest of the seam's traps, and the smallest: one character.
-
-`billing` 0.12 gained structured payment terms, and rendered BT-20 including
-Germany's Skonto micro-syntax — without a terminator:
+The smallest trap at this seam: one character. `billing` renders BT-20 including
+Germany's Skonto micro-syntax, and the field must end with a newline:
 
 ```text
 Zahlbar innerhalb 30 Tagen ohne Abzug.
 #SKONTO#TAGE=10#PROZENT=2.00#
+⏎
 ```
 
 `BR-DE-18` has **two** halves, and the second hides inside the same assertion as
@@ -772,13 +788,13 @@ every $line in …tokenize(., '(\r?\n)')[starts-with(normalize-space(.), '#')]
         and matches(…tokenize(., '#.+#')[last()], '^\s*\n')
 ```
 
-Everything after the **last** `#…#` must begin with a newline. The rendering
-above ends at the `#`, so `tokenize(…)[last()]` is the empty string and every
-German invoice carrying a Skonto fails.
+Everything after the **last** `#…#` must begin with a newline. A rendering that
+ends at the `#` makes `tokenize(…)[last()]` the empty string, and every German
+invoice carrying a Skonto fails.
 
-The adapter appended the newline for one release. **`billing` 0.13 does it
-upstream**, which is the right place: the `#SKONTO#…#` syntax has no core
-EN 16931 form, so a rendering that omits the terminator is valid nowhere at all.
+**`billing` terminates the field itself**, which is the right place: the
+`#SKONTO#…#` syntax has no core EN 16931 form, so a rendering that omits the
+terminator is valid nowhere at all.
 
 What is left here is a *guard*, not a fix — idempotent, and paired with
 `billing_renders_bt_20_with_the_terminator_br_de_18_needs`, which asserts the
@@ -798,11 +814,12 @@ release ago.
 
 ### What crosses
 
-BT-1, BT-2, BT-3, BT-5, BT-6, BT-9, BT-20, BT-21, BT-22, BT-29, BT-46, BT-111,
-BG-1, BG-14, BG-20, BG-21, BG-22, BG-23, BG-25 and ZUGFeRD's `BG-X-45` — plus the
-document kind, which is not a business term and decides the root element.
+BT-1, BT-2, BT-3, BT-5, BT-6, BT-9, BT-20, BT-21, BT-22, BT-25, BT-26, BT-29,
+BT-46, BT-111, BG-1, BG-3, BG-14, BG-20, BG-21, BG-22, BG-23, BG-25 and
+ZUGFeRD's `BG-X-45` — plus the document kind, which is not a business term and
+decides the root element.
 
-Two of those pairs are worth naming:
+Three of those are worth naming:
 
 * **BT-6 and BT-111 cross together.** `BR-53` makes the second mandatory whenever
   the first is present, so mapping only the currency would manufacture a finding
@@ -814,8 +831,21 @@ Two of those pairs are worth naming:
   alongside the value, because the same digits under `0088` and under `0293` are
   two registries saying two different things.
 
+* **BG-3 arrives filled in.** A credit note that does not say what it credits is
+  an unexplained payment, and `billing`'s `reverse` populates BT-25 and BT-26
+  from the document it reverses. `BR-55` is satisfied by the *type*: BT-25 is
+  not an `Option` upstream and its constructor refuses a blank string, so a BG-3
+  without a reference is not constructible.
+
 `meta.period_label` and `meta.labels` do not cross: display text and arbitrary
 key/value pairs, with no business term at all.
+
+Neither does a **late-payment penalty**, for a sharper reason. `BR-DE-18` gives
+a Skonto a micro-syntax inside BT-20 and gives a penalty none, so rendering one
+into BT-20 produces a `#…#` line the German regex rejects, and putting it in the
+prose half makes it text no system reads. Default interest is generally outside
+the scope of VAT anyway (art. 63 of the VAT Directive; CJEU C-222/81 *BAZ
+Bausystem*), so a penalty billed later is its own document.
 
 Units are resolved from `Quantity::code` first, falling back to a small
 `UnitResolver` table. An unresolvable label is an **error**: guessing produces an
@@ -988,7 +1018,10 @@ A rule's *consequence* is not a property of the rule. It is a property of the
 rule **in a profile**, and the authorities publish it separately from their
 Schematron — which is why reading only the Schematron gets it wrong.
 
-KoSIT's validator configuration says so in as many words, once per scenario:
+**Two files publish severity, and they cover different rules.** Missing either
+one is how a validator comes to reject documents Germany accepts.
+
+**1. The validator configuration**, for *CEN's* rules — once per scenario:
 
 ```xml
 <!-- overwrites CEN severity level "fatal" for codelist values of BT-130 … -->
@@ -998,26 +1031,41 @@ KoSIT's validator configuration says so in as many words, once per scenario:
 ```
 
 Nine CEN rules are re-levelled across the three XRechnung scenarios, and
-`Profile::levels` carries all nine. `tests/codelists.rs` reads
-`scenarios.xml` out of `spec/` and asserts the mapping, so it is measured rather
-than transcribed from memory. Two consequences are worth stating outright.
+`Profile::levels` carries all nine.
 
-**This crate used to reject invoices Germany accepts.** `BR-CL-21` and
-`BR-CL-23` are code-list rules whose CEN tables lag the registries they track —
-ISO 6523 ICD and UN/ECE Rec 20/21. KoSIT reports both at *warning*, deliberately;
-this crate reported them as fatal, so a perfectly ordinary German invoice with a
-unit code CEN has not yet imported failed here and passed there. That is the
-worst direction for a validator to be wrong in, because it stops a document
-nobody else would have stopped.
+**2. The Schematron's own `flag`**, for *KoSIT's* rules — where five of the
+fifty-five are not fatal:
 
-**A finding is re-levelled, never dropped.** The mechanism used to be
-`suppressed: &[&str]`, a list of rules to remove — which no authority does, and
-which cost the report the one line explaining why an unusual value is present and
-unobjected to. It also encouraged reconstructing the list from *"which rule does
-each `BR-DEX-*` widen?"*, and that reconstruction was wrong twice: it named
-`PEPPOL-EN16931-CL001`, which XRechnung's build does not merge in, so it removed
-nothing while CEN's `BR-CL-24` went on rejecting exactly the `application/xml`
-attachment `BR-DEX-01` exists to permit.
+```xml
+<assert test="matches(normalize-space(cbc:Telephone), $XR-TELEPHONE-REGEX)"
+  flag="warning" id="BR-DE-27">…</assert>
+```
+
+| | Why not fatal |
+|---|---|
+| `BR-DE-26` | *"soll … übermittelt werden"* — a corrected invoice **should** cite the original |
+| `BR-DE-27`, `BR-DE-28` | a telephone number with two digits; an address that is not quite one |
+| `BR-DE-17`, `BR-DE-21` | scoping, not malformation: a lawful EN 16931 type code, or a BT-24 naming another CIUS |
+
+`tests/codelists.rs` reads `scenarios.xml` for the first and both Schematrons
+for the second, comparing all 121 severities the three XRechnung profiles run —
+measured, rather than transcribed. Two consequences are worth stating outright.
+
+**Getting either file wrong rejects invoices Germany accepts.** `BR-CL-21` and
+`BR-CL-23` are code-list rules whose CEN tables lag the registries they track
+(ISO 6523 ICD, UN/ECE Rec 20/21) and KoSIT reports both at *warning*,
+deliberately; five of KoSIT's own rules are warnings in the Schematron. Reading
+either as fatal fails an invoice the German reference validator passes, which is
+the worst direction for a validator to be wrong in: it stops a document nobody
+else would have stopped.
+
+**A finding is re-levelled, never dropped.** No authority removes a rule, and
+dropping one costs the report the line explaining why an unusual value is
+present and unobjected to. The list is transcribed from the configuration, not
+reconstructed from *"which rule does each `BR-DEX-*` widen?"* — that
+reconstruction names `PEPPOL-EN16931-CL001`, which XRechnung's build does not
+merge in, and so removes nothing while CEN's `BR-CL-24` goes on rejecting
+exactly the `application/xml` attachment `BR-DEX-01` exists to permit.
 
 **And XRechnung 3.0 is therefore not a conformant CIUS.** §4.4.2 forbids a CIUS
 to accept what the core model rejects, and relaxing `BR-CL-23` does exactly that.
@@ -1196,10 +1244,10 @@ The suppressed ids are on the report, printed by `Display`, carried in the JSON,
 and `rules_checked` drops from 282 to 281 — so a stored report cannot overstate
 what ran.
 
-It drops by **one**, because one check was actually removed. It used to drop by
-`suppressed.len()`, which counted *requests*: asking to skip `BR-DE-15` against
-the bare core profile, or naming a rule that resolves to nothing, deducted from a
-count of checks that were never going to run. A number that can be wrong in the
+It drops by **one**, because one check was actually removed — not by
+`suppressed.len()`, which counts *requests*: asking to skip `BR-DE-15` against
+the bare core profile, or naming a rule that resolves to nothing, would deduct
+from checks that were never going to run. A number that can be wrong in the
 reassuring direction is worse than no number.
 
 **And a deviated run cannot produce a proof.** `Check::prove` refuses:
@@ -1215,15 +1263,13 @@ something untrue. `Validated<P>` means *the whole rule set passed* — if it cou
 also mean *most of it*, no consumer could rely on it and the type would be
 decoration.
 
-**Nor can it prove a profile it did not run.** `prove::<P>()` used to read only
-its type parameter, so the profile a `Check` was built for and the profile the
-proof claimed were unrelated choices:
+**Nor can it prove a profile it did not run.** Reading only the type parameter
+would make the profile a `Check` was built for and the profile the proof claims
+two unrelated choices, so the two are compared:
 
 ```text
 Check::new(&profiles::XRECHNUNG).prove::<En16931>(inv)
-// once: Ok(Validated<En16931>) — having evaluated the *core* rule set
-// now:  Err(ProveError::WrongProfile { checked: "XRechnung 3.0",
-//                                      claimed: "EN 16931" })
+// Err(ProveError::WrongProfile { checked: "XRechnung 3.0", claimed: "EN 16931" })
 ```
 
 `Check::of::<P>()` is the constructor that makes the mismatch unrepresentable:
@@ -1392,12 +1438,11 @@ Rules are data — id, severity, provenance, the business terms they touch, and
 the standard's own wording — so the registry is listable, filterable and
 explainable. `touching(BtId(117))` answers "which rules constrain BT-117".
 
-`explain` used to search the **core set only**, so an ordinary XRechnung report
-citing `BR-DE-16` or `PEPPOL-EN16931-R120` resolved to `None` for every id in it.
-A registry that cannot explain its own findings is not a registry. It now
-searches every rule the crate ships, and `explain_restriction` covers the
-profile restrictions, which are data rather than predicates and so have no
-`Rule` to hand back.
+`explain` searches **every** rule the crate ships, not the core set alone: an
+ordinary XRechnung report cites `BR-DE-16` and `PEPPOL-EN16931-R120`, and a
+registry that cannot explain its own findings is not a registry.
+`explain_restriction` covers the profile restrictions, which are data rather
+than predicates and so have no `Rule` to hand back.
 
 ---
 
@@ -1464,11 +1509,10 @@ the document itself. When XRechnung 4.0 arrives it is a new `Profile`, a *minor*
 release, not a new crate.
 
 `Edition::En2026` exists as a classification and **no profile declares it**: a
-test fails the build if one does without a rule set to go with it. The
-term-level half — which business terms :2026 introduces, and the
-`EN-EDITION-01` rule that forbids populating them under a 2017 profile — waits
-on the normative text. Writing that map from memory is how you ship a validator
-that is confidently wrong.
+test fails the build if one does without a rule set to go with it. It carries no
+term assignments either — a map from business term to introducing edition can
+only be built from the :2026 normative text, and writing one from memory is how
+you ship a validator that is confidently wrong.
 
 ---
 

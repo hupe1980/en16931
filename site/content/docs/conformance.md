@@ -124,11 +124,13 @@ UBL and CII instance in the CEN, KoSIT and OpenPeppol trees:
 | `subset` | neither writer emits a forbidden element or attribute |
 | `corpus` | all 319 UBL and 167 CII instances read; every unmapped element named |
 
-Fourteen real bugs came out of those, five of them from `fidelity` and four from
-`cross_syntax` — the [syntaxes page](@/docs/syntaxes.md#what-crossing-the-syntaxes-proved)
-lists them. Every one produced a schema-valid document that the reader read
-without complaint. That is the class of bug a round trip catches and nothing else
-does.
+Each finds a class the one before it cannot: `roundtrip` works on a fixture this
+crate wrote, `fidelity` on documents it did not, and `cross_syntax` on a binding
+that is *consistently* wrong — see [what crossing the syntaxes
+proves](@/docs/syntaxes.md#what-crossing-the-syntaxes-proves). Every defect of
+that class produces a schema-valid document the reader reads without complaint,
+which is why the property is asserted over a corpus rather than argued from the
+code.
 
 ## Every source is pinned to a release
 
@@ -139,13 +141,12 @@ does.
 | `itplr-kosit/validator-configuration-xrechnung` | `v2026-01-31` |
 | `OpenPEPPOL/peppol-bis-invoice-3` | `v3.0.20` |
 
-Three of those four used to track `master`, and that was wrong for a reason
-sharper than reproducibility. **An authority's `master` is its next release.**
-When this was fixed, KoSIT's validator-configuration branch carried two
-`customLevel` overrides — `CII-SR-465` and `CII-SR-466` — that appear in no
-published release. A project whose central claim is that it reports rules at the
-severities the authorities *publish* was reading severities nobody had published
-yet.
+Tags, not branches, for a reason sharper than reproducibility: **an authority's
+`master` is its next release.** KoSIT's validator-configuration branch has
+carried `customLevel` overrides — `CII-SR-465`, `CII-SR-466` — that appear in no
+published release, and a project whose central claim is that it reports rules at
+the severities the authorities *publish* must not read severities nobody has
+published yet.
 
 The pins name a version, not just a commit, because KoSIT states the
 correspondence in its own changelog. Bumping one is a decision: a KoSIT release

@@ -928,10 +928,10 @@ rule!(BR_CL_10, "BR-CL-10", Fatal, ArtefactOnly, terms: [BtId(29), BtId(46), BtI
     // (ancestor::cac:AccountingSupplierParty) or (ancestor::cac:PayeeParty)
     // ```
     //
-    // — the seller and the payee, and not the buyer. This rule used to check the
-    // seller and the buyer, admit `SEPA` on both, and never look at the payee:
-    // a buyer identifier schemed `SEPA` passed and a payee identifier schemed
-    // anything at all passed. Both are false negatives on a fatal rule.
+    // — the seller and the payee, and **not** the buyer. Checking the seller
+    // and the buyer instead would let a buyer identifier schemed `SEPA` pass
+    // and never look at the payee at all: two false negatives on a fatal
+    // rule.
     const SEPA: &str = "SEPA";
     let bad = |scheme: &str, sepa_ok: bool| {
         !(crate::codes::contains(lists::ICD_SCHEMES, scheme) || (sepa_ok && scheme == SEPA))

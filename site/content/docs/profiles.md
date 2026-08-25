@@ -202,6 +202,26 @@ you the account exists, only that the string is not a typo, which catches the
 overwhelming majority of real errors. Both are **warnings**, matching KoSIT's
 *soll*: a suspicion, not a rejection.
 
+They are not alone. The German text is the tell — a rule that says *soll*
+rather than *muss* does not reject an invoice — and KoSIT's Schematron marks
+each such rule `flag="warning"` rather than putting it in the validator
+configuration:
+
+| | |
+|---|---|
+| `BR-DE-19`, `BR-DE-20` | an IBAN that fails its checksum |
+| `BR-DE-26` | a corrected invoice that does not cite the original |
+| `BR-DE-27`, `BR-DE-28` | a telephone number with two digits; an address that is not quite one |
+| `BR-DE-17`, `BR-DE-21` | scoping, not malformation: a lawful EN 16931 type code, or a BT-24 naming another CIUS |
+| `BR-TMP-2` | a temporary CEN rule KoSIT carries at warning |
+| `BR-DE-TMP-32` | *information* — a suggestion to state a delivery date |
+
+`BR-DE-17` and `BR-DE-21` are §7.3.2 **restrictions**, which this crate derives
+as findings and which are fatal by construction, so the profile states their
+published severity explicitly. Every one of them is compared against the
+Schematron by a test, because reporting any as fatal rejects invoices the
+German reference validator accepts — the failure this crate exists not to have.
+
 ## Pre-flight: which fields will this profile ask me for?
 
 `validate` answers *"is this document acceptable?"*. On a half-built invoice that

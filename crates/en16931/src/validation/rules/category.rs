@@ -35,8 +35,7 @@ use crate::invoice::{Invoice, VatBreakdown, terms as bt};
 use crate::validation::{Findings, Rule, RuleId, Severity, Source};
 use crate::{InvoiceAmount, Percentage, VatCategory};
 
-/// The ±1.00 the artefacts allow on the `-08` and `-09` rows.
-const TOLERANCE: Decimal = Decimal::ONE;
+use super::arith::{derived_vat, within_vat_tolerance};
 
 /// How many BG-23 groups a category may occupy — the `-01` row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -350,10 +349,11 @@ pub fn check_taxable_amount(inv: &Invoice, p: CategoryProfile, f: &mut Findings<
             continue;
         };
 
-        // ±1.00, as the artefacts write it — and on absolute values, so a credit
-        // note satisfies it.
-        let diff = (expected.into_decimal() - entry.taxable_amount.into_decimal()).abs();
-        if diff >= TOLERANCE {
+        // ±1.00 on the signed values — `TaxableAmount - 1 < sum` and
+        // `TaxableAmount + 1 > sum`, as the artefacts write it. The `-09` row
+        // takes absolutes and this one does not, which is the sort of asymmetry
+        // that only survives being read off the Schematron.
+        if !within_vat_tolerance(entry.taxable_amount.into_decimal(), expected.into_decimal()) {
             f.arithmetic(
                 Path::at_term(Group::VatBreakdown, i, bt::VAT_TAXABLE_AMOUNT),
                 expected,
@@ -378,13 +378,11 @@ pub fn check_tax_amount(inv: &Invoice, p: CategoryProfile, f: &mut Findings<'_>)
             }
             TaxRule::Derived => {
                 let rate = entry.rate.map_or(Decimal::ZERO, Percentage::into_decimal);
-                let base = entry.taxable_amount.into_decimal().abs();
-                let Some(exact) = base.checked_mul(rate).map(|v| v / Decimal::ONE_HUNDRED) else {
+                let Some(expected) = derived_vat(entry.taxable_amount.into_decimal(), rate) else {
                     continue;
                 };
-                let expected = exact.round_dp(2);
                 let stated = entry.tax_amount.into_decimal().abs();
-                if (stated - expected).abs() >= TOLERANCE {
+                if !within_vat_tolerance(stated, expected) {
                     f.arithmetic(path, expected, entry.tax_amount);
                 }
             }

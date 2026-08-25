@@ -21,12 +21,21 @@ const INVOICE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
   </rsm:ExchangedDocumentContext>
 </rsm:CrossIndustryInvoice>"#;
 
-/// An XMP packet declaring a ZUGFeRD invoice. ⚠
+/// An XMP packet declaring a ZUGFeRD invoice in a PDF/A-3 file.
+///
+/// The `pdfaid` block is not decoration: PDF/A-1 and PDF/A-2 forbid embedding a
+/// file of arbitrary type, so PDF/A-3 is what makes a hybrid invoice a lawful
+/// PDF at all — and the identification is written as **attributes** here, which
+/// is how the PDF/A specification's own examples write it and how most
+/// producers do, while the `fx:` block is elements.
 fn xmp(level: &str, filename: &str) -> String {
     format!(
         r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF
   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+ <rdf:Description rdf:about=""
+   xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/"
+   pdfaid:part="3" pdfaid:conformance="B"/>
  <rdf:Description xmlns:fx="urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#">
   <fx:DocumentType>INVOICE</fx:DocumentType>
   <fx:DocumentFileName>{filename}</fx:DocumentFileName>
@@ -37,24 +46,57 @@ fn xmp(level: &str, filename: &str) -> String {
     )
 }
 
+/// What a fixture PDF is allowed to get wrong.
+///
+/// Every field defaults to *conforming*, so a test that names none is a
+/// specimen of a correct hybrid invoice and any divergence it reports is a bug
+/// in the reader. A test of a defect names exactly the defect it is about,
+/// which is the whole reason these are flags rather than four more builders.
+#[derive(Clone, Copy, Default)]
+struct Defects {
+    /// Leave the file specification out of the catalogue's `/AF` array.
+    not_associated: bool,
+    /// Leave it out of `/Names/EmbeddedFiles`, reachable only through `/AF`.
+    not_in_name_tree: bool,
+    /// Write no `/AFRelationship` on the file specification.
+    no_relationship: bool,
+}
+
+/// A conforming hybrid PDF carrying `attachments`.
+///
+/// The metadata names the first attachment, or none at all when there is
+/// nothing to name.
 fn pdf_with(attachments: &[(&str, &[u8])]) -> Vec<u8> {
-    build_rel(attachments, None, "Alternative")
+    let packet = attachments.first().map(|(name, _)| xmp("EN 16931", name));
+    build(attachments, packet.as_deref())
 }
 
 /// A PDF whose attachment declares `relationship` — the field that says whether
 /// the XML *is* the invoice or merely accompanies one.
 fn pdf_with_relationship(attachments: &[(&str, &[u8])], relationship: &str) -> Vec<u8> {
-    build_rel(attachments, None, relationship)
+    let packet = xmp("EN 16931", attachments[0].0);
+    build_full(attachments, Some(&packet), relationship, Defects::default())
 }
 
-/// A PDF carrying `attachments` as `/Filespec` objects in the catalogue's
-/// `/Names/EmbeddedFiles` name tree — where PDF/A-3 says they belong — and
-/// optionally an XMP metadata packet.
+/// A conforming PDF but for `defects`.
+fn pdf_with_defects(attachments: &[(&str, &[u8])], defects: Defects) -> Vec<u8> {
+    let packet = xmp("EN 16931", attachments[0].0);
+    build_full(attachments, Some(&packet), "Alternative", defects)
+}
+
+/// A PDF carrying `attachments` both as associated files (`/AF`) and in the
+/// catalogue's `/Names/EmbeddedFiles` name tree — where ZUGFeRD requires both —
+/// and optionally an XMP metadata packet.
 fn build(attachments: &[(&str, &[u8])], metadata: Option<&str>) -> Vec<u8> {
-    build_rel(attachments, metadata, "Alternative")
+    build_full(attachments, metadata, "Alternative", Defects::default())
 }
 
-fn build_rel(attachments: &[(&str, &[u8])], metadata: Option<&str>, relationship: &str) -> Vec<u8> {
+fn build_full(
+    attachments: &[(&str, &[u8])],
+    metadata: Option<&str>,
+    relationship: &str,
+    defects: Defects,
+) -> Vec<u8> {
     let mut doc = lopdf::Document::with_version("1.7");
     let pages_id = doc.new_object_id();
     let page_id = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id });
@@ -66,18 +108,23 @@ fn build_rel(attachments: &[(&str, &[u8])], metadata: Option<&str>, relationship
     );
 
     let mut names = Vec::new();
+    let mut associated = Vec::new();
     for (name, bytes) in attachments {
         let stream = doc.add_object(Stream::new(
             dictionary! { "Type" => "EmbeddedFile", "Subtype" => "text/xml" },
             bytes.to_vec(),
         ));
-        let spec = doc.add_object(dictionary! {
+        let mut filespec = dictionary! {
             "Type" => "Filespec",
             "F" => Object::string_literal(*name),
             "UF" => Object::string_literal(*name),
-            "AFRelationship" => relationship,
             "EF" => dictionary! { "F" => stream, "UF" => stream },
-        });
+        };
+        if !defects.no_relationship {
+            filespec.set("AFRelationship", Object::Name(relationship.into()));
+        }
+        let spec = doc.add_object(filespec);
+        associated.push(Object::Reference(spec));
         names.push(Object::string_literal(*name));
         names.push(spec.into());
     }
@@ -86,8 +133,16 @@ fn build_rel(attachments: &[(&str, &[u8])], metadata: Option<&str>, relationship
     let mut catalog_dict = dictionary! {
         "Type" => "Catalog",
         "Pages" => pages_id,
-        "Names" => dictionary! { "EmbeddedFiles" => embedded },
     };
+    if !defects.not_in_name_tree {
+        catalog_dict.set(
+            "Names",
+            Object::Dictionary(dictionary! { "EmbeddedFiles" => embedded }),
+        );
+    }
+    if !defects.not_associated {
+        catalog_dict.set("AF", Object::Array(associated));
+    }
     if let Some(packet) = metadata {
         let meta = doc.add_object(Stream::new(
             dictionary! { "Type" => "Metadata", "Subtype" => "XML" },
@@ -235,15 +290,49 @@ fn the_xmp_is_read_and_agrees_with_the_payload() {
 /// report a divergence on every conforming document, so profiles are compared.
 #[test]
 fn different_spellings_of_the_same_profile_are_not_a_divergence() {
+    // `EN 16931` is what a conforming PDF's `fx:ConformanceLevel` carries, and
+    // `urn:cen.eu:en16931:2017` is what the same document's BT-24 carries. One
+    // profile, two spellings, and the comparison is between profiles.
+    //
+    // The XMP spelling is the one that matters here: putting a URN in it, where
+    // no producer writes one, would assert nothing at all.
     let pdf = build(
         &[("factur-x.xml", INVOICE.as_bytes())],
-        Some(&xmp("urn:cen.eu:en16931:2017", "factur-x.xml")),
+        Some(&xmp("EN 16931", "factur-x.xml")),
     );
     assert!(
         en16931_formats::zugferd::extract(&pdf)
             .expect("extract")
             .divergence
             .is_empty()
+    );
+}
+
+/// The mismatch the spelling bug hid: metadata claiming a full invoice over a
+/// payload that carries no lines at all.
+#[test]
+fn en16931_metadata_over_a_minimum_payload_is_reported() {
+    const MINIMUM: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rsm:CrossIndustryInvoice xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"
+                          xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100">
+  <rsm:ExchangedDocumentContext>
+    <ram:GuidelineSpecifiedDocumentContextParameter>
+      <ram:ID>urn:factur-x.eu:1p0:minimum</ram:ID>
+    </ram:GuidelineSpecifiedDocumentContextParameter>
+  </rsm:ExchangedDocumentContext>
+</rsm:CrossIndustryInvoice>"#;
+    let pdf = build(
+        &[("factur-x.xml", MINIMUM.as_bytes())],
+        Some(&xmp("EN 16931", "factur-x.xml")),
+    );
+    let got = en16931_formats::zugferd::extract(&pdf).expect("extract");
+    assert_eq!(got.profile, en16931_formats::zugferd::Profile::Minimum);
+    assert!(
+        got.divergence
+            .iter()
+            .any(|d| matches!(d, Divergence::Profile { .. })),
+        "{:?}",
+        got.divergence
     );
 }
 
@@ -290,13 +379,118 @@ fn a_filename_mismatch_is_reported() {
 /// saying rather than reporting a clean extraction.
 #[test]
 fn a_pdf_with_no_xmp_says_so() {
-    let pdf = pdf_with(&[("factur-x.xml", INVOICE.as_bytes())]);
+    let pdf = build(&[("factur-x.xml", INVOICE.as_bytes())], None);
     let got = en16931_formats::zugferd::extract(&pdf).expect("extract");
     assert_eq!(
         got.divergence,
         vec![en16931_formats::zugferd::Divergence::NoXmp]
     );
     assert_eq!(got.xmp, en16931_formats::zugferd::Xmp::default());
+}
+
+/// A conforming specimen reports nothing at all.
+///
+/// The baseline the defect tests below are read against: `pdf_with` builds a
+/// PDF that is associated, in the name tree, related and PDF/A-3, so anything
+/// it reports is a false positive rather than a finding.
+#[test]
+fn a_conforming_hybrid_pdf_has_no_divergence() {
+    let pdf = pdf_with(&[("factur-x.xml", INVOICE.as_bytes())]);
+    let got = en16931_formats::zugferd::extract(&pdf).expect("extract");
+    assert!(got.divergence.is_empty(), "{:?}", got.divergence);
+    assert_eq!(got.xmp.pdfa_part.as_deref(), Some("3"));
+    assert_eq!(got.xmp.pdfa_conformance.as_deref(), Some("B"));
+}
+
+/// An attachment that is not an *associated* file.
+///
+/// The commonest defect in the wild: every PDF library can attach a file, and
+/// fewer can put it in the catalogue's `/AF` array. The invoice is still
+/// extractable — every viewer shows it — and a PDF/A-3-aware receiver asking
+/// what is associated with the document is told nothing.
+#[test]
+fn an_attachment_outside_the_af_array_is_reported() {
+    let pdf = pdf_with_defects(
+        &[("factur-x.xml", INVOICE.as_bytes())],
+        Defects {
+            not_associated: true,
+            ..Defects::default()
+        },
+    );
+    let got = en16931_formats::zugferd::extract(&pdf).expect("extract");
+    assert_eq!(got.divergence, vec![Divergence::NotAssociated]);
+    assert_eq!(got.xml, INVOICE, "still extractable");
+}
+
+/// An associated file that older readers cannot reach.
+#[test]
+fn an_attachment_outside_the_embedded_files_tree_is_reported() {
+    let pdf = pdf_with_defects(
+        &[("factur-x.xml", INVOICE.as_bytes())],
+        Defects {
+            not_in_name_tree: true,
+            ..Defects::default()
+        },
+    );
+    let got = en16931_formats::zugferd::extract(&pdf).expect("extract");
+    assert_eq!(got.divergence, vec![Divergence::NotInEmbeddedFiles]);
+}
+
+/// Nothing in the file says whether the XML is the invoice.
+#[test]
+fn an_attachment_with_no_relationship_is_reported() {
+    let pdf = pdf_with_defects(
+        &[("factur-x.xml", INVOICE.as_bytes())],
+        Defects {
+            no_relationship: true,
+            ..Defects::default()
+        },
+    );
+    let got = en16931_formats::zugferd::extract(&pdf).expect("extract");
+    assert_eq!(got.divergence, vec![Divergence::NoRelationship]);
+    assert_eq!(got.relationship, None);
+}
+
+/// PDF/A-3 is normative, and parts 1 and 2 forbid the embedding outright.
+#[test]
+fn a_pdf_that_is_not_pdfa3_is_reported() {
+    let packet =
+        xmp("EN 16931", "factur-x.xml").replace(r#"pdfaid:part="3""#, r#"pdfaid:part="2""#);
+    let pdf = build(&[("factur-x.xml", INVOICE.as_bytes())], Some(&packet));
+    let got = en16931_formats::zugferd::extract(&pdf).expect("extract");
+    assert_eq!(
+        got.divergence,
+        vec![Divergence::NotPdfA3 {
+            part: Some("2".into())
+        }]
+    );
+
+    // …and a file claiming no PDF/A conformance at all says so differently,
+    // because "the wrong part" and "no part" are different repairs.
+    let packet =
+        xmp("EN 16931", "factur-x.xml").replace(r#"pdfaid:part="3" pdfaid:conformance="B""#, "");
+    let pdf = build(&[("factur-x.xml", INVOICE.as_bytes())], Some(&packet));
+    let got = en16931_formats::zugferd::extract(&pdf).expect("extract");
+    assert_eq!(got.divergence, vec![Divergence::NotPdfA3 { part: None }]);
+}
+
+/// Every divergence prints a sentence, not a `Debug` dump.
+#[test]
+fn every_divergence_reads_as_prose() {
+    for d in [
+        Divergence::NotAssociated,
+        Divergence::NotInEmbeddedFiles,
+        Divergence::NoRelationship,
+        Divergence::NotPdfA3 { part: None },
+        Divergence::NotPdfA3 {
+            part: Some("1".into()),
+        },
+        Divergence::NoXmp,
+    ] {
+        let text = d.to_string();
+        assert!(text.len() > 40, "{d:?} prints {text:?}");
+        assert!(!text.contains('{'), "{text:?} looks like a Debug dump");
+    }
 }
 
 /// A mangled metadata packet must not stop a readable invoice being extracted.

@@ -56,13 +56,13 @@ enum Command {
         #[arg(required = true, value_name = "PATH")]
         paths: Vec<PathBuf>,
 
-        /// Which rule set to apply.
+        /// Which rule set to apply: `auto`, or a name from `en16931 profiles`.
         ///
         /// The default reads BT-24 and uses the profile the document declares,
         /// which is what a receiving system does — validating an XRechnung
         /// against the bare core model is the most common way to ship a
         /// document a counterparty then rejects.
-        #[arg(long, value_name = "PROFILE", default_value = "auto")]
+        #[arg(long, short, value_name = "PROFILE", default_value = "auto")]
         profile: String,
 
         /// Output shape.
@@ -109,7 +109,7 @@ enum Command {
         /// Without it the document is written as it stands, which is right when
         /// you are converting something you did not author. With it, nothing is
         /// written unless the model passes — see `--profile` on `validate`.
-        #[arg(long, value_name = "PROFILE")]
+        #[arg(long, short, value_name = "PROFILE")]
         profile: Option<String>,
 
         /// Write here instead of standard output.
@@ -182,7 +182,7 @@ enum Command {
     /// when a counterparty quotes an id you do not recognise.
     Rules {
         /// Only rules a profile runs, by name or BT-24. Default: everything.
-        #[arg(long, value_name = "PROFILE")]
+        #[arg(long, short, value_name = "PROFILE")]
         profile: Option<String>,
 
         /// Only rules touching this business term — `BT-117`, or `117`.
@@ -420,24 +420,23 @@ fn declared(invoice: &en16931::Invoice) -> &'static Profile {
 }
 
 /// Resolve `--profile`. `auto` yields `None`, meaning "ask each document".
+///
+/// By slug, display name or BT-24 — see [`profiles::lookup`]. The slug is the
+/// one a person types: the display name is `XRechnung 3.0`, and a profile
+/// selector that every shell needs quoted is a profile selector people get
+/// wrong.
 fn resolve(name: &str) -> Result<Option<&'static Profile>, String> {
     if name.eq_ignore_ascii_case("auto") {
         return Ok(None);
     }
-    // By short name, then by the BT-24 identifier — a script has the second and
-    // a person has the first, and both are unambiguous.
-    profiles::ALL
-        .iter()
-        .copied()
-        .find(|p| p.id.eq_ignore_ascii_case(name) || p.specification_id == name)
-        .map(Some)
-        .ok_or_else(|| {
-            let known: Vec<&str> = profiles::ALL.iter().map(|p| p.id).collect();
-            format!(
-                "unknown profile {name:?}. Known: auto, {}",
-                known.join(", ")
-            )
-        })
+    profiles::lookup(name).map(Some).ok_or_else(|| {
+        let known: Vec<&str> = profiles::ALL.iter().map(|p| p.slug).collect();
+        format!(
+            "unknown profile {name:?}. Known: auto, {} \
+             (or a profile's full name, or its BT-24 identifier)",
+            known.join(", ")
+        )
+    })
 }
 
 // ── convert ──────────────────────────────────────────────────────────────────

@@ -20,9 +20,15 @@
 //! `BR-CO-17` as a plain equation — *"= BT-116 x (BT-119 / 100), rounded to two
 //! decimals"* — with no slack at all. The ±1.00 is an artefact decision and the
 //! ±0.02 a Peppol one, which is why [`Source`] is recorded per rule.
+//!
+//! And *"rounded"* is a fourth thing that is not what it looks like: the
+//! artefacts round the way XPath does, ties towards +∞, which no
+//! `rust_decimal::RoundingStrategy` reproduces. That lives in `arith`, beside
+//! the tolerance it shares with all nine category tables.
 
 use rust_decimal::Decimal;
 
+mod arith;
 pub mod category;
 pub mod peppol;
 pub mod structural;
@@ -34,8 +40,7 @@ use crate::codes::generated as lists;
 use crate::invoice::{Invoice, terms as bt};
 use crate::{InvoiceAmount, VatCategory};
 
-/// The ±1.00 the artefacts allow on the VAT derivation family.
-const VAT_TOLERANCE: Decimal = Decimal::ONE;
+use arith::{derived_vat, within_vat_tolerance, xpath_round};
 
 /// Declare a rule with its metadata beside its predicate.
 macro_rules! rule {
@@ -398,9 +403,11 @@ rule!(BR_CO_17, "BR-CO-17", Fatal, Both, terms: [bt::VAT_TAX_AMOUNT, bt::VAT_TAX
         let rate = e.rate.map_or(Decimal::ZERO, |r| r.into_decimal());
 
         // The artefact's zero-rate branch: if the rate rounds to zero, the
-        // tax must round to zero — checked WITHOUT tolerance.
-        if rate.round() == Decimal::ZERO {
-            if e.tax_amount.into_decimal().round() != Decimal::ZERO {
+        // tax must round to zero — checked WITHOUT tolerance. Both roundings
+        // are XPath's, which is why they go through `xpath_round`; a rate of
+        // exactly 0.5 % is the case that tells the two apart.
+        if xpath_round(rate) == Decimal::ZERO {
+            if xpath_round(e.tax_amount.into_decimal()) != Decimal::ZERO {
                 f.arithmetic(path, "0", e.tax_amount);
             }
             continue;
@@ -409,15 +416,14 @@ rule!(BR_CO_17, "BR-CO-17", Fatal, Both, terms: [bt::VAT_TAX_AMOUNT, bt::VAT_TAX
         // `abs()` on BOTH sides, which is what lets a credit note pass, then
         // a full currency unit of slack. Not in the standard — see the
         // module docs — but it is what every validator runs.
-        let base = e.taxable_amount.into_decimal().abs();
+        //
         // `continue`, not `return`: one group whose product overflows must not
         // silence the rule for every group after it.
-        let Some(exact) = base.checked_mul(rate).map(|v| v / Decimal::ONE_HUNDRED) else {
+        let Some(expected) = derived_vat(e.taxable_amount.into_decimal(), rate) else {
             continue;
         };
-        let expected = exact.round_dp(2);
         let stated = e.tax_amount.into_decimal().abs();
-        if (stated - expected).abs() >= VAT_TOLERANCE {
+        if !within_vat_tolerance(stated, expected) {
             f.arithmetic(path, expected, e.tax_amount);
         }
     }
@@ -674,11 +680,9 @@ pub fn all() -> impl Iterator<Item = &'static Rule> {
 
 /// Look a rule up by any of its spellings — `BR-CO-3`, `BR-CO-03`, `br-co-3`.
 ///
-/// Searches **every** rule the crate ships, not just the core set. It used to
-/// search `CORE` only, which meant a user holding a perfectly ordinary
-/// XRechnung report — `BR-DE-16`, `PEPPOL-EN16931-R120`, `BR-DEX-09` — got
-/// `None` for every id in it. A registry that cannot explain its own findings is
-/// not a registry.
+/// Searches **every** rule the crate ships, not just the core set: an ordinary
+/// XRechnung report cites `BR-DE-16`, `PEPPOL-EN16931-R120` and `BR-DEX-09`,
+/// and a registry that cannot explain its own findings is not a registry.
 ///
 /// Restrictions are not rules and are not found here; see
 /// [`explain_restriction`].
@@ -854,10 +858,9 @@ mod provenance_tests {
     /// The `EN-` prefix is the whole reason a crate rule can never be mistaken
     /// for CEN's, so it must agree with [`Source::Crate`] in both directions.
     ///
-    /// Asserted rather than assumed: `EN-EDITION-01` has already been misread as
-    /// an authority's package-revision number, which is exactly the confusion the
-    /// namespace exists to prevent. A prefix that drifts out
-    /// of step with the provenance it advertises is worse than no prefix.
+    /// Asserted rather than assumed: an `EN-` id reads like an authority's own
+    /// unless the namespace is airtight, and a prefix that drifts out of step
+    /// with the provenance it advertises is worse than no prefix.
     #[test]
     fn the_en_namespace_means_exactly_source_crate() {
         for p in crate::profiles::ALL {

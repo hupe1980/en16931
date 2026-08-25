@@ -121,10 +121,9 @@ impl Group {
     /// an index to be unambiguous.
     ///
     /// [`Group::Attachment`] is here because BG-24 is `0..n` and four rules —
-    /// `BR-DE-22`, `BR-DEX-01`, `PEPPOL-EN16931-CL001` and `BR-TMP-2` — already
-    /// emit `BG-24[i]`. It used to answer `false` while those paths were being
-    /// written, and the test below did not list it in either direction, so
-    /// neither half noticed the other.
+    /// `BR-DE-22`, `BR-DEX-01`, `PEPPOL-EN16931-CL001` and `BR-TMP-2` — emit
+    /// `BG-24[i]`. The test below checks both directions, so a group that emits
+    /// an index and answers `false` fails the build.
     #[must_use]
     pub const fn repeats(self) -> bool {
         matches!(

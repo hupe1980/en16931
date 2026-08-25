@@ -196,6 +196,37 @@ What this crate does **not** do is bound input size or time. A caller reading
 from a socket owns that decision, and a library that quietly capped it would be
 wrong for the batch job and useless for the endpoint.
 
+### The schema is wider than the model, and the reader reads the schema
+
+An inbound document is valid against **UBL's XSD**, not against this crate's
+idea of a value. `cbc:IssueDate` is `xs:date`, whose lexical space ends with an
+optional time zone:
+
+```xml
+<cbc:IssueDate>2026-07-31+02:00</cbc:IssueDate>
+```
+
+That is schema-valid, no Schematron rule objects to it, and Java's
+`XMLGregorianCalendar` — which a great many UBL producers are built on — writes
+the offset by default. `Date` holds a calendar day and nothing else, because
+EN 16931-1 §6.5.9 has no term for a time zone; so the zone is **dropped, not
+applied** (`2026-07-31+02:00` *is* the day 2026-07-31) and BT-2 comes through.
+
+Refusing it instead — which this reader did — cost the whole business term:
+BT-2 came back absent and `BR-03` fired on an invoice that states its issue date
+perfectly well. A date that is merely wrong still fails, and is still reported
+in `malformed`.
+
+`cbc:ChargeIndicator` is the other one, and its failure is worse than a lost
+field. It is `xs:boolean`, whose lexical space is `{true, false, 1, 0}` — and
+it is the element that decides whether an amount is **added to or subtracted
+from** the invoice. A reader that knows only the two words turns a schema-valid
+`<cbc:ChargeIndicator>1</cbc:ChargeIndicator>` into an allowance: the same
+money, on the other side of the total. Both readers take all four forms now,
+and an indicator that is not a boolean at all is reported in `malformed` rather
+than folded into "allowance" — there is no safe default, so the answer is to
+say the document could not be read.
+
 ---
 
 ## ✅ Writing a proof, not a hope
@@ -276,6 +307,23 @@ the same file differently, and both behave correctly. So both are read and
 compared, and `Divergence::NoXmp` says when a counterparty scanning metadata
 first will not see an e-invoice at all.
 
+### 🔌 …and how the payload is wired in
+
+Getting the invoice out is the easy half. A hybrid PDF can be **structurally
+wrong in ways nothing complains about**: it opens, it renders, every viewer
+shows the attachment — and the counterparty's intake never sees an e-invoice.
+That comes back as a rejected invoice weeks later, with no error to search for.
+
+| | What breaks |
+|---|---|
+| `NotAssociated` — absent from the catalogue's `/AF` | a PDF/A-3 receiver asking what is associated with this document is told nothing. The commonest defect: every PDF library can *attach* a file, fewer can *associate* one |
+| `NotInEmbeddedFiles` — absent from `/Names/EmbeddedFiles` | readers without PDF/A-3 support never find it |
+| `NoRelationship` — no `/AFRelationship` | nothing says whether the XML *is* the invoice or accompanies one |
+| `NotPdfA3` — `pdfaid:part` is not `3` | parts 1 and 2 of ISO 19005 forbid embedding a file of arbitrary type, so the file contradicts itself and veraPDF says so |
+
+None stops extraction — the payload still comes back verbatim, which is what you
+diagnose with. They are what a **sender** wants to know before the file leaves.
+
 ### 🪤 The trap in the profile matrix
 
 **Not every ZUGFeRD profile is an EN 16931 invoice.** MINIMUM and BASIC WL carry
@@ -289,25 +337,21 @@ match got.profile.is_en16931_invoice() {
 }
 ```
 
-`en16931` shipped and fixed exactly that bug once: an `Underlies` impl that let
-an invoice validated against one profile be widened into a proof for another it
-had never been checked against. A type system that says MINIMUM is an EN 16931
-invoice is worse than no type system. An unrecognised profile is `Unknown`, never
-quietly the core model.
+A type system that says MINIMUM is an EN 16931 invoice is worse than no type
+system. An unrecognised profile is `Unknown`, never quietly the core model.
 
 ### ⚠️ Provenance
 
-`en16931`'s design was written against artefacts fetched into `spec/` and
-verified there. **The ZUGFeRD and Factur-X specifications are not among them.**
-Everything ⚠-marked — profile names, attachment filenames, the XMP structure — is
-stated from knowledge, not a fetched specification. **Milestone 0.0 is: fetch the
-specification.**
+Everything else here is derived from artefacts fetched into `spec/` and verified
+there. **The ZUGFeRD and Factur-X specifications are not among them**, so the
+⚠-marked claims — profile names, attachment filenames, the XMP structure — are
+corroborated against the Factur-X reference implementation rather than against
+the normative text. The module documentation names the two files to check
+against.
 
-### Writing PDFs: not implemented, and the reason is not effort
+### Writing PDFs: out of scope, and not for want of effort
 
-There is **no `embed(pdf_bytes, &invoice) -> Vec<u8>`**, and asking for one is
-entirely reasonable — so here is what stands in the way, because "not yet"
-without a reason is the least useful thing a crate can say.
+There is **no `embed(pdf_bytes, &invoice) -> Vec<u8>`**.
 
 A ZUGFeRD file is not "a PDF with an attachment". It is a **PDF/A-3** document,
 and the conformance is normative: a file that is no longer valid PDF/A is no
@@ -350,16 +394,9 @@ with a toolchain that already guarantees conformance, take the payload from
 model against the profile you name — and have that toolchain embed it. The half
 this crate can guarantee is the half it does.
 
-There was a `render` feature declared for the visible half. It enabled nothing
-and gated nothing, and shipped in the table above for two releases; a feature
-that does not exist is worse documentation than an absence, so it is gone. This
-section is the answer it was standing in for.
-
 ---
 
 ## 🧪 What is tested
-
-**114 tests.**
 
 | Suite | What it establishes |
 |---|---|
@@ -373,53 +410,31 @@ section is the answer it was standing in for.
 | `profile_scoped` | `to_string_for` refuses an invalid invoice in **both** syntaxes, and stamps BT-24 *before* the rules run rather than after |
 
 The corpus suite skips when `spec/` is absent, and CI sets
-`EN16931_REQUIRE_SPEC=1` so that a skip *there* fails the build. A corpus test
-that silently passes on an empty corpus is worse than none — and a `println!`
-in a green run is not the warning it looks like. Run `cargo xtask fetch`, or
-`just test-artefacts` to hold yourself to CI's standard.
+`EN16931_REQUIRE_SPEC=1` so a skip *there* fails the build: a corpus test that
+silently passes on an empty corpus is worse than none. Run `cargo xtask fetch`,
+or `just test-artefacts` to hold yourself to CI's standard.
 
 ZUGFeRD's PDFs are built in the tests rather than checked in: a binary fixture is
 opaque, and pins one producer's output rather than the structure the
 specification describes.
 
-**Fourteen real bugs came out of writing these rather than assuming.** Four from the
-early suites: BT-158's scheme is `@listID`, not `@schemeID` (well-formed,
-schema-valid, silently wrong); the reader handed back base64 text instead of
-decoded attachment bytes; BT-9 on a credit note was dropped without saying so;
-and `UBL-CR-244` forbids BT-33 on the customer.
+### Why three round-trip suites and not one
 
-Five more the moment `fidelity` ran the same property over documents this crate
-did not write. The `maximal()` fixture is *this crate's* idea of a complete
-invoice, so it can only catch a bug in a term someone thought to put in it:
+Each catches a class the one before it cannot.
 
-| | |
-|---|---|
-| `cbc:BaseQuantity unitCode=""` | BT-150 came back as `Some("")`, and **`PEPPOL-EN16931-R130` then fired** — a fatal finding manufactured by writing a document out and reading it back |
-| BT-147 required BT-148 | a price discount with no gross price was dropped, on seven instances |
-| `cac:SubInvoiceLine` | BG-DEX-01 was read and never written |
-| `cac:PrepaidPayment` | BG-DEX-09 likewise — the data `EN-EXT-01` exists to warn about losing |
-| empty `cac:InvoicePeriod` | dropped without a word, so `BR-CO-20` stopped firing on the rewrite |
+- **`roundtrip`** works on a fixture this crate wrote, so it can only find a bug
+  in a term someone thought to put in the fixture.
+- **`fidelity`** runs the same property over 486 documents this crate did not
+  write, which is where terms nobody remembered turn up.
+- **`cross_syntax`** changes syntax in between — and that is the one that finds a
+  binding which is *consistently* wrong, because a writer and its own reader
+  agreeing on a mistake round-trip perfectly. `BT-90` written to CII and never
+  to UBL, a credit note detected from `381` alone, BT-111 vanishing when
+  BT-6 = BT-5: all invisible until the document has to change syntax.
 
-Every one of them produced a schema-valid document that the reader read without
-complaint. That is the class of bug a round trip catches and nothing else does.
-
-**Four more when `cross_syntax` made the documents change syntax.** A same-syntax
-round trip cannot see a binding that is *consistently* wrong — a writer and its
-own reader agreeing on a mistake round-trip perfectly. Crossing breaks the
-agreement:
-
-| | |
-|---|---|
-| **BT-90 was never written to UBL** | UBL carries the creditor identifier on the **seller** as `schemeID="SEPA"`, the one place `BR-CL-10` admits a non-ISO-6523 scheme. The reader hopped it into BG-19; the writer never hopped it back, so every direct-debit invoice written as UBL lost it and failed `BR-DE-30` at the counterparty |
-| **BT-20 was trimmed by the CII reader** | `BR-DE-18` needs the Skonto block to end with a newline, and XRechnung is carried in CII too — 36 documents |
-| **CII detected credit notes from `381` alone** | `396`, `532` and `83` read back as *invoices*, and `BR-CL-01` then reported a violation that is not one. Every published CII credit note uses `381`, so no corpus could show it |
-| **BT-111 vanished when BT-6 = BT-5** | one element is then both totals — which the UBL reader knew and the CII reader did not |
-
-Plus one the two readers simply disagreed about: an **empty element**.
-`<cbc:BuyerReference/>` is an absent term, not a term whose value is the empty
-string. Both readers said `None` through their `text()` helper and `Some("")`
-through the dozen call sites that read an element's own text — inconsistent with
-themselves, and with each other on nine documents.
+Every defect of that class produces a schema-valid document that the reader
+reads without complaint, which is why the property is asserted over a corpus
+rather than argued from the code.
 
 ---
 

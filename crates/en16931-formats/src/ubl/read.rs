@@ -112,7 +112,65 @@ fn decimal(n: roxmltree::Node<'_, '_>, want: &str) -> Option<rust_decimal::Decim
 }
 
 fn date(n: roxmltree::Node<'_, '_>, want: &str) -> Option<Date> {
-    text(n, want).and_then(|t| Date::parse(&t).ok())
+    text(n, want).and_then(|t| xs_date(&t))
+}
+
+/// A UBL date, which is `xs:date` and **not** simply `CCYY-MM-DD`.
+///
+/// XSD's lexical space for `xs:date` ends with an optional time zone —
+/// `2026-07-31`, `2026-07-31Z`, `2026-07-31+02:00` are three spellings of one
+/// day — and Java's `XMLGregorianCalendar`, which a great many UBL producers
+/// are built on, writes the offset by default. Documents carrying it are
+/// schema-valid and no Schematron rule objects to them.
+///
+/// [`Date`] holds a calendar day and nothing else, deliberately: EN 16931-1
+/// §6.5.9 has no term for a time zone, so there is nowhere to put one and
+/// nothing is lost by dropping it. Refusing the value instead costs the whole
+/// business term — BT-2 absent, and `BR-03` firing on an invoice that states
+/// its issue date perfectly well.
+///
+/// The zone is dropped rather than applied. `2026-07-31+02:00` **is** the day
+/// 2026-07-31 — the offset says which day-boundary the value was written
+/// against, not that the day should be shifted.
+fn xs_date(raw: &str) -> Option<Date> {
+    Date::parse(without_timezone(raw.trim())).ok()
+}
+
+/// `cbc:ChargeIndicator` — `xs:boolean`, which has **four** lexical forms.
+///
+/// `1` and `0` are as valid as `true` and `false`, and this reader knew only
+/// the two words. A schema-valid `<cbc:ChargeIndicator>1</cbc:ChargeIndicator>`
+/// therefore read as *false*, and the element it governs is the one that
+/// decides whether an amount is **added to or subtracted from** the invoice —
+/// so a fee arrived as a discount, with the sign of the money reversed and
+/// nothing in the reader's own output to say so.
+///
+/// `None` for anything else, which the caller records in
+/// [`Reader::malformed`]. There is no safe default: reading an unreadable
+/// indicator as a charge invents money and as an allowance destroys it, so the
+/// answer is to say the document could not be read rather than to pick.
+fn xs_boolean(raw: &str) -> Option<bool> {
+    match raw.trim() {
+        "true" | "1" => Some(true),
+        "false" | "0" => Some(false),
+        _ => None,
+    }
+}
+
+/// `2026-07-31Z` and `2026-07-31+02:00` → `2026-07-31`.
+///
+/// Anything else is returned untouched, so a genuinely malformed date still
+/// fails in [`Date::parse`] and is reported rather than trimmed into shape.
+fn without_timezone(s: &str) -> &str {
+    let b = s.as_bytes();
+    // A zone can only follow the ten characters of a date, so the `-` of an
+    // offset is never the `-` inside one.
+    let zoned = match b.len() {
+        11 => b[10] == b'Z',
+        16 => matches!(b[10], b'+' | b'-') && b[13] == b':',
+        _ => false,
+    };
+    if zoned { &s[..10] } else { s }
 }
 
 /// Whether an element is present with text the model cannot hold.
@@ -142,6 +200,31 @@ impl Reader {
         self.unmapped.insert(format!("{parent}/{}", name(n)));
     }
 
+    /// Whether a `cac:AllowanceCharge` is a **charge**, recording an
+    /// unreadable indicator.
+    ///
+    /// Mandatory in UBL, so an absent one is as much a defect as an unreadable
+    /// one and is reported the same way. False is the fallback because the two
+    /// wrong answers are not symmetrical in consequence: a charge read as an
+    /// allowance makes the document fail its own totals rules loudly, while an
+    /// allowance read as a charge would too — but the caller sees `malformed`
+    /// either way, which is the part that matters.
+    fn charge_indicator(&mut self, n: roxmltree::Node<'_, '_>, at: &str) -> bool {
+        match text(n, "ChargeIndicator").as_deref().map(xs_boolean) {
+            Some(Some(b)) => b,
+            other => {
+                let raw = if other.is_none() {
+                    "<absent>".to_owned()
+                } else {
+                    text(n, "ChargeIndicator").unwrap_or_default()
+                };
+                self.malformed
+                    .push(format!("{at}/ChargeIndicator={raw}: not an xs:boolean"));
+                false
+            }
+        }
+    }
+
     /// Read a UBL `Invoice` or `CreditNote` root element.
     pub fn read(&mut self, root: roxmltree::Node<'_, '_>) -> Invoice {
         let mut inv = Invoice::default();
@@ -159,7 +242,7 @@ impl Reader {
                 "ProfileID" => inv.business_process = non_empty(own_text(c)),
                 "ID" => inv.number = non_empty(own_text(c)),
                 "IssueDate" => {
-                    if is_malformed(root, "IssueDate", |t| Date::parse(t).ok()) {
+                    if is_malformed(root, "IssueDate", xs_date) {
                         self.malformed.push("IssueDate".to_owned());
                     }
                     inv.issue_date = date(root, "IssueDate");
@@ -251,7 +334,7 @@ impl Reader {
                     inv.payment_terms = kid(c, "Note").and_then(|n| n.text()).map(str::to_owned);
                 }
                 "AllowanceCharge" => {
-                    let is_charge = text(c, "ChargeIndicator").as_deref() == Some("true");
+                    let is_charge = self.charge_indicator(c, "AllowanceCharge");
                     let ac = self.allowance(c);
                     if is_charge {
                         inv.charges.push(ac);
@@ -749,7 +832,7 @@ impl Reader {
                     }
                 }
                 "AllowanceCharge" => {
-                    let is_charge = text(c, "ChargeIndicator").as_deref() == Some("true");
+                    let is_charge = self.charge_indicator(c, "InvoiceLine/AllowanceCharge");
                     let a = LineAllowanceCharge {
                         amount: amount(c, "Amount").unwrap_or_default(),
                         base_amount: amount(c, "BaseAmount"),
@@ -829,6 +912,23 @@ impl Reader {
                 "AllowanceCharge" => {
                     // BG-29's discount and gross price hide inside a price-level
                     // allowance in UBL: `Amount` is BT-147, `BaseAmount` BT-148.
+                    //
+                    // BT-147 is a **discount**, and the model has no term for a
+                    // price-level charge — `PEPPOL-EN16931-R044` forbids one
+                    // outright. A document carrying `ChargeIndicator=true` here
+                    // is therefore saying something EN 16931 cannot hold, and
+                    // reading the amount anyway would file an increase as a
+                    // reduction: the same money, subtracted instead of added,
+                    // under the core profile where no rule objects. So it is
+                    // reported and not mapped.
+                    if self.charge_indicator(c, "Price/AllowanceCharge") {
+                        self.malformed.push(
+                            "Price/AllowanceCharge is a charge; BT-147 is a discount and \
+                             EN 16931 has no term for a price-level charge (R044)"
+                                .to_owned(),
+                        );
+                        continue;
+                    }
                     p.price_discount = text(c, "Amount")
                         .and_then(|t| t.parse().ok())
                         .map(en16931::UnitPriceAmount::new);
@@ -945,4 +1045,69 @@ fn read_note(raw: &str) -> InvoiceNote {
         };
     }
     InvoiceNote::new(raw)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::xs_date;
+
+    /// `xs:date` permits a time zone, and a great many producers write one.
+    ///
+    /// `<cbc:IssueDate>2026-07-31+02:00</cbc:IssueDate>` is schema-valid UBL
+    /// that no Schematron rule objects to.
+    #[test]
+    fn a_ubl_date_may_carry_the_time_zone_xs_date_allows() {
+        let expected = en16931::Date::parse("2026-07-31").ok();
+        for spelling in [
+            "2026-07-31",
+            "2026-07-31Z",
+            "2026-07-31+02:00",
+            "2026-07-31-05:00",
+            // The zone is dropped, never applied: the offset says which
+            // day-boundary the value was written against, not that the day
+            // moves.
+            "2026-07-31+14:00",
+            "  2026-07-31Z  ",
+        ] {
+            assert_eq!(xs_date(spelling), expected, "{spelling}");
+        }
+    }
+
+    /// `cbc:ChargeIndicator` is `xs:boolean`, which has four lexical forms.
+    ///
+    /// The regression, and the worst kind a reader can have: `1` means *true*
+    /// and this reader knew only the word, so a schema-valid charge arrived as
+    /// an **allowance** — the same money, with the sign reversed, on the one
+    /// element that decides which way it goes.
+    #[test]
+    fn a_charge_indicator_may_be_written_as_a_digit() {
+        assert_eq!(super::xs_boolean("true"), Some(true));
+        assert_eq!(super::xs_boolean("1"), Some(true));
+        assert_eq!(super::xs_boolean("false"), Some(false));
+        assert_eq!(super::xs_boolean("0"), Some(false));
+        // `xs:boolean` is whitespace-collapsed, so surrounding space is
+        // notation rather than a different value.
+        assert_eq!(super::xs_boolean("  true "), Some(true));
+        // …and nothing else is a boolean. `None` is reported, never defaulted.
+        for other in ["yes", "TRUE", "True", "2", "", "-1"] {
+            assert_eq!(super::xs_boolean(other), None, "{other}");
+        }
+    }
+
+    /// A date that is merely wrong still fails, rather than being trimmed into
+    /// shape by the zone-stripping.
+    #[test]
+    fn a_malformed_date_is_still_malformed() {
+        for spelling in [
+            "2026-13-01",          // no such month
+            "2026-02-30",          // no such day
+            "31/07/2026",          // not ISO at all
+            "2026-07-31T00:00:00", // xs:dateTime, which cbc:IssueDate is not
+            "2026-07-31+2:00",     // a zone, malformed
+            "2026-07-31QQ",
+            "",
+        ] {
+            assert_eq!(xs_date(spelling), None, "{spelling}");
+        }
+    }
 }

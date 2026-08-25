@@ -3,7 +3,7 @@
 //! ```text
 //!         ┌──────────────┐                       ┌──────────────────────┐
 //!         │   billing    │                       │  inbound documents   │
-//!         │ calculations │                       │  UBL / CII / EDIFACT │
+//!         │ calculations │                       │  UBL / CII / ZUGFeRD │
 //!         └──────┬───────┘                       └──────────┬───────────┘
 //!                │  adapter (optional feature)              │
 //!                └──────────────┬───────────────────────────┘
@@ -256,18 +256,16 @@ pub enum Syntax {
 ///
 /// # The prologue is skipped properly, not by shape
 ///
-/// This used to split on `<` and take the first piece that began with neither
-/// `?` nor `!`. That reads a comment's *contents* as markup, so a document
-/// opening with
+/// Splitting on `<` and taking the first piece that begins with neither `?` nor
+/// `!` reads a comment's *contents* as markup, so a document opening with
 ///
 /// ```xml
 /// <!-- exported from <ERP> 4.2 -->
 /// <Invoice …>
 /// ```
 ///
-/// sniffed as `ERP` and came back `None` — the file is a perfectly ordinary UBL
-/// invoice, and the CLI would have reported it as not an e-invoice at all.
-/// A comment, a processing instruction and a doctype each have their own
+/// would sniff as `ERP` and come back `None`, for a perfectly ordinary UBL
+/// invoice. A comment, a processing instruction and a doctype each have their own
 /// terminator, so each is skipped by its own.
 #[must_use]
 pub fn sniff(xml: &str) -> Option<Syntax> {

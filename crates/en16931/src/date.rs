@@ -331,11 +331,9 @@ impl From<Date> for time::Date {
     /// Infallible, and that took bounding the year to make true.
     ///
     /// `time::Date` spans -9999..=9999 without its `large-dates` feature, so
-    /// every four-digit calendar day fits. It did not fit before: this crate
-    /// accepted `Date::new(50_000, 1, 1)`, and a downstream user asking for this
-    /// impl reasoned it could not fail *because* `Date` is validated on
-    /// construction — which was the right instinct about a type that was not yet
-    /// keeping that promise. See [`Date::new`].
+    /// every four-digit calendar day fits — and [`Date::new`] rejects a year
+    /// outside that range, which is what makes this impl total rather than
+    /// merely usually right.
     fn from(d: Date) -> Self {
         let month = time::Month::try_from(d.month).expect("1..=12, checked on construction");
         time::Date::from_calendar_date(d.year, month, d.day)
@@ -490,7 +488,7 @@ mod tests {
     }
 
     /// Both date-library bridges go **both ways**, as their feature
-    /// documentation says. `time` only went one way for two releases.
+    /// documentation says.
     #[cfg(feature = "chrono")]
     #[test]
     fn chrono_round_trips_in_both_directions() {

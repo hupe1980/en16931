@@ -1026,11 +1026,10 @@ fn stranded_sub_invoice_lines_are_a_finding() {
 
 /// Every profile's check count, as five documents quote it.
 ///
-/// `README.md`, `lib.rs`, the CLI's README and this site's profile page all
-/// print these five numbers, and they had already drifted by one the moment
-/// `EN-EXT-02` was registered — a rule in `CORE` moves every row at once. A
-/// number repeated in five files is a number nobody rechecks, so it is checked
-/// here instead.
+/// `README.md`, `lib.rs`, the CLI's README and the site's profile page all
+/// print these five numbers, and one rule added to `CORE` moves every row at
+/// once. A number repeated in five files is a number nobody rechecks, so it is
+/// checked here instead.
 ///
 /// The sibling of `just deps`, which does the same for the dependency graph
 /// sizes, and for the same reason.
@@ -1062,15 +1061,12 @@ fn the_documented_profile_check_counts_are_measured() {
 
 /// …and the number a **report** prints is that same number, on any document.
 ///
-/// The two used to differ by one. `EN-EXT-01` was filtered out of the rule
-/// sequence whenever the target could represent whatever extension data the
-/// invoice carried — which, for an invoice carrying none, is every profile and
-/// every document. So five files quoted 282 for XRechnung and the tool printed
-/// `280 rule(s) checked` under a suppression that removed one.
-///
-/// The rule now runs and its *finding* is withdrawn instead, which is the only
-/// place the distinction ever mattered. This pins that, because the difference
-/// is invisible until someone reads a report next to a README.
+/// Filtering `EN-EXT-01` out of the rule *sequence* whenever the target can
+/// represent the invoice's extension data — which, for an invoice carrying
+/// none, is every profile and every document — would make the tool print
+/// `281 rule(s) checked` beside five files quoting 282. The rule runs and its
+/// *finding* is withdrawn instead. Pinned here because the difference is
+/// invisible until someone reads a report next to a README.
 #[test]
 fn a_report_says_it_checked_what_the_profile_registers() {
     use en16931::extensions::SubInvoiceLine;

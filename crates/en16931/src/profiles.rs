@@ -61,6 +61,7 @@ pub const PEPPOL: ArtefactRef = ArtefactRef {
 /// The core invoice model, with no usage specification on top.
 pub static EN16931: Profile = Profile {
     id: "EN 16931",
+    slug: "en16931",
     edition: crate::Edition::En2017A1,
     specification_id: "urn:cen.eu:en16931:2017",
     artefacts: &[CEN],
@@ -125,6 +126,7 @@ static XR_SPEC_IDS: &[&str] = &[
 /// *is* shipped.
 pub static XRECHNUNG: Profile = Profile {
     id: "XRechnung 3.0",
+    slug: "xrechnung",
     edition: crate::Edition::En2017A1,
     specification_id: XR_SPEC_IDS[0],
     artefacts: &[CEN, KOSIT_SCHEMATRON, KOSIT_CONFIG, PEPPOL],
@@ -195,11 +197,17 @@ pub static XRECHNUNG: Profile = Profile {
     levels: XR_LEVELS,
 };
 
-/// The two CEN rules KoSIT's validator reports at **warning** for every
-/// XRechnung scenario — CIUS, CVD and Extension alike.
+/// Every check KoSIT reports at **warning** where this crate's own construction
+/// would make it fatal — for every XRechnung scenario, CIUS, CVD and Extension
+/// alike.
 ///
-/// From `validator-configuration-xrechnung/scenarios.xml`, with the
-/// configuration's own comments:
+/// # Two authorities publish severity, in two different files
+///
+/// Reading only one of them is how a validator comes to reject documents
+/// Germany accepts.
+///
+/// **1. `validator-configuration-xrechnung/scenarios.xml`** re-levels *CEN's*
+/// rules, with the configuration's own comments:
 ///
 /// ```xml
 /// <!-- overwrites CEN severity level "fatal" for ISO 6523 values of BT-157 … -->
@@ -210,15 +218,36 @@ pub static XRECHNUNG: Profile = Profile {
 ///
 /// Both are code-list rules whose CEN tables lag the registries they track —
 /// ISO 6523 ICD and UN/ECE Rec 20/21. KoSIT will not reject a German invoice
-/// over a unit code CEN has not yet imported, and neither will this crate: it
-/// reported both as fatal until this was measured against the configuration, and
-/// so rejected documents the German reference validator accepts.
+/// over a unit code CEN has not yet imported, and neither will this crate.
+///
+/// **2. The Schematron's own `flag`** carries the severity of KoSIT's *own*
+/// rules, and five of them are not fatal. Three are ordinary rules and say so
+/// at their definitions; the two here are §7.3.2 **restrictions**, which this
+/// crate derives as findings and which are fatal by construction — a
+/// `Restriction` has no severity to carry, so theirs is stated here:
+///
+/// ```xml
+/// <assert test="…" flag="warning" id="BR-DE-17">…</assert>   <!-- BT-3 type codes -->
+/// <assert test="…" flag="warning" id="BR-DE-21">…</assert>   <!-- BT-24 identifiers -->
+/// ```
+///
+/// Both are scoping decisions rather than defects: `BT-3 = 386` is lawful
+/// EN 16931 that XRechnung does not admit, and a BT-24 naming another CIUS
+/// means the sender used a different usage specification — neither is a
+/// malformed invoice, and KoSIT does not treat them as one.
+///
+/// `every_kosit_check_runs_at_the_severity_kosit_publishes`, in
+/// `tests/codelists.rs`, compares all 55 against the Schematron.
 ///
 /// It is also why [`XRECHNUNG`] is **not** a conformant CIUS under §4.4.2 —
 /// see [`Profile::is_conformant_cius`](crate::Profile::is_conformant_cius).
 static XR_LEVELS: &[(&str, Severity)] = &[
+    // scenarios.xml `customLevel`, over CEN's rules.
     ("BR-CL-21", Severity::Warning),
     ("BR-CL-23", Severity::Warning),
+    // The Schematron's own `flag`, over restrictions this crate derives.
+    ("BR-DE-17", Severity::Warning),
+    ("BR-DE-21", Severity::Warning),
 ];
 
 /// XRechnung's own rules **plus the 31 Peppol rules its build merges in**.
@@ -301,20 +330,17 @@ pub(crate) const PEPPOL_SPEC_ID: &str =
 /// `extra_rules` — §7.3.2's one axis that genuinely needs code.
 pub static PEPPOL_BIS_3: Profile = Profile {
     id: "Peppol BIS Billing 3.0",
+    slug: "peppol",
     edition: crate::Edition::En2017A1,
     specification_id: PEPPOL_SPEC_ID,
     artefacts: &[CEN, PEPPOL],
     underlying: &["EN 16931"],
-    // `R003` and `R004` used to live here as `Restriction::Mandatory` and both
-    // were wrong for the same reason: a restriction can say *"this term is
-    // present"* and neither rule says that.
-    //
-    // `R003` is a **disjunction** — BT-10 *or* BT-13 — so requiring BT-10
-    // rejected eight of CEN's own published test invoices, every one of which
-    // supplies an order reference instead. `R004` constrains BT-24's **value**
-    // with `starts-with`, so requiring mere presence accepted any string at all.
-    //
-    // Both are now rules. See `peppol::R003` and `peppol::R004`.
+    // No restrictions. A `Restriction` can only say *"this term is present"*,
+    // and Peppol's two candidates say something else: `R003` is a
+    // **disjunction** (BT-10 *or* BT-13 — eight of CEN's published invoices
+    // supply the order reference instead), and `R004` constrains BT-24's
+    // **value** with `starts-with` rather than requiring it at all. Both are
+    // rules: see `peppol::R003` and `peppol::R004`.
     restrictions: &[],
     // Peppol's own arithmetic — the ±0.02 regime. `R120` has no CEN
     // counterpart at all, which is exactly why it lives here rather than in the
@@ -401,6 +427,7 @@ static XR_CVD_EXTRA: &[&crate::validation::Rule] = &const {
 /// conformant CIUS, so there is no widening out of it — see below.
 pub static XRECHNUNG_CVD: Profile = Profile {
     id: "XRechnung 3.0 CVD",
+    slug: "xrechnung-cvd",
     edition: crate::Edition::En2017A1,
     specification_id: XR_SPEC_IDS[2],
     artefacts: &[CEN, KOSIT_SCHEMATRON, KOSIT_CONFIG, PEPPOL],
@@ -417,6 +444,10 @@ pub static XRECHNUNG_CVD: Profile = Profile {
         ("BR-CL-21", Severity::Warning),
         ("BR-CL-23", Severity::Warning),
         ("BR-CL-13", Severity::Info),
+        // This profile shares `XRECHNUNG.restrictions`, so it shares the two
+        // KoSIT publishes at warning. See `XR_LEVELS`.
+        ("BR-DE-17", Severity::Warning),
+        ("BR-DE-21", Severity::Warning),
     ],
 };
 
@@ -428,31 +459,25 @@ impl ProfileMarker for XRechnungCvd {
     const PROFILE: &'static Profile = &XRECHNUNG_CVD;
 }
 
-// **No `Underlies` impl, deliberately — and this was a soundness bug.**
+// **No `Underlies` impl, deliberately — writing one would be a soundness bug.**
 //
-// It used to read:
+// The tempting pair is `impl Underlies<XRechnungCvd> for XRechnung` and the
+// same for `En16931`, on the reasoning that a CVD-valid invoice is
+// XRechnung-valid and therefore core-valid. It is not: CVD **relaxes
+// `BR-CL-13` to `Information`**, because it marks vehicle lines with a BT-158
+// scheme that is not in UNTDID 7143, so a conforming CVD invoice can violate
+// the core model.
 //
-// ```rust,ignore
-// // A CVD-valid invoice is XRechnung-valid, which is core-valid.
-// impl Underlies<XRechnungCvd> for XRechnung {}
-// impl Underlies<XRechnungCvd> for En16931 {}
-// ```
-//
-// The comment is false. CVD **relaxes `BR-CL-13` to `Information`**, because it
-// marks vehicle lines with a `BT-158` scheme that is not in UNTDID 7143 — so a
-// conforming CVD invoice violates the core model, exactly as `XRECHNUNG_CVD`'s
-// own documentation says.
-//
-// With those impls, `Validated<XRechnungCvd>::widen::<En16931>()` compiled and
-// handed back a `Validated<En16931>`: a **proof of core-validity for a document
-// that is not core-valid**. A serialiser accepting the core proof — which is the
-// whole point of `Validated<P>` — would then have been handed an invoice no
-// core-only receiver can process.
+// With those impls `Validated<XRechnungCvd>::widen::<En16931>()` would compile
+// and hand back a **proof of core-validity for a document that is not
+// core-valid** — and a serialiser accepting that proof, which is the whole
+// point of `Validated<P>`, would be handed an invoice no core-only receiver can
+// process.
 //
 // `is_conformant_cius()` is the runtime witness of the same fact, and
 // `a_cvd_invoice_can_be_core_invalid` in `tests/profiles.rs` is the evidence.
-// Widening out of CVD requires re-validating, which is what `Validated::new`
-// is for.
+// Widening out of CVD means re-validating, which is what `Validated::new` is
+// for.
 
 /// XRechnung's rules plus the Extension's fourteen.
 static XR_EXT_EXTRA: &[&crate::validation::Rule] = &const {
@@ -503,6 +528,7 @@ static XR_EXT_EXTRA: &[&crate::validation::Rule] = &const {
 /// [`Profile::levels`]: crate::validation::profile::Profile::levels
 pub static XRECHNUNG_EXTENSION: Profile = Profile {
     id: "XRechnung 3.0 Extension",
+    slug: "xrechnung-extension",
     edition: crate::Edition::En2017A1,
     specification_id: XR_SPEC_IDS[1],
     artefacts: &[CEN, KOSIT_SCHEMATRON, KOSIT_CONFIG, PEPPOL],
@@ -541,6 +567,10 @@ pub static XRECHNUNG_EXTENSION: Profile = Profile {
         // fatal `BR-CO-16` would contradict the rule that exists to permit it —
         // so the UBL configuration is followed.
         ("BR-CO-16", Severity::Info),
+        // Shared with every XRechnung scenario, from the Schematron's own
+        // `flag` rather than from `scenarios.xml`. See `XR_LEVELS`.
+        ("BR-DE-17", Severity::Warning),
+        ("BR-DE-21", Severity::Warning),
     ],
 };
 
@@ -583,9 +613,59 @@ pub fn for_specification_id(id: &str) -> Option<&'static Profile> {
         })
 }
 
+/// Find a profile by the name a person types.
+///
+/// Accepts, in order, the [`slug`](Profile::slug) (`xrechnung`), the
+/// [`id`](Profile::id) (`XRechnung 3.0`) and the full BT-24 identifier — a
+/// person has the first, a document has the last, and a report has the middle
+/// one. All three are unambiguous, so accepting all three costs nothing and
+/// saves every caller from writing this `find` again.
+///
+/// Slug and id match case-insensitively; the specification identifier does not,
+/// because a URN is compared as the document carries it.
+///
+/// ```
+/// use en16931::profiles;
+///
+/// let by_slug = profiles::lookup("xrechnung").expect("a slug");
+/// let by_id = profiles::lookup("XRechnung 3.0").expect("an id");
+/// let by_bt24 = profiles::lookup(by_slug.specification_id).expect("a BT-24");
+/// assert!(std::ptr::eq(by_slug, by_id) && std::ptr::eq(by_id, by_bt24));
+/// ```
+#[must_use]
+pub fn lookup(name: &str) -> Option<&'static Profile> {
+    let name = name.trim();
+    ALL.iter().copied().find(|p| {
+        p.slug.eq_ignore_ascii_case(name)
+            || p.id.eq_ignore_ascii_case(name)
+            || p.specification_id == name
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A slug is an interface: unique, typeable, and the same tomorrow.
+    #[test]
+    fn every_slug_is_unique_and_shell_safe() {
+        let mut seen = std::collections::BTreeSet::new();
+        for p in ALL {
+            assert!(
+                p.slug
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
+                "{}: {:?} is not lower-case ASCII and hyphens",
+                p.id,
+                p.slug
+            );
+            assert!(seen.insert(p.slug), "{:?} is used twice", p.slug);
+            assert!(std::ptr::eq(lookup(p.slug).expect(p.slug), *p));
+            assert!(std::ptr::eq(lookup(p.id).expect(p.id), *p));
+            assert!(std::ptr::eq(lookup(p.specification_id).expect(p.id), *p));
+        }
+        assert!(lookup("no such profile").is_none());
+    }
 
     #[test]
     fn profiles_are_siblings_not_a_scale() {

@@ -41,7 +41,7 @@ The composition, by family:
 | `BR-CO-*` | 24 | the totals and derivation chain |
 | `BR-CL-*` | 23 | code-list membership |
 | `BR-DEC-*` | 21 | decimal places — all 21 retired by `InvoiceAmount` |
-| `BR-DEX-*` | 14 | the XRechnung Extension |
+| `BR-DEX-*` | 14 | the XRechnung Extension — of KoSIT's 15; `BR-DEX-15` checks a CII element |
 | `BR-TMP-*` | 2 | temporary CEN rules |
 | `EN-*` | 4 | this crate's own, namespaced so they cannot be mistaken for CEN's |
 
@@ -131,13 +131,41 @@ so under core a line whose amount does not follow from its price is perfectly
 valid. And `R046` is the trap — it looks like `R040`'s sibling and carries **no
 slack at all**.
 
+### …and a fifth thing that is not what it looks like: `round`
+
+The artefacts do not say "round to two decimals". They say it in XPath:
+
+```xpath
+round(abs(TaxableAmount) * (Percent div 100) * 10 * 10) div 100
+```
+
+and pick the zero-rate branch of `BR-CO-17` on `round(Percent) = 0`. Both are
+**XPath's** `fn:round`, which is *"the one closest to +∞"* — and no
+`rust_decimal::RoundingStrategy` reproduces it:
+
+| | `round(0.5)` | `round(2.5)` | `round(-0.5)` |
+|---|---|---|---|
+| XPath `fn:round` | `1` | `3` | `0` |
+| `Decimal::round` — banker's | `0` | `2` | `0` |
+| half away from zero | `1` | `3` | `-1` |
+
+Banker's and half-away-from-zero each get one of the two midpoint columns
+wrong, so the rules use `floor(x + 0.5)` — the definition rather than an
+approximation of it. It is not academic: a VAT rate of exactly **0.5 %**
+(Spain's *recargo de equivalencia* on reduced-rate goods) rounds to `1` for the
+artefact and to `0` for banker's, which sent `BR-CO-17` down its zero-rate
+branch and rejected a correct invoice every deployed validator accepts.
+
 ## Severity is the authority's, not ours
 
 A rule's *consequence* is not a property of the rule. It is a property of the
 rule **in a profile**, and the authorities publish it separately from their
 Schematron — which is why reading only the Schematron gets it wrong.
 
-KoSIT's validator configuration says so in as many words, once per scenario:
+**Two files publish severity, and they cover different rules.** Reading either
+one alone is how a validator comes to reject documents Germany accepts.
+
+**1. The validator configuration** re-levels *CEN's* rules, once per scenario:
 
 ```xml
 <!-- overwrites CEN severity level "fatal" for codelist values of BT-130 … -->
@@ -147,15 +175,33 @@ KoSIT's validator configuration says so in as many words, once per scenario:
 ```
 
 Nine CEN rules are re-levelled across the three XRechnung scenarios, and the
-profiles carry all nine. A test reads `scenarios.xml` out of the artefact tree
-and asserts the mapping, so it is measured rather than transcribed.
+profiles carry all nine.
 
-**This crate used to reject invoices Germany accepts.** `BR-CL-21` and `BR-CL-23`
-are code-list rules whose CEN tables lag the registries they track — ISO 6523 ICD
-and UN/ECE Rec 20/21. KoSIT reports both at *warning*, deliberately; this crate
-reported them as fatal, so an ordinary German invoice with a unit code CEN has
-not yet imported failed here and passed there. That is the worst direction for a
-validator to be wrong in, because it stops a document nobody else would stop.
+**2. The Schematron's own `flag`** carries the severity of *KoSIT's* rules, and
+five of the fifty-five are not fatal:
+
+```xml
+<assert test="matches(normalize-space(cbc:Telephone), $XR-TELEPHONE-REGEX)"
+  flag="warning" id="BR-DE-27">…</assert>
+```
+
+| | Why not fatal |
+|---|---|
+| `BR-DE-26` | *"soll … übermittelt werden"* — a corrected invoice **should** cite the original |
+| `BR-DE-27`, `BR-DE-28` | a telephone number with two digits; an address that is not quite one |
+| `BR-DE-17`, `BR-DE-21` | scoping, not malformation: a lawful EN 16931 type code, or a BT-24 naming another CIUS |
+
+A test reads `scenarios.xml` for the first and both Schematrons for the second,
+comparing all 121 severities the three XRechnung profiles run — measured rather
+than transcribed.
+
+**Getting either file wrong rejects invoices Germany accepts.** `BR-CL-21` and
+`BR-CL-23` are code-list rules whose CEN tables lag the registries they track
+(ISO 6523 ICD, UN/ECE Rec 20/21) and KoSIT reports both at *warning*,
+deliberately; five of KoSIT's own rules are warnings in the Schematron. Reading
+either as fatal fails an invoice the German reference validator passes — the
+worst direction for a validator to be wrong in, because it stops a document
+nobody else would stop.
 
 **A finding is re-levelled, never dropped.** No authority removes a rule, and
 suppression costs the report the one line explaining why an unusual value is

@@ -63,9 +63,8 @@ fn own_text(n: Node<'_, '_>) -> String {
 /// # Why empty is absent
 ///
 /// `<ram:Description/>` is not a description whose value is the empty string;
-/// it is a description that is not there. The UBL reader has always said so —
-/// `roxmltree` gives an empty element no text node, so its `text()` yields
-/// `None` — and this one used to map the same element to `Some("")`.
+/// it is a description that is not there — which is also what the UBL reader
+/// answers, since `roxmltree` gives an empty element no text node.
 ///
 /// Two readers of one model disagreeing about that is a real difference and not
 /// a cosmetic one. Rules mostly paper over it (`is_none_or(str::is_empty)` reads
@@ -166,11 +165,11 @@ impl Reader {
         // CII has one document element, so the kind comes from BT-3 alone —
         // and from the whole UNTDID 1001 credit-note list, not just `381`.
         //
-        // Checking only `381` was wrong in a way the corpus could not show:
-        // every published CII credit note uses `381`, so nothing exercised
-        // `396` (factored credit note), `532` (forwarder's credit note) or `83`.
-        // Those read back as *invoices*, and `BR-CL-01` then checked them
-        // against the 50 invoice codes and reported a violation that is not one.
+        // Checking only `381` is wrong in a way the corpus cannot show: every
+        // published CII credit note uses `381`, so nothing exercises `396`
+        // (factored), `532` (forwarder's) or `83`. Those would read back as
+        // *invoices*, and `BR-CL-01` would then check them against the 50
+        // invoice codes and report a violation that is not one.
         //
         // `81` is on **both** lists. It is read as a credit note here, which is
         // what `PEPPOL-EN16931-P0101` expects and what
@@ -475,7 +474,7 @@ impl Reader {
                 }
                 "BillingSpecifiedPeriod" => inv.invoicing_period = Some(self.period(c)),
                 "SpecifiedTradeAllowanceCharge" => {
-                    let is_charge = Self::is_charge(c);
+                    let is_charge = self.is_charge(c, "SpecifiedTradeAllowanceCharge");
                     let a = DocumentAllowanceCharge {
                         amount: self.amount(c, "ActualAmount").unwrap_or_default(),
                         base_amount: self.amount(c, "BasisAmount"),
@@ -551,9 +550,9 @@ impl Reader {
         // Called once per `ram:SpecifiedTradeSettlementPaymentMeans`, which is
         // 0..unbounded in D16B: several elements are one BG-16 with several
         // BG-17 accounts, since the XSD puts the creditor account at 0..1 per
-        // element. So everything here *accumulates* into `p` — assigning would
-        // keep only the last element's accounts, which is what this reader
-        // silently did for two releases.
+        // element. So everything here *accumulates* into `p`: assigning would
+        // keep only the last element's accounts, and a round trip against a
+        // writer with the mirror-image defect would never notice.
         let mut transfers: Vec<CreditTransfer> = Vec::new();
         for c in kids(n) {
             match name(c) {
@@ -682,11 +681,27 @@ impl Reader {
     }
 
     /// `ram:ChargeIndicator/udt:Indicator` — `true` is a charge.
-    fn is_charge(n: Node<'_, '_>) -> bool {
-        kid(n, "ChargeIndicator")
+    ///
+    /// `udt:IndicatorType` is `xs:boolean`, so all four lexical forms occur and
+    /// all four are accepted. Anything else is recorded rather than folded into
+    /// *allowance*: this one element decides whether an amount is **added to or
+    /// subtracted from** the invoice, and an unreadable one silently reversing
+    /// the sign of the money is the worst way for a reader to be wrong.
+    fn is_charge(&mut self, n: Node<'_, '_>, at: &str) -> bool {
+        let raw = kid(n, "ChargeIndicator")
             .and_then(|i| kid(i, "Indicator"))
-            .map(own_text)
-            .is_some_and(|t| t == "true" || t == "1")
+            .map(own_text);
+        match raw.as_deref().map(str::trim) {
+            Some("true" | "1") => true,
+            Some("false" | "0") => false,
+            other => {
+                self.malformed.push(format!(
+                    "{at}/ChargeIndicator/Indicator={}: not an xs:boolean",
+                    other.unwrap_or("<absent>")
+                ));
+                false
+            }
+        }
     }
 
     fn line_vat(n: Node<'_, '_>) -> LineVat {
@@ -783,7 +798,10 @@ impl Reader {
                 "ApplicableTradeTax" => l.vat = Self::line_vat(c),
                 "BillingSpecifiedPeriod" => l.period = Some(self.period(c)),
                 "SpecifiedTradeAllowanceCharge" => {
-                    let is_charge = Self::is_charge(c);
+                    let is_charge = self.is_charge(
+                        c,
+                        "IncludedSupplyChainTradeLineItem/SpecifiedTradeAllowanceCharge",
+                    );
                     let a = LineAllowanceCharge {
                         amount: self.amount(c, "ActualAmount").unwrap_or_default(),
                         base_amount: self.amount(c, "BasisAmount"),

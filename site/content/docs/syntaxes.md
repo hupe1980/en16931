@@ -80,6 +80,34 @@ Input size and time are deliberately *not* bounded here. A caller reading from a
 socket owns that decision, and a library that quietly capped it would be wrong
 for the batch job and useless for the endpoint.
 
+### The schema is wider than the model, and the reader reads the schema
+
+An inbound document is valid against **UBL's XSD**, not against this crate's
+idea of a value. `cbc:IssueDate` is `xs:date`, whose lexical space ends with an
+optional time zone:
+
+```xml
+<cbc:IssueDate>2026-07-31+02:00</cbc:IssueDate>
+```
+
+Schema-valid, objected to by no Schematron rule, and written by default by
+Java's `XMLGregorianCalendar` — which a great many UBL producers are built on.
+`Date` holds a calendar day and nothing else, because EN 16931-1 §6.5.9 has no
+term for a time zone, so the zone is **dropped, not applied**:
+`2026-07-31+02:00` *is* the day 2026-07-31. Refusing it instead cost the whole
+business term — BT-2 came back absent and `BR-03` fired on an invoice that
+states its issue date perfectly well.
+
+`cbc:ChargeIndicator` is the other one, and its failure is worse than a lost
+field. It is `xs:boolean`, whose lexical space is `{true, false, 1, 0}` — and
+it is the element that decides whether an amount is **added to or subtracted
+from** the invoice. A reader that knows only the two words turns a schema-valid
+`<cbc:ChargeIndicator>1</cbc:ChargeIndicator>` into an allowance: the same
+money, on the other side of the total. Both readers take all four forms now,
+and an indicator that is not a boolean at all is reported in `malformed` rather
+than folded into "allowance" — there is no safe default, so the answer is to
+say the document could not be read.
+
 ## Writing
 
 ```rust
@@ -204,24 +232,24 @@ An element-by-element transform has to know 164 × 2 bindings and cannot say wha
 it lost. Going through the model means the same reader and writer everything else
 uses, and the same `dropped` report.
 
-## What crossing the syntaxes proved
+## What crossing the syntaxes proves
 
 A same-syntax round trip cannot see a binding that is *consistently* wrong — a
 writer and its own reader agreeing on a mistake round-trip perfectly. Crossing
-breaks the agreement, and it found four bugs no other test could:
+breaks the agreement, and it is the only property here that can catch:
 
 | | |
 |---|---|
-| **BT-90 was never written to UBL** | UBL carries the creditor identifier on the **seller** as `schemeID="SEPA"`, the one place `BR-CL-10` admits a non-ISO-6523 scheme. The reader hopped it into BG-19; the writer never hopped it back, so every direct-debit invoice written as UBL lost it and failed `BR-DE-30` at the counterparty. |
-| **BT-20 was trimmed by the CII reader** | `BR-DE-18` needs the Skonto block to end with a newline, and XRechnung is carried in CII too — 36 documents. |
-| **CII detected credit notes from `381` alone** | `396`, `532` and `83` read back as *invoices*, and `BR-CL-01` then reported a violation that is not one. Every published CII credit note uses `381`, so no corpus could have shown it. |
-| **BT-111 vanished when BT-6 = BT-5** | One element is then both totals — which the UBL reader knew and the CII reader did not. |
+| **a term written to one syntax and not the other** | UBL carries BT-90 on the **seller** as `schemeID="SEPA"`, the one place `BR-CL-10` admits a non-ISO-6523 scheme, and CII does not. A reader that hops it into BG-19 and a writer that never hops it back lose it on every direct-debit invoice, and the counterparty reports `BR-DE-30`. |
+| **a value one binding normalises and the other does not** | `BR-DE-18` needs BT-20's Skonto block to end with a newline, and XRechnung is carried in CII as well as UBL — a reader that trims the field breaks 36 documents. |
+| **a signal read from too narrow a set** | detecting a CII credit note from `381` alone reads `396`, `532` and `83` back as *invoices*, and `BR-CL-01` then reports a violation that is not one. Every published CII credit note uses `381`, so no corpus shows it. |
+| **an element that is two terms at once** | BT-111 and BT-110 are one element when BT-6 = BT-5 — which one reader can know and the other not. |
 
-Plus one the two readers simply disagreed about: an **empty element**.
+And the two readers must agree about the **empty element**.
 `<cbc:BuyerReference/>` is an absent term, not a term whose value is the empty
-string. Both readers said `None` through their `text()` helper and `Some("")`
-through the dozen call sites that read an element's own text — inconsistent with
-themselves, and with each other on nine documents.
+string, and a reader that answers `None` through its `text()` helper and
+`Some("")` at the call sites that read an element's own text is inconsistent
+with itself before it is inconsistent with the other syntax.
 
 ## What is next
 
