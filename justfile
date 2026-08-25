@@ -255,11 +255,15 @@ site:
 site-serve:
     zola --root site serve
 
-# Fail on a broken internal link. `--skip-external-links` is what CI runs: the
-# full check resolves every external URL, which turns someone else's outage into
-# a red build here.
-[doc("Fail on a broken internal link.")]
+# What the Site workflow runs: a full build, then internal links.
+#
+# The **build** is the half that catches a fenced code block naming a language
+# Zola has no grammar for — `zola check` renders no markdown and passes on one.
+# `--skip-external-links` is what CI runs too: resolving every external URL
+# turns someone else's outage into a red build here.
+[doc("Build the site and fail on a broken internal link.")]
 site-check: tracked
+    zola --root site build
     zola --root site check --skip-external-links
 
 # Re-render the Open Graph card from its SVG source.
@@ -324,5 +328,5 @@ publish-dry:
     cargo publish --workspace --dry-run
 
 # ── Everything CI runs, locally ───────────────────────────────────────────────
-ci: fmt-check lint features doc test-artefacts test-no-features codegen-check wasm deps tracked
+ci: fmt-check lint features doc test-artefacts test-no-features codegen-check wasm deps tracked site-check
     @echo "✓ all green"

@@ -1,6 +1,13 @@
-{%- set page_title = page.title | default(value = section.title | default(value = config.title)) -%}
-{%- set page_desc = page.description | default(value = section.description | default(value = config.description)) -%}
-{%- set current = page.permalink | default(value = section.permalink | default(value = config.base_url)) -%}
+{#- `404.html` has neither `page` nor `section`, so the filter has to apply to
+    the object rather than to a field of it: `page.title | default(…)` reads a
+    field of something undefined before `default` can catch it. -#}
+{%- set ctx = page | default(value = section | default(value = config)) -%}
+{#- Truthy only on a content page: `section` renders the index and `404.html`
+    has neither, and neither is an article. -#}
+{%- set is_page = page | default(value = false) -%}
+{%- set page_title = ctx.title | default(value = config.title) -%}
+{%- set page_desc = ctx.description | default(value = config.description) -%}
+{%- set current = ctx.permalink | default(value = config.base_url) -%}
 <!DOCTYPE html>
 <html lang="{{ config.default_language }}" prefix="og: https://ogp.me/ns#">
 <head>
@@ -15,7 +22,7 @@
 {# A 404 has no canonical URL worth declaring and must not be indexed. #}
 {% block head_indexing %}<link rel="canonical" href="{{ current | safe }}">{% endblock head_indexing %}
 
-<meta property="og:type" content="{% if page.title %}article{% else %}website{% endif %}">
+<meta property="og:type" content="{% if is_page %}article{% else %}website{% endif %}">
 <meta property="og:site_name" content="{{ config.title }}">
 <meta property="og:title" content="{{ page_title }}">
 <meta property="og:description" content="{{ page_desc }}">
@@ -65,10 +72,10 @@
       "url": "{{ get_url(path='@/docs/cli.md') | safe }}",
       "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" }
     }
-    {%- if page.title %},
+    {%- if is_page %},
     {
       "@type": "TechArticle",
-      "headline": {{ page.title | json_encode | safe }},
+      "headline": {{ page_title | json_encode | safe }},
       "description": {{ page_desc | json_encode | safe }},
       "url": "{{ current | safe }}",
       "isPartOf": { "@type": "WebSite", "name": "{{ config.title }}", "url": "{{ config.base_url | safe }}" }

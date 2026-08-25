@@ -135,7 +135,7 @@ slack at all**.
 
 The artefacts do not say "round to two decimals". They say it in XPath:
 
-```xpath
+```text
 round(abs(TaxableAmount) * (Percent div 100) * 10 * 10) div 100
 ```
 
