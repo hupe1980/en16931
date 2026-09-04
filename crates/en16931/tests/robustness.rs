@@ -55,7 +55,48 @@ fn any_code() -> impl Strategy<Value = Code> {
         Just(Code::new("O")),
         Just(Code::new("EUR")),
         "[A-Za-z0-9 ]{0,8}".prop_map(Code::new),
+        // A code arriving from a document is whatever the document said.
+        any_text().prop_map(|t| Code::new(&t)),
     ]
+}
+
+/// Text as a **European** invoice actually carries it, plus what an attacker
+/// sends.
+///
+/// # Why ASCII-only generators made this suite weaker than it read
+///
+/// Every string in this file used to be `[A-Za-z0-9 ]`, so "validate never
+/// panics" was really "validate never panics on ASCII" — on a crate whose
+/// business is invoices between German, French and Spanish companies, where
+/// `Müller`, `Straße` and `Ø` are the *ordinary* case rather than the hostile
+/// one.
+///
+/// The gap was not hypothetical. Rule-id matching sliced a `&str` at a byte
+/// index and aborted the process on `BR-Ié` — reachable from
+/// `en16931 explain` and from `--without` — and no property here could see it,
+/// because nothing in the suite ever produced a character wider than a byte.
+///
+/// So: multi-byte characters at every width, combining marks that make
+/// character and byte counts disagree, a right-to-left mark, an astral-plane
+/// character, control characters, and the empty string.
+fn any_text() -> impl Strategy<Value = String> {
+    prop_oneof![
+        Just(String::new()),
+        Just("Müller".to_owned()),
+        Just("Straße".to_owned()),
+        Just("BR-Ié".to_owned()),
+        // Combining acute: two chars, three bytes, one grapheme.
+        Just("e\u{301}".to_owned()),
+        Just("\u{200F}".to_owned()),  // right-to-left mark
+        Just("\u{1F9FE}".to_owned()), // astral plane — four bytes
+        Just("\u{0}".to_owned()),
+        Just("\u{7}".to_owned()),
+        // The general case, unrestricted: proptest shrinks toward the simple.
+        ".{0,24}",
+        // Long enough to exercise anything that indexes rather than iterates.
+        "\\PC{200,240}",
+    ]
+    .prop_map(|s: String| s)
 }
 
 fn any_percentage() -> impl Strategy<Value = Percentage> {
@@ -84,10 +125,11 @@ fn any_line() -> impl Strategy<Value = InvoiceLine> {
         any_code(),
         any_percentage(),
         any::<bool>(),
+        any_text(),
     )
-        .prop_map(|(net, qty, unit, cat, rate, has_rate)| InvoiceLine {
-            id: String::new(),
-            note: None,
+        .prop_map(|(net, qty, unit, cat, rate, has_rate, text)| InvoiceLine {
+            id: text.clone(),
+            note: Some(text.clone()),
             order_line_reference: None,
             accounting_reference: None,
             object_identifier: None,
@@ -108,7 +150,11 @@ fn any_line() -> impl Strategy<Value = InvoiceLine> {
                 category: cat,
                 rate: has_rate.then_some(rate),
             },
-            item: Item::default(),
+            item: Item {
+                name: Some(text.clone()),
+                description: Some(text),
+                ..Item::default()
+            },
         })
 }
 
@@ -181,6 +227,42 @@ proptest! {
             let _ = report.is_valid();
             let _ = report.to_string();
         }
+    }
+
+    /// **A rule name is user input, and no user input may abort the process.**
+    ///
+    /// This is the surface the invoice generators above cannot reach, and the
+    /// one that actually broke. Every entry point below takes a string a person
+    /// typed — `en16931 explain 'BR-Ié'`, `--without` with a stray accent, a
+    /// `--profile` name pasted from a spreadsheet — and rule-id matching used
+    /// to slice it at a byte index. The result was a **stack-unwinding panic in
+    /// a library that promises not to have one**, on an input whose correct
+    /// answer is "no rule by that name".
+    ///
+    /// Asserting the answer would be asserting a lookup; what matters here is
+    /// only that each returns rather than aborting.
+    #[test]
+    fn a_rule_query_is_user_input_and_never_panics(q in any_text()) {
+        use en16931::validation::rules::{explain, explain_restriction, touching};
+        use en16931::validation::Check;
+
+        let _ = explain(&q);
+        let _ = explain_restriction(&q);
+        let _ = en16931::profiles::lookup(&q);
+
+        // The matcher itself, from both sides: a query compared against a rule
+        // id, and a rule id compared against a query.
+        let report = validate(&Invoice::default());
+        let _ = report.has(&q);
+
+        // Suppression resolves the name against the whole registry, and then
+        // the report prints it back out.
+        let deviated = Check::of::<profiles::XRechnung>().without(&q).run(&Invoice::default());
+        let _ = deviated.to_string();
+        let _ = deviated.suppressed().len();
+
+        // …and the numeric surface beside it, for symmetry.
+        let _ = touching(en16931::BtId(0));
     }
 
     /// Validation is **deterministic and stably ordered**.

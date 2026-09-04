@@ -115,10 +115,21 @@ fn split_trailing_number(id: &str) -> (&str, Option<u32>) {
 ///
 /// The standard's IGIC and IPSI families are `BR-IG-*` and `BR-IP-*`; the
 /// artefacts call the same rules `BR-AF-*` and `BR-AG-*`.
+///
+/// # Why the prefix is matched on bytes
+///
+/// One side of every comparison is a **query** — whatever a user typed at
+/// `explain` or `--without` — and slicing a `&str` at a byte index that falls
+/// inside a character panics. Comparing bytes cannot, and it proves the slice
+/// that follows is sound: every byte of `from` is ASCII, so matching all of
+/// them means `from.len()` begins a character.
 fn alias_family(head: &str) -> (&'static str, &str) {
     const ALIASES: [(&str, &str); 2] = [("BR-IG", "BR-AF"), ("BR-IP", "BR-AG")];
+    let bytes = head.as_bytes();
     for (from, to) in ALIASES {
-        if head.len() >= from.len() && head[..from.len()].eq_ignore_ascii_case(from) {
+        if let Some(rest) = bytes.get(..from.len())
+            && rest.eq_ignore_ascii_case(from.as_bytes())
+        {
             return (to, &head[from.len()..]);
         }
     }
@@ -253,8 +264,21 @@ pub struct Finding {
 }
 
 impl fmt::Display for Finding {
+    /// `fatal        [BR-CO-14] BT-110 — …`
+    ///
+    /// # Why the severity leads
+    ///
+    /// Which severity a rule carries is the *profile's* decision, not this
+    /// crate's, and three findings printed identically — one fatal, two the
+    /// authority publishes as advisory — send somebody to fix two fields that
+    /// were never wrong. Padded, so the ids line up in a column: a report is
+    /// read down.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}] {} — {}", self.rule, self.path, self.message)?;
+        write!(
+            f,
+            "{:<12} [{}] {} — {}",
+            self.severity, self.rule, self.path, self.message
+        )?;
         if let Some(d) = &self.detail {
             write!(f, " (expected {}, found {})", d.expected, d.actual)?;
         }
@@ -447,12 +471,39 @@ impl ValidationReport {
     pub(crate) fn absorb(&mut self, extra: Vec<Finding>, checked: usize) {
         self.findings.extend(extra);
         self.checked += checked;
-        self.findings.sort_by(|a, b| {
-            a.severity
-                .cmp(&b.severity)
-                .then_with(|| a.path.cmp(&b.path))
-                .then_with(|| a.rule.cmp(&b.rule))
-        });
+        // `sort_findings`, not a second copy of its comparator: the stable
+        // order is a documented property that a CI diff is compared against,
+        // and two transcriptions of one ordering is the shape of a difference
+        // nobody notices until a diff moves for no reason.
+        sort_findings(&mut self.findings);
+    }
+
+    /// ` (1 fatal, 2 information)` — or nothing at all when there is one
+    /// severity or none.
+    ///
+    /// The count alone does not answer the question a reader has, which is
+    /// *how much of this do I have to fix*. Severities with no findings are
+    /// left out rather than printed as zeroes: a line reading
+    /// `0 warning, 0 information` is noise on the overwhelmingly common report.
+    fn breakdown(&self) -> String {
+        let count = |s: Severity| self.findings.iter().filter(|f| f.severity == s).count();
+        let counts = [
+            (count(Severity::Fatal), "fatal"),
+            (count(Severity::Warning), "warning"),
+            (count(Severity::Info), "information"),
+        ];
+        let present: Vec<String> = counts
+            .iter()
+            .filter(|(n, _)| *n > 0)
+            .map(|(n, label)| format!("{n} {label}"))
+            .collect();
+        // One severity is already stated by the finding count above it, so
+        // repeating it as "(3 fatal)" beside "3 finding(s)" says nothing.
+        if present.len() < 2 {
+            String::new()
+        } else {
+            format!(" ({})", present.join(", "))
+        }
     }
 
     /// The ergonomic path: `report.into_result()?`.
@@ -472,11 +523,12 @@ impl fmt::Display for ValidationReport {
         // exactly the thing not to leave to the reader.
         writeln!(
             f,
-            "{} validation ({}) — {} rule(s) checked, {} finding(s){}",
+            "{} validation ({}) — {} rule(s) checked, {} finding(s){}{}",
             self.profile.as_deref().unwrap_or("EN 16931"),
             self.edition,
             self.checked,
             self.findings.len(),
+            self.breakdown(),
             if self.is_valid() {
                 ", valid"
             } else {

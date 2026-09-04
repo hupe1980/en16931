@@ -119,7 +119,7 @@ enum Command {
 
     /// Extract the XML payload from a ZUGFeRD / Factur-X PDF.
     ///
-    /// The bytes come out **verbatim**: whoever diagnoses a rejected invoice
+    /// The bytes come out verbatim: whoever diagnoses a rejected invoice
     /// needs what the counterparty sent, not a reconstruction of it.
     Extract {
         /// The hybrid PDF. `-` reads standard input.
@@ -134,7 +134,7 @@ enum Command {
     /// Compare two documents as invoices, not as XML.
     ///
     /// Both are read into the semantic model first, so a UBL invoice and its
-    /// CII translation compare **equal** where an XML diff would show two
+    /// CII translation compare equal where an XML diff would show two
     /// unrelated files. That is the question worth asking of a conversion, a
     /// migration, or a counterparty who says they received something else.
     Diff {
@@ -176,6 +176,25 @@ enum Command {
     /// List the profiles this build can validate against.
     Profiles,
 
+    /// May these VAT categories share one invoice? Answered before you build it
+    ///
+    /// Two of the ten categories are exclusive, and they are the only rules in
+    /// EN 16931 that a set of category codes decides on its own — so this needs
+    /// no document, no amounts and no parties, which is when the question is
+    /// actually asked.
+    ///
+    ///     en16931 categories S Z      # ordinary: standard beside zero-rated
+    ///     en16931 categories S O      # refused — BR-O-11…14
+    ///
+    /// Exit 0 if they can share a document, 1 if they cannot, 2 if a code is
+    /// not a VAT category — the same three answers as validate.
+    #[command(verbatim_doc_comment)]
+    Categories {
+        /// UNCL 5305 codes: `S`, `Z`, `E`, `AE`, `K`, `G`, `O`, `L`, `M`, `B`.
+        #[arg(required = true, value_name = "CODE")]
+        codes: Vec<String>,
+    },
+
     /// Print the whole rule catalogue — every id, severity, provenance and text.
     ///
     /// The thing to diff across releases, feed to a documentation build, or grep
@@ -196,10 +215,13 @@ enum Command {
 
     /// Print a shell completion script, or the man page.
     ///
-    /// ```sh
-    /// en16931 generate bash > /usr/share/bash-completion/completions/en16931
-    /// en16931 generate man  > /usr/share/man/man1/en16931.1
-    /// ```
+    ///     en16931 generate bash > /usr/share/bash-completion/completions/en16931
+    ///     en16931 generate man  > /usr/share/man/man1/en16931.1
+    //
+    // `verbatim_doc_comment`, because clap reflows long help to the terminal
+    // width and a reflowed shell command is not one. Everything above is
+    // already wrapped for a narrow terminal, so nothing else loses by it.
+    #[command(verbatim_doc_comment)]
     Generate {
         /// What to write to standard output.
         #[arg(value_name = "WHAT")]
@@ -295,6 +317,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             write_out(None, out.as_bytes())?;
             Ok(ExitCode::SUCCESS)
         }
+        Command::Categories { codes } => categories(&codes),
         Command::Rules {
             profile,
             term,
@@ -605,6 +628,42 @@ fn explain(query: &str) -> Result<ExitCode, String> {
          standard's `BR-IG-*` / `BR-IP-*` reach the artefacts' `BR-AF-*` / \
          `BR-AG-*`."
     ))
+}
+
+/// `en16931 categories S O` — may these share one invoice?
+///
+/// # Why this is a command and not a flag on `validate`
+///
+/// It takes **no document**. The whole value is answering before one exists:
+/// a caller choosing what to put on an invoice, or a service deciding whether
+/// a set of charges can be billed together at all. Wiring it into `validate`
+/// would require the document the question exists to avoid building.
+fn categories(codes: &[String]) -> Result<ExitCode, String> {
+    let mut cats = Vec::with_capacity(codes.len());
+    for code in codes {
+        let cat = en16931::VatCategory::from_code(code).ok_or_else(|| {
+            // Built rather than continued with `\`. A `\`-continued literal
+            // keeps its own indentation and `rustfmt` bakes it in — which is
+            // how a run of 32 spaces once shipped inside this workspace's
+            // attribution notice, and how it got into this message on the first
+            // attempt at writing it.
+            let known: Vec<&str> = en16931::VatCategory::ALL.iter().map(|c| c.code()).collect();
+            let mut msg = format!("{code:?} is not a VAT category code. ");
+            msg.push_str("EN 16931 has ten, and BR-CL-17 compares them literally, so they are ");
+            msg.push_str("case-sensitive: ");
+            msg.push_str(&known.join(", "));
+            msg
+        })?;
+        cats.push(cat);
+    }
+
+    let mut out = String::new();
+    output::categories(&mut out, &cats);
+    write_out(None, out.as_bytes())?;
+    Ok(match en16931::VatCategory::can_share_document(&cats) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(_) => ExitCode::from(INVALID),
+    })
 }
 
 // ── shared ───────────────────────────────────────────────────────────────────

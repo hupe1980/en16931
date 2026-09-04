@@ -296,12 +296,25 @@ pub use validation::{Check, Finding, ProveError, Severity, ValidationReport, val
 /// reformatting would forfeit the licence the whole crate depends on, and
 /// nothing else would notice.
 ///
-/// **Written on one line on purpose.** A `\`-continued literal reads better in
-/// source and `rustfmt` collapses it, keeping the indentation — which put a run
-/// of 32 spaces inside the notice this crate emits. Every report carried it that
-/// way, and the test did not catch it because it normalised whitespace on *both*
-/// sides. The constant is canonical now, and
-/// `the_notice_is_canonical_not_merely_present` asserts it.
+/// **Written on one line on purpose**, and the reason is narrower than it once
+/// said here.
+///
+/// A multi-line literal **without** the `\` continuation puts its own source
+/// indentation into the value: that is what put a run of 32 spaces inside the
+/// notice this crate emits, and every report carried it that way. The test did
+/// not catch it because it normalised whitespace on *both* sides — and
+/// `"a;\n     b"` and `"a; b"` are equal once normalised, which is exactly the
+/// comparison that cannot see this bug.
+///
+/// `rustfmt` is **not** the culprit, though this comment used to say so. It
+/// preserves a `\`-continued literal untouched, and Rust strips the newline and
+/// the following indentation from one, so the continued form is correct. One
+/// line is kept anyway: this is a licence condition, the constant is compared
+/// byte-for-byte against `README.md` and the report header, and a form with no
+/// whitespace decision in it is the form with nothing to get wrong.
+///
+/// `the_notice_is_canonical_not_merely_present` asserts the canonical value,
+/// not merely its presence.
 pub const ATTRIBUTION: &str = "implementation of the EN 16931-1 semantic data model; © CEN, used under the 2018 CEN–EC licence agreement";
 
 /// The CEN validation-artefacts release this crate's rule metadata and code

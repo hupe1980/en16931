@@ -72,8 +72,8 @@ represent it:
 
 ```text
 EN 16931 validation — 227 rule(s) checked, 1 finding(s), valid
-  [EN-EXT-01] BT-113 — This invoice carries extension data that the target
-  profile cannot represent. […] In Germany that is a §14c Abs. 1 UStG liability.
+  warning      [EN-EXT-01] BT-113 — This invoice carries extension data that the
+  target profile cannot represent. […] In Germany that is a §14c Abs. 1 UStG liability.
 ```
 
 Not fatal: the invoice *is* lawful. But not silent either.

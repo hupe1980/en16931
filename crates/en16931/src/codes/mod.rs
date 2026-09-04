@@ -114,6 +114,46 @@ pub enum VatCategory {
     SplitPayment,
 }
 
+/// Why a set of VAT categories cannot appear in one document.
+///
+/// Returned by [`VatCategory::can_share_document`]. It carries the rules that
+/// *would* report the conflict, so a caller can cite them to whoever asked for
+/// the invoice — which is the difference between "we cannot bill this" and "we
+/// cannot bill this, and here is the clause".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CategoryConflict {
+    /// The exclusive category — `O` or `B`.
+    pub category: VatCategory,
+    /// One category it cannot share a document with. There may be others; this
+    /// is the first found, and naming one is enough to explain the refusal.
+    pub conflicts_with: VatCategory,
+    /// The rules that **govern** this exclusivity, in the artefacts' spelling.
+    ///
+    /// Not "the rules that will fire": `BR-O-11` covers a second breakdown
+    /// group, `BR-O-12` a line, `BR-O-13` an allowance and `BR-O-14` a charge,
+    /// and which of them reports depends on *where* the other category appears
+    /// — which a set of category codes cannot say. The family is the clause a
+    /// caller cites; at least one of its members will report the document.
+    pub rules: &'static [&'static str],
+    /// What to do instead.
+    pub hint: &'static str,
+}
+
+impl fmt::Display for CategoryConflict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "VAT categories {} and {} cannot share one document ({}) — {}",
+            self.category.code(),
+            self.conflicts_with.code(),
+            self.rules.join(", "),
+            self.hint
+        )
+    }
+}
+
+impl core::error::Error for CategoryConflict {}
+
 impl VatCategory {
     /// All ten codes, in the order `BR-CL-17` lists them.
     pub const ALL: [Self; 10] = [
@@ -167,6 +207,86 @@ impl VatCategory {
             "B" => Self::SplitPayment,
             _ => return None,
         })
+    }
+
+    /// **Can these categories share one document?** — answerable before the
+    /// document exists.
+    ///
+    /// # Why this is not simply `validate`
+    ///
+    /// Two of the ten categories are *exclusive*, and they are the only rules
+    /// in EN 16931 that a set of category codes decides on its own — no
+    /// amounts, no lines, no parties. Everything else needs a document.
+    ///
+    /// That makes this the same kind of question as
+    /// [`Profile::missing_terms`](crate::Profile::missing_terms): the answer is
+    /// **exact**, and it is available at the moment a caller is choosing what to
+    /// put on an invoice rather than after assembling one it then has to throw
+    /// away.
+    ///
+    /// The case that forced it is German municipal billing. A *hoheitliche
+    /// Abwassergebühr* is not subject to VAT (`O`), drinking water is taxable
+    /// (`S`), and `BR-O-11` … `BR-O-14` forbid `O` from sharing a document with
+    /// anything else — so the combined invoice that over 90 % of municipalities
+    /// issue **has no valid EN 16931 rendering at all**. That is the standard's
+    /// decision and no implementation can fix it. What an implementation owes is
+    /// a refusal that names the reason *before* the work, instead of a wall of
+    /// findings after it.
+    ///
+    /// ```
+    /// use en16931::VatCategory;
+    /// use en16931::VatCategory::{OutOfScope, SplitPayment, Standard, ZeroRated};
+    ///
+    /// // Ordinary: a zero-rated line beside a standard-rated one.
+    /// assert!(VatCategory::can_share_document(&[Standard, ZeroRated]).is_ok());
+    ///
+    /// // The municipal invoice, refused with its reason and its rules.
+    /// let err = VatCategory::can_share_document(&[Standard, OutOfScope]).unwrap_err();
+    /// assert_eq!(err.rules, ["BR-O-11", "BR-O-12", "BR-O-13", "BR-O-14"]);
+    /// assert!(err.to_string().contains("cannot share"));
+    ///
+    /// // Italy's split payment excludes the standard rate, and nothing else.
+    /// assert!(VatCategory::can_share_document(&[SplitPayment, ZeroRated]).is_ok());
+    /// assert!(VatCategory::can_share_document(&[SplitPayment, Standard]).is_err());
+    /// ```
+    ///
+    /// An empty set, or one category on its own, is always fine.
+    ///
+    /// # Errors
+    /// [`CategoryConflict`], naming both categories and the rules that would
+    /// report them.
+    pub fn can_share_document(categories: &[Self]) -> Result<(), CategoryConflict> {
+        let has = |c: Self| categories.contains(&c);
+
+        // The exclusive categories first: one of them excludes *everything*, so
+        // it is the broader answer and the more useful one to report when both
+        // conflicts are present. Which categories those are is
+        // [`Self::is_exclusive`]'s to know, not this function's — the two
+        // disagreeing about `O` is exactly the drift worth designing out.
+        if let Some(exclusive) = categories.iter().copied().find(|c| c.is_exclusive())
+            && let Some(other) = categories.iter().copied().find(|c| *c != exclusive)
+        {
+            debug_assert_eq!(exclusive, Self::OutOfScope, "the rule list below is O's");
+            return Err(CategoryConflict {
+                category: exclusive,
+                conflicts_with: other,
+                rules: &["BR-O-11", "BR-O-12", "BR-O-13", "BR-O-14"],
+                hint: "\"Not subject to VAT\" is exclusive: an invoice carrying it may carry \
+                       nothing else. Bill the out-of-scope items as their own document",
+            });
+        }
+
+        if has(Self::SplitPayment) && has(Self::Standard) {
+            return Err(CategoryConflict {
+                category: Self::SplitPayment,
+                conflicts_with: Self::Standard,
+                rules: &["BR-B-02"],
+                hint: "split payment and the standard rate cannot appear on one document; \
+                       BR-B-01 also requires a split-payment invoice to be domestic Italian",
+            });
+        }
+
+        Ok(())
     }
 
     /// Whether this category actually levies tax.
@@ -228,6 +348,27 @@ impl VatCategory {
     #[must_use]
     pub const fn states_rate(self) -> bool {
         !matches!(self, Self::OutOfScope)
+    }
+
+    /// The category's name, as EN 16931 and UNCL 5305 write it.
+    ///
+    /// Short enough for a table and unambiguous enough to catch the mistake the
+    /// code alone hides: `O` is *not* "other", and a caller who read it that way
+    /// has produced an invoice that can carry nothing else (BR-O-11 … BR-O-14).
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Standard => "standard rate",
+            Self::ZeroRated => "zero rated goods",
+            Self::Exempt => "exempt from VAT",
+            Self::ReverseCharge => "VAT reverse charge",
+            Self::IntraCommunity => "VAT-exempt intra-Community supply",
+            Self::Export => "free export item, VAT not charged",
+            Self::OutOfScope => "services outside the scope of VAT",
+            Self::CanaryIslands => "Canary Islands general indirect tax (IGIC)",
+            Self::CeutaMelilla => "tax for Ceuta and Melilla (IPSI)",
+            Self::SplitPayment => "split payment",
+        }
     }
 
     /// Whether this category may appear alongside any other in one document.

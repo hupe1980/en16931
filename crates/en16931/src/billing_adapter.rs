@@ -80,6 +80,19 @@
 //! `reverse` from the document it reverses, which is why a credit note arrives
 //! here already saying what it credits.
 //!
+//! # The cap, and the sign convention it lands on
+//!
+//! `billing`'s `maximum_charge` settles a *Preisobergrenze* as a **credit
+//! invoice line**, and a credit line is where EN 16931's sign conventions bite
+//! from both directions: `BR-27` forbids a negative BT-146, and
+//! `PEPPOL-EN16931-R120` requires `BT-131 = BT-129 × BT-146 ÷ BT-149`. The
+//! negative can go neither on the price nor nowhere — `1 × 140` does not
+//! reproduce `−140` — so it goes on the **quantity**: BT-129 = −1,
+//! BT-146 = +140, BT-131 = −140, and both rules hold.
+//!
+//! `tests/billing_roundtrip.rs` pins it, because either crate could change its
+//! sign convention without the other's fixtures noticing.
+//!
 //! # What the adapter still owes
 //!
 //! Three obligations `billing` deliberately leaves here:

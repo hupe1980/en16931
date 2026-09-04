@@ -63,3 +63,13 @@ __pycache__/
 
 # Zola's build output for the documentation site (see `just site`).
 /site/public/
+
+# Internal architecture notes (see concepts/README.md).
+#
+# Anchored, for the reason the block above gives. These are working documents:
+# they cite the specifications by clause, quote the artefacts, and record what
+# each design decision cost — none of which is a claim this repository makes to
+# its users. `site/` is the public narrative and `CHANGELOG.md` the history;
+# `concepts/` is neither, and is not scanned by `just tracked` because it is not
+# a directory the build reads.
+/concepts/

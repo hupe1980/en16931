@@ -195,6 +195,37 @@ A test reads `scenarios.xml` for the first and both Schematrons for the second,
 comparing all 121 severities the three XRechnung profiles run — measured rather
 than transcribed.
 
+**And every finding leads with the one it got**, so the report says which of
+them you have to act on:
+
+```text
+XRechnung 3.0 Extension validation (…) — 296 rule(s) checked, 3 finding(s) (1 fatal, 2 information), INVALID
+  fatal        [BR-DEX-04] BG-7 — Any scheme identifier in cac:PartyIdentification MUST be …
+  information  [BR-DE-TMP-32] BT-72 — Eine Rechnung sollte zur Angabe des Liefer-/…
+  information  [BR-CL-10] BG-7 — Any identifier identification scheme identifier MUST be …
+```
+
+One field to fix, not three.
+
+### A third source: the CEN release each authority built against
+
+KoSIT's `v2026-01-31` configuration declares CEN Schematron `1.3.15`; this crate
+derives CEN's rules from `1.3.16`, which is CEN's current release and the one the
+conformance suite's test files come from. Between them CEN:
+
+| | |
+|---|---|
+| removed `BGN` and `ANG` from ISO 4217 | Bulgaria adopted the euro; `ANG` became `XCG` |
+| added `XCG` | the Caribbean guilder |
+| moved type codes `502` and `503` | from the invoice list to the credit-note list in `BR-CL-01` |
+| added ISO 6523 ICD `0245`–`0248` | new registered schemes |
+
+So a **Bulgarian-lev invoice is fatal here and valid for the German reference
+validator**. Following CEN's newest release is the defensible choice; holding
+the skew unnoticed is not, so `tests/artefact_pin.rs` reads the CEN version out
+of KoSIT's changelog, fails when it changes, and pins the affected currency
+codes. The declaration deletes itself when KoSIT catches up.
+
 **Getting either file wrong rejects invoices Germany accepts.** `BR-CL-21` and
 `BR-CL-23` are code-list rules whose CEN tables lag the registries they track
 (ISO 6523 ICD, UN/ECE Rec 20/21) and KoSIT reports both at *warning*,

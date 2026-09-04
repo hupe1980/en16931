@@ -834,6 +834,46 @@ fn a_report_says_what_it_checked_against() {
     assert!(core.to_string().starts_with("EN 16931 validation"));
 }
 
+/// **A report states each finding's severity, and summarises them.**
+///
+/// The crate compares 121 published severities against KoSIT's Schematrons on
+/// every run, and for a long time printed none of them: three findings, one
+/// fatal and two advisory, rendered as three identical-looking lines. A reader
+/// could not tell which one made the document invalid, so the measurement was
+/// invisible exactly where it was meant to be used.
+#[test]
+fn a_report_says_how_badly_each_finding_matters() {
+    // XRechnung relevels `BR-CL-23` to warning, so a document can be *valid*
+    // and still carry findings — the case that is unreadable without this.
+    let report = profiles::XRECHNUNG.validate(&Invoice::default());
+    let shown = report.to_string();
+
+    let fatal = report.fatal().count();
+    let advisory = report.advisory().count();
+    assert!(
+        fatal > 0 && advisory > 0,
+        "the fixture must exercise both: {shown}"
+    );
+
+    // Every finding line names its severity, in the spelling every Schematron
+    // tool in this field writes.
+    for finding in report.findings() {
+        let line = finding.to_string();
+        assert!(
+            line.starts_with(&finding.severity.to_string()),
+            "a finding must lead with its severity: {line}"
+        );
+    }
+
+    // …and the header answers "how much of this must I fix" before the reader
+    // has read a single finding.
+    let header = shown.lines().next().expect("a header");
+    assert!(
+        header.contains(&format!("{fatal} fatal")),
+        "the header breaks the count down by severity: {header}"
+    );
+}
+
 /// The core path and the `EN 16931` profile must agree about what they checked.
 ///
 /// They are separate code paths — one filters, one does not — and for a while

@@ -350,8 +350,11 @@ pub(crate) fn path_matches(path: &str, context: &str, relative: &str) -> bool {
     let floating = context.starts_with("//") || !context.starts_with('/');
     let ctx = context.trim_start_matches('/');
     if floating {
-        let needle = format!("{ctx}/{relative}");
-        return path == needle || path.ends_with(&format!("/{needle}"));
+        // `path == "{ctx}/{relative}"`, or `path` ends with `"/{ctx}/{relative}"`
+        // — compared in place. This ran once per prohibition per element and
+        // built two `String`s each time, which is how writing a document came
+        // to cost more than reading one (D44).
+        return ends_with_segment_pair(path, ctx, relative);
     }
     // Anchored: the whole path must be the context element followed by the
     // relative path, and only the first segment is matched loosely.
@@ -359,6 +362,78 @@ pub(crate) fn path_matches(path: &str, context: &str, relative: &str) -> bool {
         return false;
     };
     local(head) == local(ctx) && rest == relative
+}
+
+/// A prohibition table indexed by the last segment of its relative path.
+///
+/// # Why an index rather than a scan
+///
+/// `forbidden_path` runs **once per element emitted** and the UBL table has
+/// 1 548 entries, so a scan is most of what writing a document costs.
+///
+/// A prohibition can only match a path whose final element name is the final
+/// name of its relative path, so that is the key: 275 distinct tails across the
+/// UBL table, largest bucket 42 entries. Built on first use through `OnceLock`,
+/// which adds no dependency to a crate whose graph size is one of its claims.
+pub(crate) struct ProhibitionIndex {
+    by_tail: std::collections::HashMap<&'static str, Vec<usize>>,
+}
+
+impl ProhibitionIndex {
+    /// Index `table` by the last segment of each relative path.
+    pub(crate) fn build(table: &'static [(&'static str, &'static str, &'static str)]) -> Self {
+        let mut by_tail: std::collections::HashMap<&'static str, Vec<usize>> =
+            std::collections::HashMap::new();
+        for (i, (_, _, rel)) in table.iter().enumerate() {
+            by_tail.entry(tail_of(rel)).or_default().push(i);
+        }
+        Self { by_tail }
+    }
+
+    /// The first entry in **table order** that `path` violates.
+    ///
+    /// Table order, not bucket order, is what keeps the reported rule id stable:
+    /// two prohibitions can match one path, and which one a document names
+    /// should not depend on how a hash bucket happened to fill.
+    pub(crate) fn find(
+        &self,
+        table: &'static [(&'static str, &'static str, &'static str)],
+        path: &str,
+    ) -> Option<&'static str> {
+        let candidates = self.by_tail.get(tail_of(path))?;
+        candidates
+            .iter()
+            .map(|&i| &table[i])
+            .find(|(_, ctx, rel)| path_matches(path, ctx, rel))
+            .map(|(id, _, _)| *id)
+    }
+}
+
+/// The last `/`-separated segment.
+fn tail_of(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// Whether `path` ends with `a/b`, on a segment boundary — without building it.
+///
+/// Element names are ASCII, but the slicing below is done through `get` rather
+/// than by indexing, because "this is always ASCII" is exactly the assumption
+/// that panicked on a rule name (D36).
+fn ends_with_segment_pair(path: &str, a: &str, b: &str) -> bool {
+    let needle_len = a.len() + 1 + b.len();
+    let Some(start) = path.len().checked_sub(needle_len) else {
+        return false;
+    };
+    // Either the whole path, or preceded by a separator — never mid-segment.
+    if start > 0 && path.as_bytes().get(start - 1) != Some(&b'/') {
+        return false;
+    }
+    let Some(tail) = path.get(start..) else {
+        return false;
+    };
+    tail.get(..a.len()) == Some(a)
+        && tail.as_bytes().get(a.len()) == Some(&b'/')
+        && tail.get(a.len() + 1..) == Some(b)
 }
 
 /// The local name, as the order tables key them — `cac:Party` → `Party`.

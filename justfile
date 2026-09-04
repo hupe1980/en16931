@@ -107,6 +107,7 @@ examples:
 # Benchmarks (criterion).
 bench:
     cargo bench -p en16931 --all-features
+    cargo bench -p en16931-formats --all-features
 
 # ── Per-crate guarantees ──────────────────────────────────────────────────────
 #

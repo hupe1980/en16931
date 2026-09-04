@@ -14,7 +14,7 @@ Three crates, one workspace.
 |---|---|---|
 | [**`en16931`**](crates/en16931) | the semantic model, 317 business rules, the typed proof of validity | 2 dependencies · no XML · no I/O · `wasm32` |
 | [**`en16931-formats`**](crates/en16931-formats) | UBL 2.1 and UN/CEFACT CII in both directions, the XRechnung CIUS, ZUGFeRD / Factur-X | +1 339 syntax rules · re-implements none of the 317 |
-| [**`en16931-cli`**](crates/en16931-cli) | the same thing as a command: `validate`, `convert`, `diff`, `extract`, `inspect`, `explain` | one static binary · exit codes for CI |
+| [**`en16931-cli`**](crates/en16931-cli) | the same thing as a command: `validate`, `convert`, `diff`, `extract`, `inspect`, `explain`, `categories` | one static binary · exit codes for CI |
 
 ```text
    ┌──────────────┐   ┌─────────────┐
@@ -60,6 +60,7 @@ en16931 inspect  rechnung.pdf                # what *is* this file, and would an
 en16931 convert  rechnung.xml --to cii       # through the model, not element by element
 en16931 diff     ours.xml theirs.xml         # as invoices, not as XML — syntax is not a difference
 en16931 explain  BR-CO-14                    # what does this rule say, and who runs it?
+en16931 categories S O                       # may these VAT categories share one invoice? (no document needed)
 en16931 rules --format json                  # the whole catalogue, to diff across releases
 ```
 

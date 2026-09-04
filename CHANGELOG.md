@@ -24,6 +24,245 @@ reader upgrading nothing about whether it affected them.
 
 Nothing yet.
 
+## [0.7.0] — 2026-09-04
+
+An audit release: one reachable panic, one measurement that never reached the
+reader, one divergence from the German reference validator that nothing was
+watching, and a writer that was two orders of magnitude slower than it looked.
+
+**Breaking:** `Finding`'s and `ValidationReport`'s `Display` now carry severity.
+Anything matching on that text needs updating; nothing else changed shape.
+
+### Fixed
+
+- **`en16931 explain 'BR-Ié'` aborted the process.** Rule-id matching compares
+  canonically without allocating, and to test for the renamed `BR-IG-*` /
+  `BR-IP-*` families it sliced the prefix at a byte index. Only one side of that
+  comparison is a rule id — the other is **whatever a user typed**, at `explain`,
+  at `--without`, or through `ValidationReport::has` — and slicing a `&str` at a
+  byte index inside a character panics. So a rule name with an accent in it
+  killed the process where the answer is "no rule by that name", in a crate
+  whose stated invariant is that validation does not panic.
+
+  The prefix is matched on bytes now, which cannot panic and also proves the
+  slice after it is sound: every byte of the prefix is ASCII, so matching all of
+  them means the next index begins a character.
+
+  Two gaps let it through, and both are closed. Every string strategy in
+  `tests/robustness.rs` generated `[A-Za-z0-9 ]`, so "validate never panics"
+  meant "never panics on ASCII" — on a crate whose business is invoices between
+  German, French and Spanish companies; they now generate multi-byte characters
+  at every width, combining marks, a right-to-left mark, an astral-plane
+  character and control characters. And the **query surface had no property at
+  all**: `a_rule_query_is_user_input_and_never_panics` now drives `explain`,
+  `explain_restriction`, `lookup`, `has` and `Check::without` with arbitrary
+  strings, and it fails on the old code — finding it unaided, with an
+  astral-plane character rather than the accent that first showed it.
+
+- **A Bulgarian-lev XRechnung is rejected here and accepted by KoSIT.** Not
+  fixed — *found, decided and asserted*, which is the honest outcome. A profile's
+  authority is not always CEN: KoSIT's pinned `v2026-01-31` configuration
+  declares in its own changelog that it was built against **CEN 1.3.15**, while
+  this workspace derives CEN's rules from **1.3.16**. Between the two, CEN
+  removed `BGN` and `ANG` from ISO 4217 (Bulgaria adopted the euro; `ANG` became
+  `XCG`), added `XCG`, moved document type codes `502` and `503` from the
+  invoice list to the credit-note list in `BR-CL-01`, and added ISO 6523 ICD
+  `0245`–`0248`.
+
+  So the German profiles run code lists Germany's reference validator does not,
+  and the direction of the error is the bad one: a false positive on a document
+  that would have been accepted. Following CEN's newest release stays — it is
+  the defensible choice for a crate whose conformance suite runs CEN's own
+  1.3.16 test files, and downgrading would make the core profile stale to fix
+  four code values in a national one. What changed is that the skew can no
+  longer be held by accident: `tests/artefact_pin.rs` reads the CEN version out
+  of KoSIT's changelog and fails when it is not the release the crate has been
+  told about, a second test pins the three affected currency codes directly, and
+  the declaration **deletes itself** the day KoSIT catches up, because the test
+  asserts the two differ.
+
+### Added
+
+- **`VatCategory::can_share_document` and `en16931 categories` — the pre-flight
+  that needs no document.** Two of the ten VAT categories are exclusive, and
+  they are the only rules in EN 16931 that a set of category codes decides on
+  its own: no amounts, no lines, no parties. So the question is answerable while
+  a biller is still deciding what to put on the invoice, rather than after
+  assembling one they then throw away.
+
+  ```console
+  $ en16931 categories S O
+    S   standard rate
+    O   services outside the scope of VAT
+
+  REFUSED: VAT categories O and S cannot share one document (BR-O-11, BR-O-12,
+  BR-O-13, BR-O-14) — "Not subject to VAT" is exclusive: an invoice carrying it
+  may carry nothing else. Bill the out-of-scope items as their own document
+  ```
+
+  The case that forced it is German municipal billing. A *hoheitliche
+  Abwassergebühr* is `O`, drinking water is `S`, and `BR-O-11` … `BR-O-14`
+  forbid `O` from sharing a document with anything — so the combined invoice
+  **over 90 % of municipalities issue has no valid EN 16931 rendering**. That is
+  the standard's decision and no implementation can change it; what one owes is
+  a refusal naming the reason *before* the work, and a clause the biller can
+  quote back.
+
+  **It agrees with the validator**, which is the only property that makes a
+  pre-flight worth having: a sweep over **all 1 024 subsets** of the ten
+  categories asserts it refuses exactly when the exclusivity rules report. That
+  sweep earned its keep on its first run — the refusal originally claimed all
+  four `BR-O-*` rules would fire, and `BR-O-13` and `BR-O-14` govern *allowances*
+  and *charges*, which a set of category codes cannot know about. The family is
+  the clause; which member reports depends on where the other category appears.
+
+  `VatCategory::name()` comes with it, because `O` is not "other" and only the
+  name shows that. Exit codes match `validate`: `0` may share, `1` may not, `2`
+  not a category.
+
+### Performance
+
+- **Writing a document was two orders of magnitude slower than reading one, and
+  nothing said so.** `en16931-formats` had no benchmark — the model crate has
+  one because its README makes a speed claim, and this crate made none, which
+  turned out to be worse: an absent number cannot be wrong and cannot be relied
+  on either.
+
+  The first run: **3.96 ms** to write a five-line UBL invoice against **22 µs**
+  to read the same document, and **424 ms** for a thousand lines. Isolating it
+  by stubbing the check out rather than by reading the code, `forbidden_path`
+  was **97 %** of write time — a linear scan of all 1 548 UBL prohibitions,
+  calling a matcher that built two `String`s per entry, **once per element
+  emitted**. A thousand-line invoice emits around 20 000 elements.
+
+  This is the defect 0.6.0's rule-id comparison had, in the other crate: a small
+  helper on a hot path that nobody measured because there was nothing to measure
+  it with.
+
+  Fixed in two steps, measured after each. The matcher compares in place instead
+  of building the needle (1.7–3.4×, and not enough, which is what said the
+  problem was elsewhere); then the tables are **indexed** by the last segment of
+  each relative path — a prohibition can only match a path whose final element
+  name is its own, and the largest of 275 buckets holds 42 of the 1 548 entries.
+
+  | | Before | After | |
+  |---|---|---|---|
+  | `write/ubl/5` | 3.96 ms | **67 µs** | 59× |
+  | `write/cii/5` | 2.42 ms | **66 µs** | 37× |
+  | `write/ubl/1000` | 424 ms | **21 ms** | 20× |
+  | `write/cii/1000` | 409 ms | **10 ms** | 41× |
+  | `convert/ubl-to-cii` | 2.40 ms | **158 µs** | 15× |
+
+  Built once through `OnceLock`, so no dependency is added to a crate whose
+  graph size is one of its claims, and the generated tables are untouched.
+
+  **The prohibitions are what make "the writer cannot emit a forbidden element"
+  a property**, so the old scan is kept as a reference implementation and
+  `the_index_agrees_with_a_full_scan` compares the two over every path the
+  tables describe — including where two prohibitions match one path and the
+  reported id must not depend on how a hash bucket filled. Keying the index
+  wrongly makes it fail.
+
+### Added — testing
+
+- **`reader_robustness`: the readers, over documents somebody else's tooling
+  mangled.** The 486 published documents this crate is measured against are all
+  *well-formed by construction* — the authorities publish invalid **documents**,
+  not broken **files** — so a truncated stream, a duplicated element or a value
+  no producer would emit was in no corpus and every one of them arrives from a
+  real counterparty.
+
+  The suite mutates this crate's own fixture in both syntaxes and presses on
+  through validate, write and read-back. Its shape was **decided by
+  measurement**: a slicing bug deliberately reintroduced into the date reader
+  survived the random mutation properties entirely, and dies in about a second
+  under a dense deterministic sweep that replaces **every** value in the
+  document with each of sixteen adversarial strings. A complete invoice has
+  around a hundred value nodes, so random targeting reaches any given converter
+  a few per cent of the time; the dense sweep reaches all of them, and is
+  faster.
+
+  Two figures are asserted, because a fuzz suite passing for the wrong reason
+  looks exactly like one that passes: how many mutations **reach** the reader
+  (unweighted, four in five died at the parser — duplicating an *open tag*
+  rather than a whole element was most of it), and whether the reader
+  **recorded** what it refused, which is the contract `unmapped` and `malformed`
+  exist to keep.
+
+### Changed
+
+- **The CII writer said "yet" about a group it will never write.** BG-DEX-01 and
+  BG-DEX-09 were dropped with one shared note — *"the CII binding does not write
+  the XRechnung Extension groups **yet**; use UBL, where it does"* — and they
+  are not the same case. `BR-DEX-15` asserts `not(exists(//ram:ParentLineID))`
+  and says why in words: *"XRechnung does not support this."* Omitting sub
+  invoice lines from CII is **conformance**, not an unfinished feature, and a
+  reader of that note goes looking for a flag to enable.
+
+  The notes are separate now and BG-DEX-01's names its rule. BG-DEX-09 is the
+  genuinely unfinished one — KoSIT ships a CII Extension scenario and no rule
+  forbids it. A test pins both, and pins the contrast that makes the advice
+  real: `UBL-CR-646` forbids the same group in a **core** UBL document, and the
+  Extension profile permits it.
+
+- **`billing` 0.15.** No signature changed, so this is a version bump — but
+  `maximum_charge` is new and it crosses this seam, so the seam is now tested.
+  A cap settles as a **credit invoice line**, and a credit line is where
+  EN 16931's sign conventions bite from both directions: `BR-27` forbids a
+  negative BT-146, and `PEPPOL-EN16931-R120` requires `BT-131 = BT-129 × BT-146`,
+  so the negative can go neither on the price nor nowhere. It goes on the
+  **quantity** — BT-129 = −1, BT-146 = +140, BT-131 = −140 — and both rules
+  hold. Two tests pin it, because either crate could change its sign convention
+  without the other's fixtures noticing, and the failure would be a document a
+  counterparty rejects for a rule neither repository runs alone.
+
+- **Every finding now leads with its severity, and the header counts them.**
+  Breaking: `Finding`'s `Display` gains a leading padded severity, and
+  `ValidationReport`'s header gains ` (1 fatal, 2 information)` when more than
+  one severity is present.
+
+  The crate compares **121 published severities** against KoSIT's own
+  Schematrons on every run — the work that release 0.6.0 was largely about — and
+  then discarded every one of them at the only place a person reads the result.
+  Three findings, one fatal and two that the authority publishes as
+  *information*, printed as three indistinguishable lines under the word
+  `INVALID`. The honest reading of that page is "fix all three", two of which
+  Germany never objected to, which is the same defect as reporting a warning as
+  fatal arriving from the other end.
+
+  ```text
+  XRechnung 3.0 Extension validation (…) — 296 rule(s) checked, 3 finding(s) (1 fatal, 2 information), INVALID
+    fatal        [BR-DEX-04] BG-7 — Any scheme identifier in cac:PartyIdentification MUST be …
+    information  [BR-DE-TMP-32] BT-72 — Eine Rechnung sollte zur Angabe des Liefer-/…
+    information  [BR-CL-10] BG-7 — Any identifier identification scheme identifier MUST be …
+  ```
+
+  The documentation sample that shows the same document under XRechnung and
+  under the core model used to print two byte-identical lines; it now differs in
+  one word, `warning` against `fatal`, which was the entire point the sample was
+  making.
+
+- `ValidationReport::absorb` sorts through `sort_findings` rather than through a
+  second copy of its comparator. The stable order is a documented property that
+  CI diffs are compared against, and two transcriptions of one ordering is the
+  shape of a difference nobody notices.
+
+### Documentation
+
+- **486 and 487 are both right**, and the two appeared a page apart with nothing
+  saying so — which reads as a typo, and invites a reader to "correct" one. The
+  tree holds 320 UBL and 167 CII files; the reader rejects one UBL file as not
+  well-formed, correctly, because it is a deliberately malformed instance. The
+  round-trip, fidelity and cross-syntax suites run over the **486 that parse**;
+  the depth guard scans all **487 files**.
+- The `:2026` transition is stated with its measured shape rather than as a
+  general intention: EN 16931-1:2026 was published in **May 2026** with **216
+  business terms in 39 groups**, up from 164 in 32, with nothing removed —
+  including structured payment terms for cash discount and late-payment
+  interest, and a delivery date mandatory on every invoice. **ZUGFeRD 2.5**
+  shipped on 10 June 2026 implementing it; **XRechnung 4.0 had not shipped** as
+  of September 2026, so there is still nothing to implement against.
+
 ## [0.6.0] — 2026-08-25
 
 A correctness release, and every fix in it belongs to one of two families.
@@ -629,7 +868,8 @@ directions, ZUGFeRD / Factur-X extraction, and the command.
 - `en16931-cli`: `validate`, `convert`, `diff`, `extract`, `inspect`, `explain`,
   `rules`, `profiles`, and CI-shaped exit codes.
 
-[Unreleased]: https://github.com/hupe1980/en16931/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/hupe1980/en16931/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/hupe1980/en16931/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/hupe1980/en16931/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/hupe1980/en16931/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/hupe1980/en16931/compare/v0.3.0...v0.4.0

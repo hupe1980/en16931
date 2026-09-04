@@ -16,9 +16,9 @@ cargo install en16931-cli      # the binary is `en16931`
 ```console
 $ en16931 validate rechnung.xml
 rechnung.xml — UBL 2.1
-XRechnung 3.0 validation (EN 16931-1:2017+A1:2019) — 282 rule(s) checked, 2 finding(s), INVALID
-  [BR-DE-15] BT-10 — Buyer reference (BT-10) shall be present
-  [BR-CL-23] BG-25[0]/BT-130 — Unit code MUST be coded according to the UN/ECE Recommendation 20 with Rec 21 extension. [hint: did you mean "KWH"? Code lists are case-sensitive]
+XRechnung 3.0 validation (EN 16931-1:2017+A1:2019) — 282 rule(s) checked, 2 finding(s) (1 fatal, 1 warning), INVALID
+  fatal        [BR-DE-15] BT-10 — Buyer reference (BT-10) shall be present
+  warning      [BR-CL-23] BG-25[0]/BT-130 — Unit code MUST be coded according to the UN/ECE Recommendation 20 with Rec 21 extension. [hint: did you mean "KWH"? Code lists are case-sensitive]
 $ echo $?
 1
 ```
@@ -104,13 +104,13 @@ two rule sets is the clearest way to see it:
 ```console
 $ en16931 validate rechnung.xml                        # BT-24 says XRechnung
 XRechnung 3.0 validation (…) — 282 rule(s) checked, 1 finding(s), valid
-  [BR-CL-23] BG-25[0]/BT-130 — Unit code MUST be coded according to …
+  warning      [BR-CL-23] BG-25[0]/BT-130 — Unit code MUST be coded according to …
 $ echo $?
 0
 
 $ en16931 validate rechnung.xml --profile en16931      # the core model
 EN 16931 validation (…) — 227 rule(s) checked, 1 finding(s), INVALID
-  [BR-CL-23] BG-25[0]/BT-130 — Unit code MUST be coded according to …
+  fatal        [BR-CL-23] BG-25[0]/BT-130 — Unit code MUST be coded according to …
 $ echo $?
 1
 ```
@@ -118,6 +118,12 @@ $ echo $?
 That is not a bug in either answer. It is what the two authorities publish, and
 it is why XRechnung is not a *conformant CIUS* under §4.4.2 — see
 [severity](@/docs/validation.md#severity-is-the-authority-s-not-ours).
+
+The two runs differ in one word, and that word is the point: the same rule, the
+same document, one authority calling it advisory and the other fatal. Every
+finding leads with its severity, and the header counts them —
+`3 finding(s) (1 fatal, 2 information)` answers *how much of this must I fix*
+before you read a finding.
 
 `--without` is recorded on the report and printed in every output format. A
 deviation you cannot see in the artefact is worse than one you argued for.
@@ -218,6 +224,49 @@ invoice.pdf
   rule set      EN 16931 (BT-24 unknown here)
   …
 ```
+
+## `categories`
+
+**The one command that takes no document.** Two of the ten VAT categories are
+exclusive, and they are the only rules in EN 16931 that a set of category codes
+decides on its own — so the question is answerable while a biller is still
+deciding what to put on the invoice, rather than after assembling one they then
+have to throw away.
+
+```console
+$ en16931 categories S Z
+  S   standard rate
+  Z   zero rated goods
+
+these categories may share one invoice
+$ echo $?
+0
+
+$ en16931 categories S O
+  S   standard rate
+  O   services outside the scope of VAT
+
+REFUSED: VAT categories O and S cannot share one document (BR-O-11, BR-O-12,
+BR-O-13, BR-O-14) — "Not subject to VAT" is exclusive: an invoice carrying it
+may carry nothing else. Bill the out-of-scope items as their own document
+$ echo $?
+1
+```
+
+Same three exit codes as `validate`: `0` they may share a document, `1` they may
+not, `2` that is not a category code. A caller that cannot tell "these cannot be
+billed together" from "you typed a code that does not exist" will eventually
+treat a typo as a business rule.
+
+The categories are printed with their **names**, not only their codes, because
+`O` is not "other" — and a caller who read it that way has made exactly the
+mistake this command exists to catch. Codes are case-sensitive; `BR-CL-17`
+compares them literally.
+
+The German case behind it: a *hoheitliche Abwassergebühr* is `O`, drinking water
+is `S`, and the combined invoice over 90 % of municipalities issue has no valid
+EN 16931 rendering at all. That is the standard's decision. What this gives you
+is the reason and the clause, before the work.
 
 ## `explain`, `rules` and `profiles`
 

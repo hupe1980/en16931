@@ -45,7 +45,7 @@ billing = ["dep:billing"]
 rust_decimal.workspace = true
 thiserror.workspace    = true
 
-billing = { version = "0.14", optional = true }
+billing = { version = "0.15", optional = true }
 serde   = { workspace = true, optional = true }
 chrono  = { version = "0.4", optional = true, default-features = false }
 time    = { version = "0.3", optional = true, default-features = false }

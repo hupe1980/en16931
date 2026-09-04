@@ -174,6 +174,39 @@ impl fmt::Display for Profile {
 mod tests {
     use super::*;
 
+    /// **A profile name says nothing about which edition it implements.**
+    ///
+    /// Matching is on letters and digits, so `urn:cen.eu:en16931:2026` and
+    /// `urn:cen.eu:en16931:2017` are one `Profile`. That is right for
+    /// *identification* — ZUGFeRD 2.5 shipped in June 2026 implementing
+    /// EN 16931-1:2026, and a reader that answered `Unknown` for it would throw
+    /// away the only thing the file says about itself.
+    ///
+    /// It is also a **known limit**, asserted here so it is a property rather
+    /// than an accident: a `:2026` payload identifies correctly and is then
+    /// validated against the 2017 rules, because those are the only rules this
+    /// workspace has. The 52 business terms `:2026` adds would land in
+    /// `unmapped`. See the model crate's `Edition`, and the roadmap.
+    #[test]
+    fn a_profile_name_carries_no_edition() {
+        assert_eq!(Profile::parse("urn:cen.eu:en16931:2017"), Profile::En16931);
+        assert_eq!(Profile::parse("urn:cen.eu:en16931:2026"), Profile::En16931);
+        // The Factur-X spellings, which carry the *schema* version and not the
+        // edition either — `1p0` has been constant since Factur-X 1.0.
+        assert_eq!(
+            Profile::parse("urn:factur-x.eu:1p0:basicwl"),
+            Profile::BasicWl
+        );
+        assert_eq!(
+            Profile::parse("urn:factur-x.eu:1p0:minimum"),
+            Profile::Minimum
+        );
+        assert_eq!(
+            Profile::parse("urn:cen.eu:en16931:2017#conformant#urn:factur-x.eu:1p0:extended"),
+            Profile::Extended
+        );
+    }
+
     #[test]
     fn the_two_that_are_not_invoices_say_so() {
         assert!(matches!(

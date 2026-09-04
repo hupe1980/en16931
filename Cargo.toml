@@ -20,7 +20,7 @@ members  = [
 [workspace.package]
 # All three release in lockstep. Bump here and in the two requirements below —
 # the only other copies of the number, and cargo rejects a bump that misses one.
-version      = "0.6.0"
+version      = "0.7.0"
 edition      = "2024"
 # `let`-chains, stabilised in 1.88. CI reads this rather than repeating it.
 rust-version = "1.88"
@@ -30,8 +30,8 @@ repository   = "https://github.com/hupe1980/en16931"
 
 [workspace.dependencies]
 # `version` as well as `path`, so `cargo publish` resolves them from crates.io.
-en16931         = { version = "0.6.0", path = "crates/en16931" }
-en16931-formats = { version = "0.6.0", path = "crates/en16931-formats" }
+en16931         = { version = "0.7.0", path = "crates/en16931" }
+en16931-formats = { version = "0.7.0", path = "crates/en16931-formats" }
 
 # Pinned once: two `rust_decimal` majors in one graph means two incompatible
 # `Decimal` types.

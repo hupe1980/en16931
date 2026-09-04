@@ -102,3 +102,61 @@ fn even_a_clean_report_carries_it() {
         "a report with no findings must still carry the notice:\n{empty}"
     );
 }
+
+/// **No runtime-visible string carries its own source indentation.**
+///
+/// The bug this closes is specific and it has happened twice. A multi-line
+/// string literal *without* a `\` continuation puts the source's indentation
+/// into the value, so a notice written to read nicely in the editor ships with
+/// a run of 32 spaces in the middle of it. It is invisible in review, because
+/// the source looks right; it is invisible to a test that normalises whitespace
+/// on both sides, because `"a;\n     b"` and `"a; b"` are equal once
+/// normalised — which is the comparison the original attribution test used.
+///
+/// It is **not** caused by `rustfmt`, which this crate's own documentation
+/// asserted for a while: `rustfmt` preserves a `\`-continued literal untouched,
+/// and Rust strips the newline and the following indentation from one. The
+/// continued form is correct; the *unbroken* multi-line form is the trap.
+///
+/// So rather than trusting every author to remember, the strings a user
+/// actually reads are scanned. Three consecutive spaces never occur in prose
+/// that was written on purpose — the authorities' rule texts contain none
+/// across all 424 of them — and they are the unmistakable signature of an
+/// indented continuation line.
+#[test]
+fn no_user_visible_string_carries_source_indentation() {
+    const SIGNATURE: &str = "   ";
+
+    assert!(
+        !en16931::ATTRIBUTION.contains(SIGNATURE),
+        "the attribution notice carries source indentation: {:?}",
+        en16931::ATTRIBUTION
+    );
+
+    let mut checked = 0usize;
+    for rule in en16931::validation::rules::all() {
+        assert!(
+            !rule.text.contains(SIGNATURE),
+            "{}'s text carries source indentation — a multi-line literal is \
+             missing its `\\` continuation: {:?}",
+            rule.id.as_str(),
+            rule.text
+        );
+        checked += 1;
+    }
+
+    // Findings are the other thing a user reads, and their messages are built
+    // rather than taken verbatim — so they are scanned as produced.
+    for profile in en16931::profiles::ALL {
+        for finding in profile.validate(&en16931::Invoice::default()).findings() {
+            assert!(
+                !finding.message.contains(SIGNATURE),
+                "a finding of {} carries source indentation: {:?}",
+                profile.id,
+                finding.message
+            );
+        }
+    }
+
+    assert!(checked > 300, "the registry should be whole: {checked}");
+}

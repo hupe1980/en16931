@@ -401,7 +401,7 @@ this crate can guarantee is the half it does.
 | Suite | What it establishes |
 |---|---|
 | `roundtrip` | `Invoice → syntax → Invoice` is the identity **in both syntaxes**, reported per field — plus a test that UBL and CII agree with *each other* |
-| `fidelity` | the same property over the **486 published documents**, where a difference is a failure *unless the writer named it in `dropped`* |
+| `fidelity` | the same property over the **486 published documents** that parse, where a difference is a failure *unless the writer named it in `dropped`* |
 | `cross_syntax` | the stronger claim: read in one syntax, write in the **other**, read back — over the same 486, both directions |
 | `order` | Every element either writer emits is in schema sequence |
 | `subset` | Neither writer emits a forbidden element or attribute |
@@ -424,6 +424,36 @@ Each catches a class the one before it cannot.
 
 - **`roundtrip`** works on a fixture this crate wrote, so it can only find a bug
   in a term someone thought to put in the fixture.
+## The readers, over documents somebody else's tooling mangled
+
+The 486 published documents are all *well-formed by construction* — the
+authorities publish invalid **documents**, not broken **files**. A truncated
+stream, a duplicated element, a value no producer would emit: none of that is in
+any corpus, and all of it arrives from a real counterparty.
+
+`reader_robustness` mutates this crate's own complete fixture in both syntaxes
+and presses on through everything a caller does next — validate, write, read
+back:
+
+| | Covers |
+|---|---|
+| random single and triple mutations | truncation, dropped characters, duplicated elements, renamed tags, deep nesting, an injected doctype — **structural** corruption |
+| a dense deterministic sweep | **every** value replaced with each of sixteen adversarial strings |
+
+The dense sweep does the work. A complete invoice has around a hundred value
+nodes, so random targeting reaches any given converter a few per cent of the
+time; replacing every value guarantees each converter meets each input.
+
+Two numbers are asserted, because a fuzz suite that passes for the wrong reason
+looks exactly like one that passes: how many mutations **reach** the reader, and
+whether the reader **recorded** what it refused — which is what `unmapped` and
+`malformed` are for.
+
+486 and 487 are both measured and count different things: the tree holds 320
+UBL and 167 CII files, and one UBL file is rejected as not well-formed — a
+deliberately malformed instance, correctly refused. The properties run over the
+486 that parse; the depth guard above scans all 487 files.
+
 - **`fidelity`** runs the same property over 486 documents this crate did not
   write, which is where terms nobody remembered turn up.
 - **`cross_syntax`** changes syntax in between — and that is the one that finds a
@@ -510,3 +540,31 @@ The bindings are derived from CEN's EUPL-1.2 validation artefacts and the elemen
 order from the authorities' published instances — facts about element placement
 rather than copied expressions. The CEN attribution notice is a licence
 condition, is re-exported from `en16931` rather than restated, and has a test.
+
+---
+
+## Measured, not asserted — the syntax layer
+
+```text
+read/ubl/5              21.4 µs        write/ubl/5             67.5 µs
+read/cii/5              26.5 µs        write/cii/5             65.6 µs
+read/ubl/100           222 µs
+read/cii/100           307 µs
+read/ubl/1000            2.33 ms       write/ubl/1000          21.2 ms
+read/cii/1000            2.92 ms       write/cii/1000          10.0 ms
+convert/ubl-to-cii     158 µs          convert/cii-to-ubl     213 µs
+```
+
+`cargo bench -p en16931-formats --all-features`, on the maintainer's machine —
+the useful information is the order of magnitude, not the digits. Reading is
+linear in line count, which is the property that matters: a reader that goes
+quadratic is fine on examples and dies on a telecoms bill with 5 000 call
+records.
+
+Writing runs the prohibition tables, which are indexed by the last segment of
+each path — a linear scan of the 1 548 UBL entries, once per element emitted, is
+what a document's write cost is otherwise made of. The old scan is kept as a
+reference implementation and a test compares the two over every path the tables
+describe: the prohibitions are what make *"the writer cannot emit a forbidden
+element"* a property, so an optimisation there needs a proof rather than a
+benchmark.

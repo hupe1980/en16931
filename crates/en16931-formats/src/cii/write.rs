@@ -175,20 +175,31 @@ pub fn write(inv: &Invoice) -> Written {
     }
 
     // BG-DEX-01 and BG-DEX-09 are the XRechnung Extension's, and this binding
-    // does not write them. KoSIT ships a CII Extension scenario, so this is a
-    // gap rather than an impossibility — named here so it cannot be mistaken for
-    // an invoice that never carried the data.
+    // writes neither — but for **two different reasons**, and conflating them
+    // told a user to fix something that is not broken.
+    //
+    // Sub invoice lines are the one XRechnung positively refuses in CII:
+    // `BR-DEX-15` asserts `not(exists(//ram:ParentLineID))` and says so in
+    // words — *"This CII file might use the concept of Sub Invoice Lines.
+    // However XRechnung does not support this."* Writing them would produce a
+    // document KoSIT objects to, so **not** writing them is correct rather than
+    // unfinished. The note says which rule, because "use UBL" without the
+    // reason reads as a workaround for a missing feature.
     if !inv.extensions.sub_invoice_lines.is_empty() {
         x.dropped(
-            "BG-DEX-01 SUB INVOICE LINE — the CII binding does not write the XRechnung \
-             Extension groups yet; use UBL, where it does"
+            "BG-DEX-01 SUB INVOICE LINE — XRechnung does not support sub invoice lines in \
+             CII at all (BR-DEX-15 forbids ram:ParentLineID), so they are not written here. \
+             UBL carries them; CII cannot"
                 .to_owned(),
         );
     }
+    // Third party payments are a genuine gap: KoSIT ships a CII Extension
+    // scenario and no rule forbids them, so this binding simply does not write
+    // them yet.
     if !inv.extensions.third_party_payments.is_empty() {
         x.dropped(
-            "BG-DEX-09 THIRD PARTY PAYMENT — the CII binding does not write the XRechnung \
-             Extension groups yet; use UBL, where it does"
+            "BG-DEX-09 THIRD PARTY PAYMENT — the CII binding does not write this XRechnung \
+             Extension group yet; use UBL, where it does"
                 .to_owned(),
         );
     }

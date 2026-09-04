@@ -248,6 +248,57 @@ so the answer is exact. The conditional rules cannot be answered before the
 document exists — `BR-DE-23-a` asks for BT-84 only if BT-81 names a credit
 transfer — and `validate` remains the complete check.
 
+## …and can these categories even share one invoice?
+
+The other question with an exact answer before the document exists. Two of the
+ten VAT categories are **exclusive**, and they are the only rules in EN 16931
+that a set of category codes decides on its own — no amounts, no lines, no
+parties.
+
+```rust
+use en16931::VatCategory;
+use en16931::VatCategory::{OutOfScope, SplitPayment, Standard, ZeroRated};
+
+assert!(VatCategory::can_share_document(&[Standard, ZeroRated]).is_ok());
+
+let err = VatCategory::can_share_document(&[Standard, OutOfScope]).unwrap_err();
+assert_eq!(err.rules, ["BR-O-11", "BR-O-12", "BR-O-13", "BR-O-14"]);
+
+// Italy's split payment excludes the standard rate, and nothing else.
+assert!(VatCategory::can_share_document(&[SplitPayment, ZeroRated]).is_ok());
+assert!(VatCategory::can_share_document(&[SplitPayment, Standard]).is_err());
+```
+
+The case that forced it is German municipal billing. A *hoheitliche
+Abwassergebühr* is not subject to VAT (`O`); drinking water is taxable (`S`);
+and `BR-O-11` … `BR-O-14` forbid `O` from sharing a document with anything at
+all — so the combined invoice **over 90 % of municipalities issue has no valid
+EN 16931 rendering**. That is the standard's decision, not an implementation
+choice, and no library can fix it. What a library owes is a refusal that names
+the reason *before* the work, and a clause the biller can quote to whoever asked
+for the invoice.
+
+On the command line:
+
+```console
+$ en16931 categories S O
+  S   standard rate
+  O   services outside the scope of VAT
+
+REFUSED: VAT categories O and S cannot share one document (BR-O-11, BR-O-12, BR-O-13, BR-O-14) — …
+$ echo $?
+1
+```
+
+**It agrees with the validator**, which is the only property that makes a
+pre-flight worth having: a test sweeps all **1 024 subsets** of the ten
+categories and asserts this refuses exactly when the exclusivity rules report.
+
+The `rules` it names are the family that *governs* the exclusivity, not the ones
+that will fire. `BR-O-11` covers a second breakdown group, `-12` a line, `-13` an
+allowance and `-14` a charge, and which reports depends on where the other
+category appears — which a set of codes cannot know.
+
 ## What is next
 
 - **[Syntaxes](@/docs/syntaxes.md)** — turning a proof into UBL or CII.

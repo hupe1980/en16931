@@ -180,3 +180,76 @@ fn the_prohibition_counts_are_the_ones_the_docs_quote() {
         "…of which this many are represented"
     );
 }
+
+/// **Sub invoice lines are refused in CII because XRechnung refuses them.**
+///
+/// `BR-DEX-15` asserts `not(exists(//ram:ParentLineID))` and states the reason
+/// in words: *"This CII file might use the concept of Sub Invoice Lines. However
+/// XRechnung does not support this."* So a CII binding that omits BG-DEX-01 is
+/// **correct**, not unfinished — and the note it leaves has to say which, or the
+/// reader goes looking for a feature to enable.
+///
+/// This is the model rule `en16931` cannot hold: `BR-DEX-15` is a check on the
+/// shape of a *CII document*, and the semantic model has one line structure
+/// regardless of syntax. It is declared in `en16931`'s `CII_ONLY_SYNTAX_RULES`
+/// as out-of-model, and honoured **here**, which is where the CII binding lives.
+///
+/// UBL is the contrast, and it is the whole reason the note can offer a way out:
+/// `cac:SubInvoiceLine` is written there, so the same invoice is expressible in
+/// one mandatory syntax and not the other.
+#[test]
+#[cfg(all(feature = "cii", feature = "ubl"))]
+fn cii_omits_sub_invoice_lines_and_says_which_rule_forbids_them() {
+    let mut invoice = common::maximal();
+    let child = invoice.lines[0].clone();
+    invoice.extensions.sub_invoice_lines = vec![(
+        0,
+        vec![en16931::SubInvoiceLine {
+            line: child,
+            vat: Some(invoice.lines[0].vat.clone()),
+            children: vec![],
+        }],
+    )];
+
+    let out = en16931_formats::cii::write(&invoice);
+    assert!(
+        !out.xml.contains("ParentLineID"),
+        "BR-DEX-15 forbids ram:ParentLineID in a CII XRechnung"
+    );
+    let note = out
+        .dropped
+        .iter()
+        .find(|d| d.contains("BG-DEX-01"))
+        .expect("dropping a group the caller supplied is never silent");
+    assert!(
+        note.contains("BR-DEX-15"),
+        "the note must cite the rule, or omitting the group reads as a missing \\
+         feature rather than as conformance: {note}"
+    );
+
+    // …and UBL does carry them, which is what makes the note's advice real —
+    // but only under the Extension profile. For a **core** document
+    // `UBL-CR-646` forbids `cac:SubInvoiceLine` just as firmly, so plain
+    // `write` drops it too. Two syntaxes, two rules, one group: the difference
+    // is that UBL has a profile in which it is lawful and CII has none.
+    let core = en16931_formats::ubl::write(&invoice);
+    assert!(
+        !core.xml.contains("cac:SubInvoiceLine"),
+        "UBL-CR-646 forbids it in a core document"
+    );
+    let extension =
+        en16931_formats::ubl::write_for(&invoice, &en16931::profiles::XRECHNUNG_EXTENSION);
+    match extension {
+        Ok(written) => assert!(
+            written.xml.contains("cac:SubInvoiceLine"),
+            "the Extension profile is where UBL carries BG-DEX-01"
+        ),
+        // The fixture need not satisfy every BR-DE-* rule; what matters is that
+        // the group is lawful *somewhere*, and the core path above proves the
+        // prohibition is what removes it rather than a missing writer.
+        Err(not_valid) => assert!(
+            !not_valid.report().has("UBL-CR-646"),
+            "the Extension must not forbid the group it defines"
+        ),
+    }
+}

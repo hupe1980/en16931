@@ -235,3 +235,126 @@ fn every_declared_artefact_ref_is_one_xtask_fetches() {
         "profiles::CEN and ARTEFACT_VERSION are the same pin"
     );
 }
+
+// ── The skew nothing was watching ─────────────────────────────────────────────
+
+mod common;
+
+/// The CEN release **KoSIT built against**, which is not the one this crate runs.
+///
+/// # Why one CEN pin cannot serve every profile
+///
+/// The core profile's authority is CEN, so it should run CEN's newest release.
+/// XRechnung's authority is **KoSIT**, and a KoSIT release names the CEN
+/// Schematron it was built and tested against — `v2026-01-31` says
+/// *"Using CEN Schematron Rules 1.3.15"*. The German reference validator runs
+/// that combination and nothing else.
+///
+/// So while the two differ, this crate's XRechnung profiles run CEN's code
+/// lists from a release KoSIT has not adopted, and the divergences are real
+/// rather than theoretical. Between 1.3.15 and 1.3.16 CEN:
+///
+/// | | |
+/// |---|---|
+/// | removed `BGN` and `ANG` from ISO 4217 | Bulgaria adopted the euro; `ANG` became `XCG` |
+/// | added `XCG` | the Caribbean guilder |
+/// | moved document type codes `502` and `503` | from the **invoice** list to the **credit note** list in `BR-CL-01` |
+/// | added ISO 6523 ICD `0245`–`0248` | new registered schemes |
+/// | dropped `BR-CO-25` from the abstract model | this crate already carries it as `Source::StandardOnly` |
+///
+/// A Bulgarian-lev invoice is therefore **fatal here and valid for KoSIT** —
+/// the direction a validator must never be wrong in, because it stops a
+/// document nobody else would have stopped.
+///
+/// # What this test is for
+///
+/// Not to resolve the skew: which release to follow is a judgement, and
+/// following CEN's newest is the defensible one for a crate whose conformance
+/// suite runs CEN's own 1.3.16 test files. It is to make the skew **impossible
+/// to hold accidentally** — it fails when KoSIT names a CEN release this crate
+/// has not been told about, so a divergence is always a decision somebody made
+/// rather than one nobody noticed.
+///
+/// When KoSIT catches up, `KOSIT_BUILT_AGAINST` becomes equal to
+/// `ARTEFACT_VERSION` and the declaration below is deleted.
+#[test]
+fn the_cen_release_kosit_built_against_is_the_one_we_think_it_is() {
+    /// What `spec/validator-configuration-xrechnung`'s changelog is expected to
+    /// name, at the release `xtask` pins.
+    const KOSIT_BUILT_AGAINST: &str = "1.3.15";
+
+    let Some(spec) = common::require("the KoSIT/CEN skew check") else {
+        return;
+    };
+    let changelog = spec.join("validator-configuration-xrechnung/CHANGELOG.md");
+    let text = std::fs::read_to_string(&changelog)
+        .unwrap_or_else(|e| panic!("{}: {e}", changelog.display()));
+
+    // The first `CEN Schematron Rules <version>` in the file belongs to the
+    // newest entry, which is the release `xtask` pins.
+    let needle = "CEN Schematron Rules ";
+    let at = text
+        .find(needle)
+        .unwrap_or_else(|| panic!("{} no longer names a CEN release", changelog.display()))
+        + needle.len();
+    let named: String = text[at..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+
+    assert_eq!(
+        named, KOSIT_BUILT_AGAINST,
+        "KoSIT's pinned configuration now names CEN {named}, not {KOSIT_BUILT_AGAINST}. \
+         Re-read the diff between the two CEN releases and update the divergence table \
+         on this test — the XRechnung profiles run CEN's code lists, and a change to \
+         them changes which documents Germany's reference validator and this crate \
+         disagree about."
+    );
+
+    // The whole point is that the two differ. If they stop differing, the
+    // declaration above is dead and must be removed rather than left to rot.
+    assert_ne!(
+        named,
+        en16931::ARTEFACT_VERSION,
+        "KoSIT has caught up with CEN {}: delete KOSIT_BUILT_AGAINST and this test, \
+         and the skew section from the documentation with it.",
+        en16931::ARTEFACT_VERSION
+    );
+}
+
+/// The concrete consequence, asserted rather than described.
+///
+/// `BGN` is the sharp end of the skew above: CEN removed it in 1.3.16 because
+/// Bulgaria adopted the euro, KoSIT has not adopted 1.3.16, and a German
+/// invoice denominated in Bulgarian lev is accepted by the reference validator
+/// and rejected here.
+///
+/// Asserted so the divergence is a **fact in the suite** rather than a sentence
+/// in a document, and so it changes loudly when a regenerated code list moves.
+#[test]
+fn the_currency_divergence_is_exactly_these_three_codes() {
+    use en16931::invoice::Code;
+    use en16931::{Invoice, validate};
+
+    let fires = |cur: &str| {
+        let mut inv = Invoice::default();
+        inv.currency = Some(Code::new(cur));
+        validate(&inv).has("BR-CL-04")
+    };
+
+    // Withdrawn by CEN 1.3.16, still accepted by KoSIT's pinned configuration.
+    assert!(
+        fires("BGN"),
+        "CEN 1.3.16 removed BGN; this crate must reject it"
+    );
+    assert!(
+        fires("ANG"),
+        "CEN 1.3.16 removed ANG; this crate must reject it"
+    );
+    // Added by 1.3.16, so KoSIT's validator rejects what this crate accepts.
+    assert!(
+        !fires("XCG"),
+        "CEN 1.3.16 added XCG; this crate must accept it"
+    );
+    assert!(!fires("EUR"), "the control");
+}

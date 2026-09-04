@@ -76,4 +76,13 @@ proptest     = "1.11"
 roxmltree    = { workspace = true }
 rust_decimal = { workspace = true, features = ["macros"] }
 serde_json   = "1"
+criterion    = { version = "0.7", features = ["html_reports"] }
 
+[[bench]]
+name    = "syntax"
+harness = false
+# Both syntaxes, because the benchmark exists to compare them and to time the
+# conversion between them. With one enabled it would be a different, weaker
+# measurement; with neither it is an empty file that still has to lint, which is
+# what `just features` found. `just bench` runs it with `--all-features`.
+required-features = ["ubl", "cii"]

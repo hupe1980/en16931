@@ -500,6 +500,34 @@ pub fn diff_json(
 // ── profiles ─────────────────────────────────────────────────────────────────
 
 /// Every profile this build can validate against.
+/// `en16931 categories S O` — the verdict, and the way out of a refusal.
+///
+/// Prints the categories with their full names first: a caller who typed `O`
+/// meaning "other" rather than "outside the scope of VAT" has made the mistake
+/// this command exists to catch, and only the name shows it.
+pub fn categories(o: &mut String, cats: &[en16931::VatCategory]) {
+    for c in cats {
+        let _ = writeln!(o, "  {:<3} {}", c.code(), c.name());
+    }
+    let _ = writeln!(o);
+    match en16931::VatCategory::can_share_document(cats) {
+        Ok(()) => {
+            let _ = writeln!(o, "these categories may share one invoice");
+        }
+        Err(conflict) => {
+            let _ = writeln!(o, "REFUSED: {conflict}");
+            let _ = writeln!(
+                o,
+                "\nthe rules that govern it: {}\n\
+                 (which of them reports depends on whether the other category is on a line, \
+                 an allowance, a charge or a breakdown group — `en16931 explain {}` for each)",
+                conflict.rules.join(", "),
+                conflict.rules[0]
+            );
+        }
+    }
+}
+
 pub fn profiles(o: &mut String) {
     // Column widths are measured, never guessed. The `verified against` block
     // below was written with a hard-coded `{:<44}`, and the longest repository

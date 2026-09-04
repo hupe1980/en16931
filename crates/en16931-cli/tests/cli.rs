@@ -768,3 +768,59 @@ fn svrl_is_refused_for_a_comparison() {
         .code(2)
         .stderr(contains("not a comparison"));
 }
+
+// ── categories ───────────────────────────────────────────────────────────────
+
+/// The pre-flight has the same three answers as `validate`, and they are the
+/// part a pipeline builds on.
+///
+/// `0` they may share a document · `1` they may not · `2` that is not a
+/// category. A caller that cannot tell "these cannot be billed together" from
+/// "you typed a code that does not exist" will eventually treat a typo as a
+/// business rule.
+#[test]
+fn categories_exit_codes_are_the_same_three_as_validate() {
+    cli().args(["categories", "S", "Z"]).assert().success();
+
+    cli()
+        .args(["categories", "S", "O"])
+        .assert()
+        .code(1)
+        .stdout(contains("BR-O-11"));
+
+    cli().args(["categories", "S", "X"]).assert().code(2);
+}
+
+/// A refusal names the categories in full, not only their codes.
+///
+/// `O` is *not* "other", and a caller who read it that way has made exactly the
+/// mistake this command exists to catch — which only the name shows.
+#[test]
+fn categories_are_named_not_only_coded() {
+    cli()
+        .args(["categories", "O"])
+        .assert()
+        .success()
+        .stdout(contains("services outside the scope of VAT"));
+}
+
+/// Codes are case-sensitive, because `BR-CL-17` compares them literally.
+#[test]
+fn categories_are_case_sensitive() {
+    cli()
+        .args(["categories", "s"])
+        .assert()
+        .code(2)
+        .stderr(contains("case-sensitive"));
+}
+
+/// The German municipal invoice, end to end on the command line.
+#[test]
+fn the_municipal_case_is_refused_with_its_reason_and_its_way_out() {
+    cli()
+        .args(["categories", "S", "O"])
+        .assert()
+        .code(1)
+        .stdout(contains("REFUSED"))
+        .stdout(contains("own document"));
+}

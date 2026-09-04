@@ -113,7 +113,14 @@ what both syntaxes carry, and it makes `BR-CL-01` exact rather than permissive.
 ## The syntax corpora
 
 The formats crate runs three properties over **486 published documents** — every
-UBL and CII instance in the CEN, KoSIT and OpenPeppol trees:
+UBL and CII instance in the CEN, KoSIT and OpenPeppol trees.
+
+**486, and elsewhere on this site 487.** Both are measured and they count
+different things: the tree holds **320 UBL and 167 CII files**, and the reader
+rejects one UBL file as not well-formed — correctly, it is a deliberately
+malformed instance. The properties below run over the **486 that parse**; the
+[depth guard](@/docs/syntaxes.md#the-document-is-hostile-until-it-parses) scans
+all **487 files**, including the one that never becomes a document.
 
 | Suite | What it establishes |
 |---|---|
@@ -131,6 +138,31 @@ proves](@/docs/syntaxes.md#what-crossing-the-syntaxes-proves). Every defect of
 that class produces a schema-valid document the reader reads without complaint,
 which is why the property is asserted over a corpus rather than argued from the
 code.
+
+## The readers, over documents somebody else's tooling mangled
+
+The 486 published documents are all *well-formed by construction* — the
+authorities publish invalid **documents**, not broken **files**. A truncated
+stream, a duplicated element, a value no producer would emit: none of that is in
+any corpus, and all of it arrives from a real counterparty.
+
+`reader_robustness` mutates this crate's own complete fixture in both syntaxes
+and presses on through everything a caller does next — validate, write, read
+back:
+
+| | Covers |
+|---|---|
+| random single and triple mutations | truncation, dropped characters, duplicated elements, renamed tags, deep nesting, an injected doctype — **structural** corruption |
+| a dense deterministic sweep | **every** value replaced with each of sixteen adversarial strings |
+
+The dense sweep does the work. A complete invoice has around a hundred value
+nodes, so random targeting reaches any given converter a few per cent of the
+time; replacing every value guarantees each converter meets each input.
+
+Two numbers are asserted, because a fuzz suite that passes for the wrong reason
+looks exactly like one that passes: how many mutations **reach** the reader, and
+whether the reader **recorded** what it refused — which is what `unmapped` and
+`malformed` are for.
 
 ## Every source is pinned to a release
 
@@ -206,6 +238,32 @@ The number that matters for architecture is that validation is fast enough to ru
 on every keystroke of a form, and small enough to run in the browser: `en16931`
 builds for `wasm32-unknown-unknown`, so an invoice never has to leave the client
 to find out whether it is valid.
+
+## Measured, not asserted — the syntax layer
+
+```text
+read/ubl/5              21.4 µs        write/ubl/5             67.5 µs
+read/cii/5              26.5 µs        write/cii/5             65.6 µs
+read/ubl/100           222 µs
+read/cii/100           307 µs
+read/ubl/1000            2.33 ms       write/ubl/1000          21.2 ms
+read/cii/1000            2.92 ms       write/cii/1000          10.0 ms
+convert/ubl-to-cii     158 µs          convert/cii-to-ubl     213 µs
+```
+
+`cargo bench -p en16931-formats --all-features`, on the maintainer's machine —
+the useful information is the order of magnitude, not the digits. Reading is
+linear in line count, which is the property that matters: a reader that goes
+quadratic is fine on examples and dies on a telecoms bill with 5 000 call
+records.
+
+Writing runs the prohibition tables, which are indexed by the last segment of
+each path — a linear scan of the 1 548 UBL entries, once per element emitted, is
+what a document's write cost is otherwise made of. The old scan is kept as a
+reference implementation and a test compares the two over every path the tables
+describe: the prohibitions are what make *"the writer cannot emit a forbidden
+element"* a property, so an optimisation there needs a proof rather than a
+benchmark.
 
 ## The generated tables
 

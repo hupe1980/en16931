@@ -942,3 +942,204 @@ fn party_identifiers_cross_and_merge_rather_than_overwrite() {
         .expect("converts");
     assert!(validate(&bad).has("BR-CL-10"));
 }
+
+// ── the cap, added in `billing` 0.15 ─────────────────────────────────────────
+
+/// **A capped document crosses the seam as a valid EN 16931 credit line.**
+///
+/// `billing` 0.15 added `maximum_charge` — a *Preisobergrenze*, an OCPI
+/// `max_price`, a "maximal 29,90 € im Monat" — and it settles the excess as a
+/// **credit invoice line** rather than as a document level allowance, so that
+/// the cap reduces BT-106 the way a minimum's shortfall raises it and the VAT
+/// base is the capped one.
+///
+/// # The two rules that decide whether that composes
+///
+/// A credit line is the one shape where EN 16931's sign conventions bite, and
+/// the two rules pull in opposite directions:
+///
+/// | | |
+/// |---|---|
+/// | `BR-27` | BT-146, the item net price, **shall not be negative** |
+/// | `PEPPOL-EN16931-R120` | BT-131 **shall equal** BT-129 × BT-146 ÷ BT-149 |
+///
+/// So the negative cannot go on the price, and it cannot be dropped either —
+/// `1 × 140` does not reproduce `−140`. It has to go on the **quantity**, and
+/// that is what the adapter does: BT-129 = −1, BT-146 = +140, BT-131 = −140.
+/// Both rules hold, in every profile that runs them.
+///
+/// Asserted rather than assumed, because it is a *cross-crate* property: either
+/// side can change its sign convention without the other's tests noticing, and
+/// the failure would be a document a counterparty rejects for a rule neither
+/// repository runs on its own fixtures.
+#[test]
+fn a_capped_document_becomes_a_credit_line_both_sign_rules_accept() {
+    let mut positions = vec![
+        LineItem::flat_fee(
+            "Verbrauch",
+            Amount::parse("640.00000").unwrap(),
+            Currency::EUR,
+        )
+        .vat(BillingLineVat::new(TaxCategory::Standard, dec!(0.19)).unwrap())
+        .build()
+        .unwrap(),
+    ];
+
+    // The cap is settled against the untaxed net, before the layers run.
+    let net_only =
+        BillingDocument::from_positions(DocumentMeta::default(), positions.clone(), vec![], vec![])
+            .unwrap();
+    let excess = billing::maximum_charge(
+        &net_only,
+        Amount::parse("500.00000").unwrap(),
+        "Preisobergrenze",
+        Currency::EUR,
+    )
+    .expect("the cap is lawful")
+    .expect("640 exceeds 500, so it fires");
+    assert_eq!(
+        excess.net_amount.to_string(),
+        "-140.00000",
+        "the excess, as a credit"
+    );
+
+    // `maximum_charge` returns the line without a VAT category, because a cap is
+    // a contractual term and only the contract knows its rate. EN 16931 has no
+    // such freedom — `BR-CO-04` requires one on every line — so the caller
+    // attaches it, and the next test asserts what happens if they do not.
+    positions.push(
+        LineItem::credit_flat_fee(
+            "Preisobergrenze",
+            Amount::parse("140.00000").unwrap(),
+            Currency::EUR,
+        )
+        .vat(BillingLineVat::new(TaxCategory::Standard, dec!(0.19)).unwrap())
+        .build()
+        .unwrap(),
+    );
+
+    let doc = BillingDocument::builder()
+        .meta(meta())
+        .amount_scale(AmountScale::EN16931)
+        .positions(positions)
+        .extra_tax(FixedRateTax::new("MwSt", dec!(0.19)).unwrap().boxed())
+        .build()
+        .expect("a lawful capped document");
+
+    let inv = FromBilling::new(&doc)
+        .specification_id(profiles::EN16931.specification_id)
+        .seller(party("Stadtwerke GmbH", "DE"))
+        .buyer(party("Kunde AG", "DE"))
+        .build()
+        .expect("the cap crosses the seam");
+
+    // The credit line, as the two rules require it.
+    let credit = inv
+        .lines
+        .iter()
+        .find(|l| l.net_amount.into_decimal().is_sign_negative())
+        .expect("the cap produced a credit line");
+    assert!(
+        !credit.price.net_price.into_decimal().is_sign_negative(),
+        "BT-146 must not be negative (BR-27): {}",
+        credit.price.net_price
+    );
+    assert!(
+        credit.quantity.into_decimal().is_sign_negative(),
+        "the sign belongs on BT-129: {}",
+        credit.quantity
+    );
+
+    // The cap did its job: 640 capped to 500, VAT on 500 rather than on 640.
+    assert_eq!(inv.totals.line_total.to_string(), "500.00");
+
+    // And neither sign rule objects, under core or under the profile that runs
+    // R120 — which the core model does not.
+    for profile in [&profiles::EN16931, &profiles::PEPPOL_BIS_3] {
+        let report = profile.validate(&inv);
+        for id in ["BR-27", "PEPPOL-EN16931-R120", "BR-CO-10", "BR-S-08"] {
+            assert!(
+                !report.has(id),
+                "{id} fired under {}:\n{report}",
+                profile.id
+            );
+        }
+    }
+}
+
+/// **The cap is settled before the tax layers, so VAT is charged on the cap.**
+///
+/// This is the whole point of `maximum_charge` returning a *line* rather than a
+/// document level allowance, and it is the property a consumer depends on: a
+/// *"maximal 29,90 € im Monat"* that taxed the uncapped total would overcharge
+/// the customer by the VAT on the excess and reconcile against nothing.
+///
+/// Also asserted: the credit line's VAT category is the one the covering tax
+/// layer implies, not a default. `billing` leaves `LineItem::vat` unset on the
+/// line `maximum_charge` returns — a cap is a contractual term and only the
+/// contract names its rate — and the adapter derives it from `TaxLayer::covers`
+/// rather than guessing. `verify_vat_attribution` runs on every conversion (it
+/// is `BR-S-08`, and nothing downstream catches a failure), so a credit no layer
+/// covers is refused at the boundary rather than shipped.
+#[test]
+fn the_cap_reduces_the_taxable_base_not_only_the_total() {
+    let positions = vec![
+        LineItem::flat_fee(
+            "Verbrauch",
+            Amount::parse("640.00000").unwrap(),
+            Currency::EUR,
+        )
+        .vat(BillingLineVat::new(TaxCategory::Standard, dec!(0.19)).unwrap())
+        .build()
+        .unwrap(),
+        LineItem::credit_flat_fee(
+            "Preisobergrenze",
+            Amount::parse("140.00000").unwrap(),
+            Currency::EUR,
+        )
+        .vat(BillingLineVat::new(TaxCategory::Standard, dec!(0.19)).unwrap())
+        .build()
+        .unwrap(),
+    ];
+    let doc = BillingDocument::builder()
+        .meta(meta())
+        .amount_scale(AmountScale::EN16931)
+        .positions(positions)
+        .extra_tax(FixedRateTax::new("MwSt", dec!(0.19)).unwrap().boxed())
+        .build()
+        .expect("lawful");
+
+    let inv = FromBilling::new(&doc)
+        .specification_id(profiles::EN16931.specification_id)
+        .seller(party("Stadtwerke GmbH", "DE"))
+        .buyer(party("Kunde AG", "DE"))
+        .build()
+        .expect("the attribution holds, so the conversion is permitted");
+
+    // 640 capped to 500 — and the VAT follows the cap, not the uncapped total.
+    assert_eq!(inv.totals.line_total.to_string(), "500.00", "BT-106");
+    assert_eq!(inv.totals.taxable_total.to_string(), "500.00", "BT-109");
+    assert_eq!(
+        inv.totals.vat_total.expect("BT-110").to_string(),
+        "95.00",
+        "19 % of 500, not of 640"
+    );
+    assert_eq!(inv.totals.gross_total.to_string(), "595.00", "BT-112");
+
+    // One breakdown group, carrying the capped base.
+    assert_eq!(inv.vat_breakdown.len(), 1);
+    assert_eq!(inv.vat_breakdown[0].taxable_amount.to_string(), "500.00");
+    assert_eq!(inv.vat_breakdown[0].category, Code::new("S"));
+
+    // The credit line inherited the covering layer's category rather than a
+    // default, which is what keeps BR-S-08 true.
+    let credit = inv
+        .lines
+        .iter()
+        .find(|l| l.net_amount.into_decimal().is_sign_negative())
+        .expect("the credit line");
+    assert_eq!(credit.vat.category, Code::new("S"));
+
+    let report = validate(&inv);
+    assert!(report.is_valid(), "{report}");
+}

@@ -513,6 +513,46 @@ so the answer is exact. The conditional rules cannot be answered before the
 document exists — `BR-DE-23-a` asks for BT-84 only if BT-81 names a credit
 transfer — and `validate` remains the complete check.
 
+
+### …and can these categories even share one invoice?
+
+The other question with an exact answer before the document exists. Two of the
+ten VAT categories are **exclusive**, and they are the only rules in EN 16931
+that a set of category codes decides on its own — no amounts, no lines, no
+parties.
+
+```rust
+use en16931::VatCategory;
+use en16931::VatCategory::{OutOfScope, SplitPayment, Standard, ZeroRated};
+
+assert!(VatCategory::can_share_document(&[Standard, ZeroRated]).is_ok());
+
+// Refused, with the clause and the way out.
+let err = VatCategory::can_share_document(&[Standard, OutOfScope]).unwrap_err();
+assert_eq!(err.rules, ["BR-O-11", "BR-O-12", "BR-O-13", "BR-O-14"]);
+
+// Italy's split payment excludes the standard rate, and nothing else.
+assert!(VatCategory::can_share_document(&[SplitPayment, ZeroRated]).is_ok());
+assert!(VatCategory::can_share_document(&[SplitPayment, Standard]).is_err());
+```
+
+The case that forced it is German municipal billing. A *hoheitliche
+Abwassergebühr* is not subject to VAT (`O`); drinking water is taxable (`S`);
+and `BR-O-11` … `BR-O-14` forbid `O` from sharing a document with anything at
+all — so the combined invoice **over 90 % of municipalities issue has no valid
+EN 16931 rendering**. That is the standard's decision and no implementation can
+change it. What an implementation owes is a refusal that names the reason
+*before* the work rather than a wall of findings after it, and a clause the
+biller can quote to whoever asked for the invoice.
+
+`VatCategory::can_share_document(&invoice.categories_used())` answers for a
+document already built; `en16931 categories S O` answers on the command line.
+
+**It agrees with the validator**, which is the only property that makes a
+pre-flight worth having: a test sweeps **all 1 024 subsets** of the ten
+categories and asserts that this refuses exactly when the exclusivity rules
+report — and that every refusal cites a rule that actually fired.
+
 ---
 
 ## 💶 `InvoiceAmount` — where 21 rules go to die
@@ -762,8 +802,8 @@ represent it:
 
 ```text
 EN 16931 validation — 227 rule(s) checked, 1 finding(s), valid
-  [EN-EXT-01] BT-113 — This invoice carries extension data that the target
-  profile cannot represent. […] In Germany that is a §14c Abs. 1 UStG liability.
+  warning      [EN-EXT-01] BT-113 — This invoice carries extension data that the
+  target profile cannot represent. […] In Germany that is a §14c Abs. 1 UStG liability.
 ```
 
 Not fatal: the invoice *is* lawful. But not silent either.
@@ -1049,7 +1089,19 @@ fifty-five are not fatal:
 
 `tests/codelists.rs` reads `scenarios.xml` for the first and both Schematrons
 for the second, comparing all 121 severities the three XRechnung profiles run —
-measured, rather than transcribed. Two consequences are worth stating outright.
+measured, rather than transcribed.
+
+**And every finding leads with the one it got**, so the report says which of
+them you have to act on:
+
+```text
+XRechnung 3.0 Extension validation (…) — 296 rule(s) checked, 3 finding(s) (1 fatal, 2 information), INVALID
+  fatal        [BR-DEX-04] BG-7 — Any scheme identifier in cac:PartyIdentification MUST be …
+  information  [BR-DE-TMP-32] BT-72 — Eine Rechnung sollte zur Angabe des Liefer-/…
+  information  [BR-CL-10] BG-7 — Any identifier identification scheme identifier MUST be …
+```
+
+One field to fix, not three. Three consequences are worth stating outright.
 
 **Getting either file wrong rejects invoices Germany accepts.** `BR-CL-21` and
 `BR-CL-23` are code-list rules whose CEN tables lag the registries they track
@@ -1066,6 +1118,20 @@ reconstructed from *"which rule does each `BR-DEX-*` widen?"* — that
 reconstruction names `PEPPOL-EN16931-CL001`, which XRechnung's build does not
 merge in, and so removes nothing while CEN's `BR-CL-24` goes on rejecting
 exactly the `application/xml` attachment `BR-DEX-01` exists to permit.
+
+**A third source is the CEN release each authority built against, and the two
+differ today.** KoSIT's `v2026-01-31` configuration declares CEN Schematron
+`1.3.15`; this crate derives CEN's rules from `1.3.16`, which is CEN's current
+release and the one the conformance suite's test files come from. Between them
+CEN removed `BGN` and `ANG` from ISO 4217 (Bulgaria adopted the euro; `ANG`
+became `XCG`), added `XCG`, moved type codes `502` and `503` between the two
+`BR-CL-01` lists, and added ISO 6523 ICD `0245`–`0248`.
+
+So a **Bulgarian-lev invoice is fatal here and valid for the German reference
+validator**. Following CEN's newest release is the defensible choice; holding
+the skew unnoticed is not, so `tests/artefact_pin.rs` reads the CEN version out
+of KoSIT's changelog, fails when it changes, and pins the affected currency
+codes. The declaration deletes itself when KoSIT catches up.
 
 **And XRechnung 3.0 is therefore not a conformant CIUS.** §4.4.2 forbids a CIUS
 to accept what the core model rejects, and relaxing `BR-CL-23` does exactly that.
@@ -1236,7 +1302,7 @@ assert_eq!(report.suppressed(), ["BR-DE-15"]);
 ```
 
 ```text
-XRechnung 3.0 validation (EN 16931-1:2017+A1:2019) — 281 rule(s) checked, 27 finding(s), INVALID
+XRechnung 3.0 validation (EN 16931-1:2017+A1:2019) — 281 rule(s) checked, 27 finding(s) (26 fatal, 1 information), INVALID
   ⚠ 1 rule(s) suppressed and NOT checked: BR-DE-15
 ```
 

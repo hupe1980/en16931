@@ -22,10 +22,10 @@ pub use generated::{FORBIDDEN_ATTRIBUTES, FORBIDDEN_PATHS, TOTAL_PARAMS, UNEXTRA
 /// document element. Returns the rule id.
 #[must_use]
 pub fn forbidden_path(path: &str) -> Option<&'static str> {
-    FORBIDDEN_PATHS
-        .iter()
-        .find(|(_, ctx, rel)| crate::xml::path_matches(path, ctx, rel))
-        .map(|(id, _, _)| *id)
+    static INDEX: std::sync::OnceLock<crate::xml::ProhibitionIndex> = std::sync::OnceLock::new();
+    INDEX
+        .get_or_init(|| crate::xml::ProhibitionIndex::build(FORBIDDEN_PATHS))
+        .find(FORBIDDEN_PATHS, path)
 }
 
 /// Is this attribute forbidden anywhere in a CII document?
@@ -40,6 +40,63 @@ pub fn forbidden_attribute(name: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The index answers exactly what a full scan answers.**
+    ///
+    /// `forbidden_path` used to scan all of `FORBIDDEN_PATHS`; it now looks up
+    /// a bucket keyed by the path's last segment, which made writing a document
+    /// twenty to sixty times faster (D44). That is only sound if the two agree
+    /// on **every** input, including the ones where two prohibitions match and
+    /// the reported id has to be the same one.
+    ///
+    /// So the scan is kept here as the reference implementation and the two are
+    /// compared over every path the tables themselves describe — both the
+    /// matching case, built from each entry's own context and relative path,
+    /// and near misses built by nesting it one level deeper.
+    #[test]
+    fn the_index_agrees_with_a_full_scan() {
+        fn by_scan(path: &str) -> Option<&'static str> {
+            FORBIDDEN_PATHS
+                .iter()
+                .find(|(_, ctx, rel)| crate::xml::path_matches(path, ctx, rel))
+                .map(|(id, _, _)| *id)
+        }
+
+        let mut checked = 0usize;
+        for (_, ctx, rel) in FORBIDDEN_PATHS {
+            let root = ctx.trim_start_matches('/');
+            // Two variants rather than four: the path this entry is about,
+            // and the same nested one level deeper — which an anchored context
+            // must refuse and a floating one must still match. That is the
+            // distinction the index could plausibly get wrong, and the sweep is
+            // quadratic in the table, so the other variants cost seconds and
+            // test nothing new.
+            for path in [
+                format!("{root}/{rel}"),
+                format!("rsm:CrossIndustryInvoice/ram:Somewhere/{root}/{rel}"),
+            ] {
+                assert_eq!(
+                    forbidden_path(&path),
+                    by_scan(&path),
+                    "index and scan disagree on {path:?}"
+                );
+                checked += 1;
+            }
+        }
+
+        // Paths that are in no table at all, so both must answer `None`.
+        for path in [
+            "",
+            "/",
+            "rsm:CrossIndustryInvoice",
+            "rsm:CrossIndustryInvoice/ram:ID",
+            "a/b/c/d/e",
+        ] {
+            assert_eq!(forbidden_path(path), by_scan(path), "{path:?}");
+            checked += 1;
+        }
+        assert!(checked > 500, "the sweep should be large: {checked}");
+    }
 
     #[test]
     fn the_table_is_populated() {
