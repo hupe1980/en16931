@@ -145,7 +145,8 @@ pub fn write_for(
     invoice: &Invoice,
     profile: &'static en16931::validation::profile::Profile,
 ) -> Result<Written, crate::NotValid> {
-    crate::prepare_for(invoice, profile).map(|inv| write::write_waiving(&inv, waivers(profile)))
+    crate::prepare_for(invoice, profile, en16931::Binding::Ubl)
+        .map(|inv| write::write_waiving(&inv, waivers(profile)))
 }
 
 /// The core prohibitions a profile's declared extension groups need waived.

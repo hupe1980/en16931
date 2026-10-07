@@ -5,7 +5,7 @@
 //! > standardized meanings that can be known by the recipient. […] Codes shall
 //! > be entered exactly as shown in the selected code list.
 //!
-//! Eighteen lists, **4 887 values**, all generated from the pinned CEN
+//! Nineteen lists, **4 890 values**, all generated from the pinned CEN
 //! validation artefacts by `cargo xtask codegen` and re-verified against them by
 //! `tests/codelists.rs`. See [`generated`].
 //!
@@ -425,6 +425,7 @@ mod tests {
         ("VATEX_CODES", VATEX_CODES),
         ("VAT_CATEGORY_CODES", VAT_CATEGORY_CODES),
         ("VAT_POINT_DATE_CODES", VAT_POINT_DATE_CODES),
+        ("VAT_POINT_DATE_CODES_CII", VAT_POINT_DATE_CODES_CII),
     ];
 
     #[test]
@@ -552,5 +553,9 @@ mod tests {
         assert!(contains(PAYMENT_MEANS_CODES, "58")); // SEPA credit transfer
         assert!(contains(VATEX_CODES, "VATEX-EU-AE"));
         assert_eq!(VAT_POINT_DATE_CODES, ["3", "35", "432"]);
+        // The CII binding restricts a *different* directory: UNTDID 2475, not
+        // 2005. Disjoint from the UBL list — `5` is in one and not the other —
+        // which is why `BR-CL-06` has to know the syntax. See `validation::Binding`.
+        assert_eq!(VAT_POINT_DATE_CODES_CII, ["29", "5", "72"]);
     }
 }

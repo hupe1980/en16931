@@ -133,7 +133,7 @@ pub fn write_for(
     invoice: &Invoice,
     profile: &'static en16931::validation::profile::Profile,
 ) -> Result<Written, crate::NotValid> {
-    crate::prepare_for(invoice, profile).map(|inv| write(&inv))
+    crate::prepare_for(invoice, profile, en16931::Binding::Cii).map(|inv| write(&inv))
 }
 
 /// Write a **validated** invoice, stamping BT-24 from the profile it proved.

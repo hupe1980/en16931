@@ -32,6 +32,24 @@ const ARTEFACT: &str = "validation-1.3.16";
 const CODES_SCH: &str = "eInvoicing-EN16931/ubl/schematron/codelist/EN16931-UBL-codes.sch";
 const PEPPOL_SCH: &str = "peppol-bis-invoice-3/rules/sch/PEPPOL-EN16931-UBL.sch";
 
+/// The CII syntax's code-list Schematron.
+///
+/// Most `BR-CL-*` rules carry the *same* list in both bindings, so the UBL copy
+/// above serves them. `BR-CL-06` does not: the two bindings restrict **different**
+/// UNTDID directories — 2005 for UBL, 2475 for CII — and neither list is a subset
+/// of the other. See [`CII_ONLY`].
+const CII_CODES_SCH: &str = "eInvoicing-EN16931/cii/schematron/codelist/EN16931-CII-codes.sch";
+
+/// The code lists that differ between the UBL and CII bindings.
+///
+/// `BR-CL-06` is the one rule whose two bindings carry genuinely different lists
+/// rather than the same list under a different context. Every other `BR-CL-*`
+/// rule is syntax-independent, which is why this crate validates the abstract
+/// model and is right to. `BR-CL-06` is the exception, and validating it without
+/// knowing the syntax is what rejects a lawful CII document — see the
+/// `VAT_POINT_DATE_CODES_CII` table.
+const CII_ONLY: &[&str] = &["VAT_POINT_DATE_CODES_CII"];
+
 /// The three CEN syntax bindings, for the `BR-CL-08` union.
 const PREPROCESSED: &[(&str, &str)] = &[
     (
@@ -106,7 +124,13 @@ static TABLES: &[Table] = &[
         name: "VAT_POINT_DATE_CODES",
         rule: "BR-CL-06",
         select: Select::Unique,
-        doc: "BT-8 — a restriction of UNTDID 2005.",
+        doc: "BT-8 under the **UBL** binding — a restriction of UNTDID 2005.",
+    },
+    Table {
+        name: "VAT_POINT_DATE_CODES_CII",
+        rule: "BR-CL-06",
+        select: Select::Unique,
+        doc: "BT-8 under the **CII** binding — a restriction of UNTDID 2475. Not a superset of [`VAT_POINT_DATE_CODES`]: the two bindings restrict *different* directories, and `BR-CL-06` must check the one the document was written to. Validating a CII document against the UBL list rejects lawful invoices — `5` (deposit) among them.",
     },
     Table {
         name: "REFERENCE_QUALIFIERS",
@@ -429,6 +453,11 @@ fn rust_slice(name: &str, doc: &str, rule: &str, codes: &[String]) -> String {
 /// Build the file, and a log of what came from where.
 pub fn generate(spec: &Path) -> Result<(String, Vec<String>), String> {
     let asserts = load_asserts(&read(spec, CODES_SCH)?)?;
+    // The CII binding's copy of the code-list rules, for the tables whose list
+    // *differs* by syntax. The two files agree on every other `BR-CL-*` rule, so
+    // this is read but consulted only where [`CII_ONLY`] says the list is not
+    // syntax-independent.
+    let cii_asserts = load_asserts(&read(spec, CII_CODES_SCH)?)?;
     let mut log = Vec::new();
     let mut parts = vec![format!(
         "//! Code lists generated from the CEN validation artefacts.\n\
@@ -452,9 +481,15 @@ pub fn generate(spec: &Path) -> Result<(String, Vec<String>), String> {
     let mut names: Vec<String> = Vec::new();
 
     for table in TABLES {
-        let branches = asserts
-            .get(table.rule)
-            .ok_or_else(|| format!("{} not found in the artefact", table.rule))?;
+        let branches = if CII_ONLY.contains(&table.name) {
+            cii_asserts
+                .get(table.rule)
+                .ok_or_else(|| format!("{} not found in the CII artefact", table.rule))?
+        } else {
+            asserts
+                .get(table.rule)
+                .ok_or_else(|| format!("{} not found in the artefact", table.rule))?
+        };
         let codes: Vec<String> = match &table.select {
             Select::Index { index, why } => {
                 let branch = branches.get(*index).ok_or_else(|| {

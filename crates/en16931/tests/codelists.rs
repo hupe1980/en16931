@@ -33,8 +33,16 @@ use en16931::codes::generated::*;
 /// Location of the code-list Schematron, relative to the crate root.
 const CODES_SCH: &str = "eInvoicing-EN16931/ubl/schematron/codelist/EN16931-UBL-codes.sch";
 
+/// Location of the **CII** code-list Schematron.
+const CII_CODES_SCH: &str = "eInvoicing-EN16931/cii/schematron/codelist/EN16931-CII-codes.sch";
+
 fn artefact() -> Option<PathBuf> {
     let p = common::require("code-list verification")?.join(CODES_SCH);
+    p.exists().then_some(p)
+}
+
+fn cii_artefact() -> Option<PathBuf> {
+    let p = common::require("code-list verification")?.join(CII_CODES_SCH);
     p.exists().then_some(p)
 }
 
@@ -169,6 +177,38 @@ fn sepa_is_not_in_the_icd_table() {
         "SEPA is contextual — only under AccountingSupplierParty or PayeeParty — \
          so it belongs in the rule, not in a flat lookup table"
     );
+}
+
+/// `BR-CL-06` is the one code-list rule whose list **differs by syntax**, and
+/// both lists are pinned against the artefact that defines them.
+///
+/// The UBL binding restricts UNTDID 2005 to `3`, `35`, `432`; the CII binding
+/// restricts UNTDID 2475 to `5`, `29`, `72`. Neither contains the other, so a
+/// single flat check cannot serve both — which is why the rule takes a
+/// [`en16931::Binding`] and this test pins the CII half against the CII file
+/// rather than the UBL one `committed_tables_match_the_artefacts` reads.
+#[test]
+fn the_two_syntax_bindings_carry_different_vat_point_date_lists() {
+    let Some(path) = cii_artefact() else {
+        eprintln!("skipping: {CII_CODES_SCH} not present — run `cargo xtask fetch`");
+        return;
+    };
+    let xml = std::fs::read_to_string(&path).expect("read artefact");
+
+    assert_table_matches(
+        &xml,
+        "VAT_POINT_DATE_CODES_CII",
+        "BR-CL-06",
+        VAT_POINT_DATE_CODES_CII,
+    );
+
+    // The point of the whole change: the two lists are not nested, so checking
+    // a CII document against the UBL list is a false rejection and not merely a
+    // stricter one. `5` (deposit) is the value that exposed it.
+    assert_eq!(VAT_POINT_DATE_CODES, ["3", "35", "432"]);
+    assert_eq!(VAT_POINT_DATE_CODES_CII, ["29", "5", "72"]);
+    assert!(VAT_POINT_DATE_CODES_CII.contains(&"5"));
+    assert!(!VAT_POINT_DATE_CODES.contains(&"5"));
 }
 
 // ── The artefact gap, measured rather than claimed ────────────────────────────

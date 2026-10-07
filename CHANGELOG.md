@@ -22,7 +22,33 @@ reader upgrading nothing about whether it affected them.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **A lawful CII invoice carrying BT-8 `5` was rejected with `BR-CL-06`.**
+  `BR-CL-06` restricts BT-8 to a slice of a UNTDID directory, and the two
+  artefacts CEN publishes restrict **different** directories: UBL
+  (`EN16931-UBL-codes.sch`) gives UNTDID 2005 — `3`, `35`, `432` — while CII
+  (`EN16931-CII-codes.sch`) gives UNTDID 2475 — `5`, `29`, `72`. Neither list
+  contains the other. The crate checked only the UBL list, so every CII document
+  whose BT-8 was `5`, `29` or `72` was rejected: KoSIT's XRechnung Schematron
+  and CEN's own CII Schematron both accept them, and this crate did not. It is
+  the one `BR-CL-*` rule that is **not** syntax-independent, and it was the only
+  rule that needed a syntax the engine had no way to receive.
+
+  Validation now takes a `Binding` — `Ubl` or `Cii` — and `BR-CL-06` selects its
+  list from it. `validate`, `validate_with` and `Profile::validate` keep their
+  exact previous behaviour and check the **UBL** list; the new `validate_as`,
+  `validate_with_as`, `Profile::validate_as` and `Check::binding` name the
+  syntax, and `en16931-formats`' writers and the CLI pass it, because they are
+  the callers that read the document and therefore know. The report records the
+  binding it used, so a stored verdict says which of the two lists it applied.
+
+  The CII list is generated — `VAT_POINT_DATE_CODES_CII`, extracted from the CII
+  code-list Schematron the generator now reads — and `tests/codelists.rs` pins
+  each list against its own artefact, including that they are disjoint. The
+  worked example is the KoSIT corpus file
+  `01.02_comprehensive_test_uncefact.xml`, which goes from one fatal `BR-CL-06`
+  to zero findings.
 
 ## [0.7.0] — 2026-09-04
 

@@ -1,7 +1,7 @@
 +++
 title = "The semantic model"
 weight = 2
-description = "EN 16931's business terms and groups as Rust types: fixed-point amounts, calendar dates, per-cent percentages, signed quantities, and eighteen generated code lists."
+description = "EN 16931's business terms and groups as Rust types: fixed-point amounts, calendar dates, per-cent percentages, signed quantities, and nineteen generated code lists."
 +++
 
 EN 16931-1 defines an invoice as **164 business terms** (BT-1 … BT-165) arranged
@@ -157,9 +157,9 @@ credits 10 returned ones **on the same ordinary invoice**:
 The sign lives on the **quantity**, never on the price — BR-27 forbids a negative
 item net price.
 
-## Code lists — 4 887 values, generated
+## Code lists — 4 890 values, generated
 
-Eighteen code lists are generated from the CEN artefacts and re-verified in CI:
+Nineteen code lists are generated from the CEN artefacts and re-verified in CI:
 ISO 3166-1 countries, ISO 4217 currencies, UNTDID 1001 document types, UNTDID
 5305 VAT categories, UNTDID 4451 note subjects, UN/ECE Rec 20 and Rec 21 unit
 codes, the EAS scheme list, ISO 6523 ICD, VATEX exemption reasons, and the rest.

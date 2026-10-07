@@ -128,7 +128,7 @@ fn every_number_the_documentation_quotes_is_the_one_the_code_produces() {
         },
         Claim {
             what: "generated code values",
-            pattern: "Eighteen lists, **<N> values**",
+            pattern: "Nineteen lists, **<N> values**",
             expected: code_values,
         },
         // Two figures that live in module headers rather than in a README, and

@@ -400,10 +400,14 @@ fn validate(
         // `auto` asks the document. §7.6 exists for exactly this: BT-24 is there
         // so a receiver can apply the rules the sender generated under.
         let profile = selected.unwrap_or_else(|| declared(&loaded.invoice));
+        // The syntax the file was read as, so `BR-CL-06` checks the list its
+        // binding defines. `input::load` sniffed it; this is the one rule for
+        // which the syntax reaches the verdict.
+        let binding = loaded.container.binding();
         let report = if without.is_empty() {
-            profile.validate(&loaded.invoice)
+            profile.validate_as(&loaded.invoice, binding)
         } else {
-            let mut check = en16931::validation::Check::new(profile);
+            let mut check = en16931::validation::Check::new(profile).binding(binding);
             for rule in without {
                 check = check.without(rule.clone());
             }

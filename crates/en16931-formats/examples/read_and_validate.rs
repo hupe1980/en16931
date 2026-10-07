@@ -74,6 +74,15 @@ fn main() {
     println!("syntax: {:?}", sniff(DOCUMENT));
     assert_eq!(sniff(DOCUMENT), Some(Syntax::Ubl));
 
+    // The syntax is not only a decoding concern: `BR-CL-06` restricts a
+    // different BT-8 code list under UBL and CII, so the caller that *read* the
+    // document tells `en16931` which one applies. Here it is UBL; a CII
+    // document would pass `en16931::Binding::Cii`.
+    let binding = match sniff(DOCUMENT) {
+        Some(Syntax::Cii) => en16931::Binding::Cii,
+        _ => en16931::Binding::Ubl,
+    };
+
     let read = ubl::from_str(DOCUMENT).expect("a well-formed UBL invoice");
 
     println!("unmapped elements: {:?}", read.unmapped);
@@ -87,7 +96,7 @@ fn main() {
     println!("lines:                {}\n", invoice.lines.len());
 
     // `en16931` decides correctness. This crate re-implements none of it.
-    let report = en16931::validate(&invoice);
+    let report = en16931::validate_as(&invoice, binding);
     println!(
         "valid: {} ({} rules)",
         report.is_valid(),

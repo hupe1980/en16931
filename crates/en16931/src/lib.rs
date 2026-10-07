@@ -45,14 +45,14 @@
 //! | 6.5.5 | Percentage | [`Percentage`] — per cent (`19`), not a fraction |
 //! | 6.5.6 | Identifier | [`Identifier`] — content + scheme + scheme **version** |
 //! | 6.5.7 | Document Reference | [`DocumentReference`] — deliberately no scheme |
-//! | 6.5.8 | Code | [`codes`] — 4 887 values, generated and re-verified |
+//! | 6.5.8 | Code | [`codes`] — 4 890 values, generated and re-verified |
 //! | 6.5.9 | Date | [`Date`] — a calendar day, no time of day |
 //! | 6.5.10 | Text | `String` — 62 of the 164 terms |
 //! | 6.5.11 | Binary Object | [`Attachment`] — mime and filename mandatory |
 //!
 //! ## Status
 //!
-//! The ten semantic data types, all eighteen code lists, the [`invoice`] model,
+//! The ten semantic data types, all nineteen code lists, the [`invoice`] model,
 //! and a [`validation`] engine that registers **all 223 syntax-independent
 //! rules** of the pinned CEN artefacts — every `BR-*`, `BR-CO-*`, `BR-CL-*` and
 //! all nine VAT category families. `tests/codelists.rs` asserts that 223 against
@@ -277,7 +277,9 @@ pub use profiles::{En16931, PeppolBis3, XRechnung, XRechnungCvd, XRechnungExtens
 pub use reconcile::{ReconcileError, Reconciler, reconcile};
 pub use report::Report;
 pub use validation::profile::{Profile, Validated};
-pub use validation::{Check, Finding, ProveError, Severity, ValidationReport, validate};
+pub use validation::{
+    Binding, Check, Finding, ProveError, Severity, ValidationReport, validate, validate_as,
+};
 
 /// The notice the CEN–EC licence agreement **requires** this crate to carry.
 ///
@@ -336,10 +338,10 @@ pub const DEFAULT_EDITION: Edition = Edition::En2017A1;
 /// Convenience glob import.
 pub mod prelude {
     pub use crate::{
-        AmountError, Attachment, BtId, Date, DocumentKind, DocumentReference, En16931, Finding,
-        Group, Identifier, Invoice, InvoiceAmount, InvoiceLine, InvoiceNote, ParseAmountError,
-        ParseDateError, Path, PeppolBis3, Percentage, Profile, Quantity, Severity, UnitPriceAmount,
-        Validated, ValidationReport, VatCategory, XRechnung, XRechnungCvd, XRechnungExtension,
-        validate,
+        AmountError, Attachment, Binding, BtId, Date, DocumentKind, DocumentReference, En16931,
+        Finding, Group, Identifier, Invoice, InvoiceAmount, InvoiceLine, InvoiceNote,
+        ParseAmountError, ParseDateError, Path, PeppolBis3, Percentage, Profile, Quantity,
+        Severity, UnitPriceAmount, Validated, ValidationReport, VatCategory, XRechnung,
+        XRechnungCvd, XRechnungExtension, validate,
     };
 }
