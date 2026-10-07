@@ -206,10 +206,14 @@ impl std::fmt::Display for NotValid {
 
 impl std::error::Error for NotValid {}
 
-/// Validate against `profile`, stamping BT-24 from it, or say why not.
+/// Validate against `profile` as a document in `binding`'s syntax, stamping
+/// BT-24 from the profile, or say why not.
 ///
-/// Shared by both syntaxes: the check is about the *model*, so doing it twice
-/// would be two places for it to differ.
+/// Shared by both syntaxes, so the *model* rules are checked once — but the
+/// syntax is passed because one of them is not syntax-independent: `BR-CL-06`
+/// restricts a different UNTDID list under UBL and CII. A writer therefore
+/// names the syntax it is writing, and its verdict matches the document it
+/// would produce.
 ///
 /// The stamp happens **before** validation, not after. `BR-01` requires BT-24
 /// and XRechnung's `BR-DE-21` constrains its value, so a document validated
@@ -219,10 +223,11 @@ impl std::error::Error for NotValid {}
 fn prepare_for(
     invoice: &en16931::Invoice,
     profile: &'static en16931::validation::profile::Profile,
+    binding: en16931::Binding,
 ) -> Result<en16931::Invoice, NotValid> {
     let mut inv = invoice.clone();
     inv.specification_id = Some(profile.specification_id.to_owned());
-    let report = profile.validate(&inv);
+    let report = profile.validate_as(&inv, binding);
     if report.is_valid() {
         Ok(inv)
     } else {

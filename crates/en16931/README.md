@@ -1607,9 +1607,9 @@ to some lengths not to have.
 
 ---
 
-## 🏷️ Code lists — 4 887 values, generated and re-verified
+## 🏷️ Code lists — 4 890 values, generated and re-verified
 
-Eighteen lists, from UNCL 5305's ten VAT categories to UN/ECE Rec 20's 2 162
+Nineteen lists, from UNCL 5305's ten VAT categories to UN/ECE Rec 20's 2 162
 unit codes. All generated from the pinned CEN artefacts by `cargo xtask codegen`, all
 re-checked against them by `tests/codelists.rs`, and all re-derived in CI by
 `cargo xtask check` so they cannot drift from the artefacts they came from.
@@ -1651,7 +1651,7 @@ assert!(!VatCategory::OutOfScope.states_rate());
 
 ### Why the generator is paranoid
 
-A Schematron `test` is a **program**, not a data structure. Three of the eighteen
+A Schematron `test` is a **program**, not a data structure. Three of the nineteen
 tables cannot be read off it directly, for three different reasons:
 
 - **`BR-CL-01`** is a disjunction over `self::` — **50** codes for
@@ -1745,7 +1745,7 @@ commits, and `git clone --branch` prefers the branch — so two clones of the sa
 
 ### The code lists are generated, not written
 
-`src/codes/generated.rs` holds **4 887 values across 18 tables**. The generator
+`src/codes/generated.rs` holds **4 890 values across 19 tables**. The generator
 **fails rather than guesses**: a Schematron `test` is a program, not a data
 structure, and `BR-CL-01` alone carries two different lists in one disjunctive
 expression — 50 invoice type codes and 13 credit-note ones. An extractor that

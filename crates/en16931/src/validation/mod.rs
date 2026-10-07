@@ -25,6 +25,65 @@ use core::fmt;
 use crate::bt::{BtId, Path};
 use crate::invoice::Invoice;
 
+// ── Binding ───────────────────────────────────────────────────────────────────
+
+/// The XML syntax a document is written to, as far as validation is concerned.
+///
+/// # Why the semantic model needs this at all
+///
+/// EN 16931's `BR-CL-*` code-list rules are, in principle, properties of the
+/// abstract model: BT-8 is BT-8 whatever the wire syntax. Almost all of them are
+/// exactly that, which is why this crate can validate the model without knowing
+/// the syntax — the central claim of [`crate::validation`].
+///
+/// **`BR-CL-06` is the exception, and it is a real one.** The rule restricts
+/// BT-8 to a slice of a UNTDID directory, and the two artefacts CEN publishes
+/// restrict *different* directories:
+///
+/// * the UBL binding, `EN16931-UBL-codes.sch`, gives `3`, `35`, `432` — a
+///   restriction of **UNTDID 2005**;
+/// * the CII binding, `EN16931-CII-codes.sch`, gives `5`, `29`, `72` — a
+///   restriction of **UNTDID 2475**.
+///
+/// Neither list is a subset of the other, so a single flat check cannot serve
+/// both. The choice is not a heuristic either: CEN's own Schematron for each
+/// syntax states which list applies, and a validator that reports `BR-CL-06`
+/// should report the verdict the authority's schematron for *that* syntax
+/// would give. So the binding has to reach the rule.
+///
+/// # The default is UBL, and that is deliberate
+///
+/// [`validate`] and [`validate_with`] keep their exact previous behaviour,
+/// including the previous verdict on `BR-CL-06`: they check the **UBL** list.
+/// A caller who does not say otherwise gets what this crate has always
+/// produced, so this type is additive rather than breaking. A caller who *knows*
+/// the syntax — [`en16931_formats`] does, it read the document — names it and
+/// gets the right list.
+///
+/// [`en16931_formats`]: https://docs.rs/en16931-formats
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[non_exhaustive]
+pub enum Binding {
+    /// The UBL 2.1 binding — UBL `EN16931-UBL-codes.sch`.
+    #[default]
+    Ubl,
+    /// The UN/CEFACT CII D16B binding — `EN16931-CII-codes.sch`.
+    Cii,
+}
+
+impl Binding {
+    /// Whether this is the CII binding.
+    ///
+    /// A rule that carries two lists asks this rather than matching on the enum,
+    /// so adding a third syntax binding is a change to this method and not to
+    /// every rule.
+    #[must_use]
+    pub const fn is_cii(self) -> bool {
+        matches!(self, Self::Cii)
+    }
+}
+
 // ── RuleId ────────────────────────────────────────────────────────────────────
 
 /// A business rule identifier, compared **canonically**.
@@ -312,6 +371,15 @@ pub struct ValidationReport {
     profile: Option<String>,
     /// Which edition of EN 16931-1 those rules belong to.
     edition: crate::Edition,
+    /// The syntax binding `BR-CL-06` was checked against.
+    ///
+    /// Only that rule depends on it, but the report says which list was used so
+    /// a stored verdict is reproducible rather than depending on the reader's
+    /// guess about the syntax. `serde(default)` so a report serialised before
+    /// this field existed still deserialises — to [`Binding::Ubl`], the verdict
+    /// such a report was actually produced under.
+    #[cfg_attr(feature = "serde", serde(default))]
+    binding: Binding,
     /// Rules the caller asked to skip — see [`crate::validation::Check`].
     ///
     /// A report that quietly omits what it did not check is worse than no
@@ -408,6 +476,16 @@ impl ValidationReport {
     #[must_use]
     pub fn edition(&self) -> crate::Edition {
         self.edition
+    }
+
+    /// The syntax binding `BR-CL-06` was checked against.
+    ///
+    /// [`Binding::Ubl`] unless a caller named otherwise. Recorded so a stored
+    /// verdict says which of the two UNTDID lists it used — the two are not
+    /// nested, so the same invoice can pass under one and fail under the other.
+    #[must_use]
+    pub fn binding(&self) -> Binding {
+        self.binding
     }
 
     /// Rules the caller asked to skip, and which therefore were **not checked**.
@@ -567,13 +645,33 @@ impl fmt::Display for ValidationReport {
 pub struct Findings<'a> {
     out: &'a mut Vec<Finding>,
     rule: &'static Rule,
+    /// The syntax the document being checked is written to.
+    ///
+    /// Only `BR-CL-06` reads it — see [`Binding`] — but every rule receives it,
+    /// because a rule that needs it should not have to go through a second
+    /// channel to ask.
+    binding: Binding,
 }
 
 impl<'a> Findings<'a> {
     /// Build a sink directly, for testing a rule in isolation.
     #[cfg(test)]
     pub(crate) fn for_test(out: &'a mut Vec<Finding>, rule: &'static Rule) -> Self {
-        Self { out, rule }
+        Self {
+            out,
+            rule,
+            binding: Binding::Ubl,
+        }
+    }
+
+    /// The syntax the document being checked is written to.
+    ///
+    /// Answer [`Binding::is_cii`] for the one rule whose code list differs by
+    /// syntax. Defaults to [`Binding::Ubl`] outside a full validation run — a
+    /// rule evaluated in isolation has no document and therefore no syntax.
+    #[must_use]
+    pub const fn binding(&self) -> Binding {
+        self.binding
     }
 }
 
@@ -655,17 +753,36 @@ impl fmt::Debug for Rule {
     }
 }
 
-/// Run `rules` over `invoice`.
+/// Run `rules` over `invoice`, as a **UBL** document.
 ///
 /// Findings come back ordered by severity then path, so two runs over equal
 /// input produce byte-identical reports and a CI diff means something.
+///
+/// This checks [`Binding::Ubl`] — the behaviour this function has always had.
+/// For a CII document, whose `BR-CL-06` list differs, use
+/// [`validate_with_as`] with [`Binding::Cii`].
 #[must_use]
 pub fn validate_with(invoice: &Invoice, rules: &[&'static Rule]) -> ValidationReport {
+    validate_with_as(invoice, rules, Binding::Ubl)
+}
+
+/// Run `rules` over `invoice`, as a document in `binding`'s syntax.
+///
+/// [`validate_with`] with the syntax named. Only `BR-CL-06` reads it — see
+/// [`Binding`] — but it is threaded through the whole run so every rule may, and
+/// so the report records which list was used.
+#[must_use]
+pub fn validate_with_as(
+    invoice: &Invoice,
+    rules: &[&'static Rule],
+    binding: Binding,
+) -> ValidationReport {
     let mut findings = Vec::new();
     for rule in rules {
         let mut sink = Findings {
             out: &mut findings,
             rule,
+            binding,
         };
         (rule.eval)(invoice, &mut sink);
     }
@@ -675,6 +792,7 @@ pub fn validate_with(invoice: &Invoice, rules: &[&'static Rule]) -> ValidationRe
         checked: rules.len(),
         profile: None,
         edition: crate::DEFAULT_EDITION,
+        binding,
         suppressed: Vec::new(),
         // A bare core run is verified against CEN's release and nothing else.
         // `Profile::validate` replaces this with the profile's own list.
@@ -692,6 +810,7 @@ pub(crate) fn validate_with_all<I>(
     invoice: &Invoice,
     core: I,
     extra: &[&'static Rule],
+    binding: Binding,
 ) -> ValidationReport
 where
     I: Iterator<Item = &'static Rule>,
@@ -703,6 +822,7 @@ where
         let mut sink = Findings {
             out: &mut findings,
             rule,
+            binding,
         };
         (rule.eval)(invoice, &mut sink);
     }
@@ -712,6 +832,7 @@ where
         checked,
         profile: None,
         edition: crate::DEFAULT_EDITION,
+        binding,
         suppressed: Vec::new(),
         // A bare core run is verified against CEN's release and nothing else.
         // `Profile::validate` replaces this with the profile's own list.
@@ -739,9 +860,24 @@ fn sort_findings(findings: &mut [Finding]) {
 /// on any invoice without extension data.
 /// [`profile::Profile::validate`] withdraws the *finding* where a profile can
 /// represent the data, which is the only place the distinction is load-bearing.
+///
+/// Checks [`Binding::Ubl`]. For a CII document use [`validate_as`] with
+/// [`Binding::Cii`] — `BR-CL-06` restricts a different code list there.
 #[must_use]
 pub fn validate(invoice: &Invoice) -> ValidationReport {
     validate_with(invoice, &rules::CORE)
+}
+
+/// Run the full EN 16931 core rule set, as a document in `binding`'s syntax.
+///
+/// [`validate`] with the syntax named, which matters for exactly one rule:
+/// `BR-CL-06` restricts UNTDID 2005 under UBL and UNTDID 2475 under CII, and
+/// the two lists are not nested. A CII document is validated against the right
+/// one by passing [`Binding::Cii`]; a caller that omits it gets the UBL verdict
+/// [`validate`] has always given.
+#[must_use]
+pub fn validate_as(invoice: &Invoice, binding: Binding) -> ValidationReport {
+    validate_with_as(invoice, &rules::CORE, binding)
 }
 
 /// A validation run with **deviations**, recorded rather than hidden.
@@ -781,6 +917,7 @@ pub fn validate(invoice: &Invoice) -> ValidationReport {
 pub struct Check {
     profile: &'static profile::Profile,
     suppressed: Vec<String>,
+    binding: Binding,
 }
 
 impl Check {
@@ -795,7 +932,29 @@ impl Check {
         Self {
             profile,
             suppressed: Vec::new(),
+            binding: Binding::default(),
         }
+    }
+
+    /// The syntax this run checks against.
+    ///
+    /// Defaults to [`Binding::Ubl`], the verdict [`Check::run`] has always
+    /// given. Name [`Binding::Cii`] to check a CII document against its own
+    /// `BR-CL-06` list — which a reader of such a document knows and should say.
+    ///
+    /// ```
+    /// use en16931::profiles;
+    /// use en16931::validation::{Binding, Check};
+    ///
+    /// let report = Check::new(&profiles::EN16931)
+    ///     .binding(Binding::Cii)
+    ///     .run(&en16931::Invoice::default());
+    /// assert_eq!(report.binding(), Binding::Cii);
+    /// ```
+    #[must_use]
+    pub fn binding(mut self, binding: Binding) -> Self {
+        self.binding = binding;
+        self
     }
 
     /// Start a run against the profile `P` names, with nothing suppressed.
@@ -859,7 +1018,7 @@ impl Check {
     /// Validate, skipping the suppressed rules and recording that it did.
     #[must_use]
     pub fn run(&self, invoice: &Invoice) -> ValidationReport {
-        let mut report = self.profile.validate(invoice);
+        let mut report = self.profile.validate_as(invoice, self.binding);
         if self.suppressed.is_empty() {
             return report;
         }
@@ -908,7 +1067,9 @@ impl Check {
         if !self.suppressed.is_empty() {
             return Err(ProveError::Suppressed(self.suppressed.clone()));
         }
-        profile::Validated::new(invoice).map_err(ProveError::Rejected)
+        // The proof is produced under the same binding this `Check` validates
+        // with, so `prove` and `run` cannot disagree about `BR-CL-06`.
+        profile::Validated::new_as(invoice, self.binding).map_err(ProveError::Rejected)
     }
 }
 

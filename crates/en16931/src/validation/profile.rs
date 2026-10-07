@@ -52,7 +52,7 @@ use core::marker::PhantomData;
 
 use crate::bt::{BtId, Path};
 use crate::invoice::Invoice;
-use crate::validation::{Finding, Rule, Severity, ValidationReport, validate_with_all};
+use crate::validation::{Binding, Finding, Rule, Severity, ValidationReport, validate_with_all};
 
 /// What a [`TermAccessor`] returns: one `(where, value)` per occurrence.
 ///
@@ -526,12 +526,31 @@ impl Profile {
     /// Every check this profile carries runs, so `rules_checked()` is exactly
     /// [`check_ids`](Self::check_ids)`().count()` — the number the documentation
     /// quotes, for every profile, on every document.
+    ///
+    /// Checks [`Binding::Ubl`], which is the verdict this method has always
+    /// given. For a CII document use [`validate_as`](Self::validate_as) — see
+    /// [`Binding`], and `BR-CL-06` in particular.
     #[must_use]
     pub fn validate(&self, invoice: &Invoice) -> ValidationReport {
+        self.validate_as(invoice, Binding::Ubl)
+    }
+
+    /// Validate `invoice` against this profile, as a document in `binding`'s
+    /// syntax.
+    ///
+    /// [`validate`](Self::validate) with the syntax named, which changes the
+    /// verdict of exactly one rule: `BR-CL-06` restricts the UBL and CII
+    /// bindings to *different* UNTDID directories (2005 and 2475), and neither
+    /// list contains the other. A caller holding a CII document — one who read
+    /// it, and so knows — passes [`Binding::Cii`] and gets the list the
+    /// authority's CII Schematron uses.
+    #[must_use]
+    pub fn validate_as(&self, invoice: &Invoice, binding: Binding) -> ValidationReport {
         let mut report = validate_with_all(
             invoice,
             super::rules::CORE.iter().copied(),
             self.extra_rules,
+            binding,
         );
 
         // `EN-EXT-01` is the one core rule whose verdict depends on the *target*
@@ -793,10 +812,27 @@ impl<P: ProfileMarker> Validated<P> {
     /// The failure branch returns the invoice so a caller can fix and retry
     /// without cloning.
     ///
+    /// Checks [`Binding::Ubl`]. For a CII document use
+    /// [`new_as`](Self::new_as) — see [`Binding`].
+    ///
     /// # Errors
     /// The invoice and its report, when any fatal finding was raised.
     pub fn new(invoice: Invoice) -> Result<Self, Rejected> {
-        let report = P::PROFILE.validate(&invoice);
+        Self::new_as(invoice, Binding::Ubl)
+    }
+
+    /// Validate as a document in `binding`'s syntax, or hand the invoice back
+    /// with the reason.
+    ///
+    /// [`new`](Self::new) with the syntax named. It changes the verdict of one
+    /// rule — `BR-CL-06`, whose code list the two bindings define differently —
+    /// so a caller holding a CII document and proving it against
+    /// [`Binding::Cii`] gets a proof of the right claim.
+    ///
+    /// # Errors
+    /// The invoice and its report, when any fatal finding was raised.
+    pub fn new_as(invoice: Invoice, binding: Binding) -> Result<Self, Rejected> {
+        let report = P::PROFILE.validate_as(&invoice, binding);
         if report.is_valid() {
             Ok(Self {
                 invoice,

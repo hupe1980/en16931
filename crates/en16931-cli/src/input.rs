@@ -30,6 +30,27 @@ pub enum Container {
     },
 }
 
+impl Container {
+    /// The syntax binding validation should use for this document.
+    ///
+    /// The XML syntax, or a PDF's payload syntax. Only `BR-CL-06` reads it — the
+    /// UBL and CII artefacts restrict different UNTDID lists for BT-8 — but for
+    /// that rule the difference is a false rejection, so the CLI's `validate`
+    /// passes it rather than taking the UBL default.
+    #[must_use]
+    pub fn binding(self) -> en16931::Binding {
+        match self {
+            Self::Xml(Syntax::Cii)
+            | Self::Pdf {
+                payload: Syntax::Cii,
+            } => en16931::Binding::Cii,
+            // `Syntax` is `#[non_exhaustive]`; an unknown syntax is not a reason
+            // to panic, and UBL is the conservative default.
+            _ => en16931::Binding::Ubl,
+        }
+    }
+}
+
 impl std::fmt::Display for Container {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

@@ -404,12 +404,31 @@ rule!(BR_CL_14, "BR-CL-14", Fatal, ArtefactOnly, terms: [bt::SELLER_COUNTRY, bt:
 });
 
 rule!(BR_CL_06, "BR-CL-06", Fatal, ArtefactOnly, terms: [bt::VAT_POINT_DATE_CODE],
-"Value added tax point date code MUST be coded using a restriction of UNTDID 2005.",
+"Value added tax point date code MUST be coded using a restriction of UNTDID 2005 \
+ (UBL binding) or UNTDID 2475 (CII binding).",
 |inv, f| {
+    // **The one code-list rule that is not syntax-independent.**
+    //
+    // Every other `BR-CL-*` rule restricts the same list in both of CEN's
+    // bindings, which is what lets this crate validate the abstract model
+    // without knowing the syntax. `BR-CL-06` does not: the UBL artefact
+    // (`EN16931-UBL-codes.sch`) restricts UNTDID 2005 to `3`, `35`, `432`,
+    // while the CII artefact (`EN16931-CII-codes.sch`) restricts UNTDID 2475 to
+    // `5`, `29`, `72`. Neither list is a subset of the other, so one flat check
+    // cannot serve both and the binding has to be consulted.
+    //
+    // Checking a CII document against the UBL list is a false rejection, not a
+    // conservative one: KoSIT's own XRechnung Schematron accepts a CII invoice
+    // carrying `5`, CEN's CII Schematron accepts it, and this crate rejected it.
+    let list = if f.binding().is_cii() {
+        lists::VAT_POINT_DATE_CODES_CII
+    } else {
+        lists::VAT_POINT_DATE_CODES
+    };
     if inv
         .vat_point_date_code
         .as_ref()
-        .is_some_and(|c| !c.is_blank() && !c.is_in(lists::VAT_POINT_DATE_CODES))
+        .is_some_and(|c| !c.is_blank() && !c.is_in(list))
     {
         f.at(Path::term(bt::VAT_POINT_DATE_CODE));
     }

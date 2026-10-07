@@ -52,11 +52,17 @@ pub static CURRENCY_CODES: &[&str] = &[
     "XPT", "XSU", "XTS", "XUA", "XXX", "YER", "ZAR", "ZMW", "ZWG",
 ];
 
-/// BT-8 — a restriction of UNTDID 2005.
+/// BT-8 under the **UBL** binding — a restriction of UNTDID 2005.
 ///
 /// Source: `BR-CL-06`, CEN validation artefacts `validation-1.3.16`. 3 values.
 /// Sorted, so [`lookup`](super::contains) can binary-search it.
 pub static VAT_POINT_DATE_CODES: &[&str] = &["3", "35", "432"];
+
+/// BT-8 under the **CII** binding — a restriction of UNTDID 2475. Not a superset of [`VAT_POINT_DATE_CODES`]: the two bindings restrict *different* directories, and `BR-CL-06` must check the one the document was written to. Validating a CII document against the UBL list rejects lawful invoices — `5` (deposit) among them.
+///
+/// Source: `BR-CL-06`, CEN validation artefacts `validation-1.3.16`. 3 values.
+/// Sorted, so [`lookup`](super::contains) can binary-search it.
+pub static VAT_POINT_DATE_CODES_CII: &[&str] = &["29", "5", "72"];
 
 /// BT-128 scheme — a restriction of UNTDID 1153.
 ///
@@ -616,4 +622,5 @@ pub static TABLES: &[(&str, &[&str])] = &[
     ("VATEX_CODES", VATEX_CODES),
     ("VAT_CATEGORY_CODES", VAT_CATEGORY_CODES),
     ("VAT_POINT_DATE_CODES", VAT_POINT_DATE_CODES),
+    ("VAT_POINT_DATE_CODES_CII", VAT_POINT_DATE_CODES_CII),
 ];

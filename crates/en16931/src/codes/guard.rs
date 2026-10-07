@@ -408,9 +408,18 @@ guarded! {
     NOTE_SUBJECT / note_subject = NOTE_SUBJECT_CODES,
         terms: "BT-21", list: "UNCL 4451", rule: "BR-CL-08";
 
-    /// BT-8 — the VAT point date code.
+    /// BT-8 — the VAT point date code, **as the UBL binding defines it**.
+    ///
+    /// `BR-CL-06` is the one code-list rule whose list depends on the syntax:
+    /// UBL restricts UNTDID 2005 (`3`, `35`, `432`), CII restricts UNTDID 2475
+    /// (`5`, `29`, `72`), and neither list contains the other. This guard checks
+    /// the UBL list, because a guard runs where the *value* is written and the
+    /// syntax is often not known yet. A caller mapping a CII document wants
+    /// [`VAT_POINT_DATE_CODES_CII`](super::generated::VAT_POINT_DATE_CODES_CII);
+    /// validation picks the right one from
+    /// [`Binding`](crate::validation::Binding).
     VAT_POINT_DATE / vat_point_date = VAT_POINT_DATE_CODES,
-        terms: "BT-8", list: "UNTDID 2005, the three EN 16931 values", rule: "BR-CL-05";
+        terms: "BT-8", list: "UNTDID 2005, the three UBL EN 16931 values", rule: "BR-CL-06";
 
     /// BT-18-1 / BT-128-1 — the invoiced object identifier scheme.
     REFERENCE_QUALIFIER / reference_qualifier = REFERENCE_QUALIFIERS,
