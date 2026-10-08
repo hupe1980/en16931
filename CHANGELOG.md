@@ -22,6 +22,12 @@ reader upgrading nothing about whether it affected them.
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-10-08
+
+A schema-conformance release for CII: three ways the writer produced documents
+the D16B XSD rejects, each found because nothing here checked written CII
+against it.
+
 ### Fixed
 
 - **Every CII document with a preceding invoice date (BT-26) failed the
@@ -902,7 +908,8 @@ directions, ZUGFeRD / Factur-X extraction, and the command.
 - `en16931-cli`: `validate`, `convert`, `diff`, `extract`, `inspect`, `explain`,
   `rules`, `profiles`, and CI-shaped exit codes.
 
-[Unreleased]: https://github.com/hupe1980/en16931/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/hupe1980/en16931/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/hupe1980/en16931/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/hupe1980/en16931/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/hupe1980/en16931/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/hupe1980/en16931/compare/v0.4.0...v0.5.0
