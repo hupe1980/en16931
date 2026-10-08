@@ -686,7 +686,7 @@ mod tests {
         x.group("a:Empty", |_| {});
         let (xml, dropped) = x.finish();
         assert!(!xml.contains("Empty"), "{xml}");
-        assert!(dropped.is_empty());
+        assert!(dropped.is_empty(), "{dropped:?}");
     }
 
     #[cfg(feature = "cii")]
@@ -698,7 +698,7 @@ mod tests {
         let (xml, dropped) = x.finish();
         assert!(xml.contains("<a:Mandatory/>"), "{xml}");
         assert!(!xml.contains("Optional"), "{xml}");
-        assert!(dropped.is_empty());
+        assert!(dropped.is_empty(), "{dropped:?}");
     }
 
     #[test]
@@ -749,6 +749,6 @@ mod tests {
         x.leaf("a:First", &[], "1");
         let (xml, dropped) = x.finish();
         assert!(xml.find("Second").unwrap() < xml.find("First").unwrap());
-        assert!(dropped.is_empty());
+        assert!(dropped.is_empty(), "{dropped:?}");
     }
 }

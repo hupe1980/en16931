@@ -648,13 +648,29 @@ fn settlement(x: &mut Xml, inv: &Invoice, ccy: &str) {
             }
             x.leaf("ram:DuePayableAmount", &[], &amt(t.due));
         });
-        for p in &inv.preceding_invoices {
+        // BG-3 is 0..n in the model but D16B allows one
+        // `ram:InvoiceReferencedDocument`: a second fails the schema. The first
+        // is written, the rest reported.
+        if let Some((p, rest)) = inv.preceding_invoices.split_first() {
             x.group("ram:InvoiceReferencedDocument", |x| {
                 x.leaf("ram:IssuerAssignedID", &[], p.reference.as_str());
                 if let Some(d) = p.issue_date {
                     formatted_date(x, "ram:FormattedIssueDateTime", d);
                 }
             });
+            if !rest.is_empty() {
+                let refs: Vec<_> = rest
+                    .iter()
+                    .map(|p| format!("{:?}", p.reference.as_str()))
+                    .collect();
+                x.dropped(format!(
+                    "BG-3 PRECEDING INVOICE REFERENCE {} — CII allows only one \
+                     ram:InvoiceReferencedDocument, so only the first ({:?}) is written; \
+                     UBL carries them all",
+                    refs.join(", "),
+                    p.reference.as_str()
+                ));
+            }
         }
         if let Some(a) = &inv.accounting_reference {
             x.group("ram:ReceivableSpecifiedTradeAccountingAccount", |x| {
@@ -945,6 +961,35 @@ mod tests {
             "{}",
             out.xml
         );
+    }
+
+    /// D16B allows one `ram:InvoiceReferencedDocument`; BG-3 beyond the first
+    /// is reported, not written.
+    #[test]
+    fn only_the_first_preceding_invoice_is_written() {
+        let mut inv = Invoice::default();
+        inv.preceding_invoices = ["INV-1", "INV-2", "INV-3"]
+            .into_iter()
+            .map(|r| PrecedingInvoice {
+                reference: DocumentReference::new(r),
+                issue_date: None,
+            })
+            .collect();
+        let out = write(&inv);
+        assert_eq!(
+            out.xml.matches("<ram:InvoiceReferencedDocument>").count(),
+            1,
+            "{}",
+            out.xml
+        );
+        assert!(
+            out.xml
+                .contains("<ram:IssuerAssignedID>INV-1</ram:IssuerAssignedID>")
+        );
+        let [note] = &out.dropped[..] else {
+            panic!("expected one note, got {:?}", out.dropped);
+        };
+        assert!(note.contains("\"INV-2\", \"INV-3\""), "{note}");
     }
 
     /// BT-7 sits in a `udt:DateType`, whose child is `udt:DateString`.

@@ -49,6 +49,15 @@ reader upgrading nothing about whether it affected them.
   still read. `the_vat_point_date_is_a_date_string` and
   `the_vat_point_date_survives_both_cii_forms` pin both sides.
 
+- **A CII document with more than one preceding invoice (BG-3) failed the
+  schema.** The model allows any number, but D16B allows a single
+  `ram:InvoiceReferencedDocument`, and the writer emitted one per reference.
+  The first is written now and the rest are reported in `Written::dropped`
+  (and by `en16931 convert`), the same way other terms CII cannot carry are.
+  UBL still carries them all. Found by converting every UBL sample under
+  `spec/` to CII and checking the output against the D16B XSD; all 42 now
+  pass.
+
 ## [0.7.0] — 2026-09-04
 
 An audit release: one reachable panic, one measurement that never reached the
