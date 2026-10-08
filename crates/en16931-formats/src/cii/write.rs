@@ -19,7 +19,8 @@ static RULES: crate::xml::Rules = crate::xml::Rules {
     forbidden_attribute: prohibitions::forbidden_attribute,
 };
 
-/// The only `udt:DateTimeString` format EN 16931 permits: `CCYYMMDD`.
+/// The only date format EN 16931 permits in CII: `CCYYMMDD`, on every
+/// `udt:DateTimeString`, `udt:DateString` and `qdt:DateTimeString` alike.
 pub(super) const DATE_FORMAT: &str = "102";
 
 /// What writing produced.
@@ -44,6 +45,15 @@ fn amt(a: InvoiceAmount) -> String {
 /// ambiguous between `CCYYMMDD` and half a dozen UN/EDIFACT 2379 codes.
 fn date(x: &mut Xml, wrapper: &str, d: Date) {
     dated(x, wrapper, "udt:DateTimeString", d);
+}
+
+/// `<ram:TaxPointDate><udt:DateString format="102">…`
+///
+/// D16B types `ram:TaxPointDate` (BT-7) as `udt:DateType`, not
+/// `udt:DateTimeType`: its child is `udt:DateString`, and a
+/// `udt:DateTimeString` there fails the schema. It is the only such date.
+fn plain_date(x: &mut Xml, wrapper: &str, d: Date) {
+    dated(x, wrapper, "udt:DateString", d);
 }
 
 /// `<ram:FormattedIssueDateTime><qdt:DateTimeString format="102">…`
@@ -552,7 +562,7 @@ fn settlement(x: &mut Xml, inv: &Invoice, ccy: &str) {
                     x.leaf("ram:DueDateTypeCode", &[], c.as_str());
                 }
                 if let Some(d) = inv.vat_point_date {
-                    date(x, "ram:TaxPointDate", d);
+                    plain_date(x, "ram:TaxPointDate", d);
                 }
                 if let Some(r) = b.rate {
                     x.leaf("ram:RateApplicablePercent", &[], &r.to_string());
@@ -638,13 +648,29 @@ fn settlement(x: &mut Xml, inv: &Invoice, ccy: &str) {
             }
             x.leaf("ram:DuePayableAmount", &[], &amt(t.due));
         });
-        for p in &inv.preceding_invoices {
+        // BG-3 is 0..n in the model but D16B allows one
+        // `ram:InvoiceReferencedDocument`: a second fails the schema. The first
+        // is written, the rest reported.
+        if let Some((p, rest)) = inv.preceding_invoices.split_first() {
             x.group("ram:InvoiceReferencedDocument", |x| {
                 x.leaf("ram:IssuerAssignedID", &[], p.reference.as_str());
                 if let Some(d) = p.issue_date {
                     formatted_date(x, "ram:FormattedIssueDateTime", d);
                 }
             });
+            if !rest.is_empty() {
+                let refs: Vec<_> = rest
+                    .iter()
+                    .map(|p| format!("{:?}", p.reference.as_str()))
+                    .collect();
+                x.dropped(format!(
+                    "BG-3 PRECEDING INVOICE REFERENCE {} — CII allows only one \
+                     ram:InvoiceReferencedDocument, so only the first ({:?}) is written; \
+                     UBL carries them all",
+                    refs.join(", "),
+                    p.reference.as_str()
+                ));
+            }
         }
         if let Some(a) = &inv.accounting_reference {
             x.group("ram:ReceivableSpecifiedTradeAccountingAccount", |x| {
@@ -913,6 +939,12 @@ mod tests {
         );
     }
 
+    /// The document without its indentation, so a nested fragment can be
+    /// matched whole.
+    fn flat(xml: &str) -> String {
+        xml.lines().map(str::trim).collect()
+    }
+
     /// BT-26 sits in a `qdt:FormattedDateTimeType`, not a `udt:DateTimeType`.
     #[test]
     fn the_preceding_invoice_date_is_a_qualified_date() {
@@ -923,12 +955,65 @@ mod tests {
         }];
         let out = write(&inv);
         assert!(
-            out.xml
-                .contains("<qdt:DateTimeString format=\"102\">20261001</qdt:DateTimeString>"),
+            flat(&out.xml).contains(
+                "<ram:FormattedIssueDateTime><qdt:DateTimeString format=\"102\">20261001</qdt:DateTimeString></ram:FormattedIssueDateTime>"
+            ),
             "{}",
             out.xml
         );
-        assert!(!out.xml.contains("udt:DateTimeString"), "{}", out.xml);
+    }
+
+    /// D16B allows one `ram:InvoiceReferencedDocument`; BG-3 beyond the first
+    /// is reported, not written.
+    #[test]
+    fn only_the_first_preceding_invoice_is_written() {
+        let mut inv = Invoice::default();
+        inv.preceding_invoices = ["INV-1", "INV-2", "INV-3"]
+            .into_iter()
+            .map(|r| PrecedingInvoice {
+                reference: DocumentReference::new(r),
+                issue_date: None,
+            })
+            .collect();
+        let out = write(&inv);
+        assert_eq!(
+            out.xml.matches("<ram:InvoiceReferencedDocument>").count(),
+            1,
+            "{}",
+            out.xml
+        );
+        assert!(
+            out.xml
+                .contains("<ram:IssuerAssignedID>INV-1</ram:IssuerAssignedID>")
+        );
+        let [note] = &out.dropped[..] else {
+            panic!("expected one note, got {:?}", out.dropped);
+        };
+        assert!(note.contains("\"INV-2\", \"INV-3\""), "{note}");
+    }
+
+    /// BT-7 sits in a `udt:DateType`, whose child is `udt:DateString`.
+    #[test]
+    fn the_vat_point_date_is_a_date_string() {
+        let mut inv = Invoice::default();
+        inv.vat_point_date = Some(Date::parse("2026-01-04").expect("date"));
+        // BT-7 rides on the breakdown in CII, so there must be one.
+        inv.vat_breakdown = vec![VatBreakdown {
+            taxable_amount: InvoiceAmount::parse("100.00").expect("amount"),
+            tax_amount: InvoiceAmount::parse("19.00").expect("amount"),
+            category: Code::new("S"),
+            rate: None,
+            exemption_reason: None,
+            exemption_reason_code: None,
+        }];
+        let out = write(&inv);
+        assert!(
+            flat(&out.xml).contains(
+                "<ram:TaxPointDate><udt:DateString format=\"102\">20260104</udt:DateString></ram:TaxPointDate>"
+            ),
+            "{}",
+            out.xml
+        );
     }
 
     /// One document element for both kinds — CII tells them apart by BT-3.

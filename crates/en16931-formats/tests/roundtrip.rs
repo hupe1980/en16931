@@ -556,3 +556,28 @@ fn cii_writes_one_payment_means_element_per_account() {
         2
     );
 }
+
+/// BT-7 is a `udt:DateString` in CII, and the reader still takes the
+/// `udt:DateTimeString` this crate wrote there up to 0.7.0 — the round trip
+/// alone cannot tell the two apart, since the reader matches either.
+#[cfg(feature = "cii")]
+#[test]
+fn the_vat_point_date_survives_both_cii_forms() {
+    use en16931_formats::cii;
+
+    let inv = common::maximal();
+    assert!(inv.vat_point_date.is_some());
+    let written: String = cii::to_string(&inv).lines().map(str::trim).collect();
+    let current = "<ram:TaxPointDate><udt:DateString format=\"102\">20260115</udt:DateString></ram:TaxPointDate>";
+    assert!(written.contains(current), "{written}");
+
+    let legacy = written.replace(
+        current,
+        "<ram:TaxPointDate><udt:DateTimeString format=\"102\">20260115</udt:DateTimeString></ram:TaxPointDate>",
+    );
+    for xml in [&written, &legacy] {
+        let read = cii::from_str(xml).expect("readable");
+        assert_eq!(read.invoice.vat_point_date, inv.vat_point_date);
+        assert!(read.malformed.is_empty(), "{:?}", read.malformed);
+    }
+}

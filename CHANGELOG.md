@@ -30,13 +30,33 @@ reader upgrading nothing about whether it affected them.
   `qdt:FormattedDateTimeType`, whose child is `qdt:DateTimeString`. That hit
   nearly every credit note (BT-25 with BT-26), in the EN 16931 / Factur-X and
   the XRechnung CII profile alike: KoSIT rejected them at the schema step with
-  `cvc-complex-type.2.4.a`. BT-26 is written with the `qdt:` prefix now; nothing
-  else changes, and the reader, which matches on local names, needs no change.
+  `cvc-complex-type.2.4.a`. BT-26 is written with the `qdt:` prefix now, and the
+  reader, which matches on local names, needs no change.
 
   It got through because nothing here checks written CII against the XSD: the
   model validator sees the semantic model, and the round-trip tests read the
   document back by local name, so a wrong namespace survives both.
   `the_preceding_invoice_date_is_a_qualified_date` pins the element.
+
+- **Every CII document with a VAT point date (BT-7) failed the schema too.**
+  D16B types `ram:TaxPointDate` as `udt:DateType`, whose child is
+  `udt:DateString`; the writer put a `udt:DateTimeString` there, which KoSIT
+  rejects with `cvc-complex-type.2.4.a`. BT-7 is written as `udt:DateString`
+  now. It is the only CII date of that type — every other one is a
+  `udt:DateTimeType` and was right. The reader, which matched only
+  `DateTimeString`, would have silently dropped a conformant BT-7 from anyone
+  else's document; it now accepts either child, so documents written by 0.7.0
+  still read. `the_vat_point_date_is_a_date_string` and
+  `the_vat_point_date_survives_both_cii_forms` pin both sides.
+
+- **A CII document with more than one preceding invoice (BG-3) failed the
+  schema.** The model allows any number, but D16B allows a single
+  `ram:InvoiceReferencedDocument`, and the writer emitted one per reference.
+  The first is written now and the rest are reported in `Written::dropped`
+  (and by `en16931 convert`), the same way other terms CII cannot carry are.
+  UBL still carries them all. Found by converting every UBL sample under
+  `spec/` to CII and checking the output against the D16B XSD; all 42 now
+  pass.
 
 ## [0.7.0] — 2026-09-04
 
