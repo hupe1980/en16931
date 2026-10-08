@@ -113,12 +113,16 @@ impl Reader {
 
     /// `<ram:Foo><udt:DateTimeString format="102">20260115</udt:DateTimeString></ram:Foo>`
     ///
+    /// `ram:TaxPointDate` (BT-7) carries a `udt:DateString` instead. Either
+    /// child is accepted on any wrapper: this crate wrote BT-7 as a
+    /// `DateTimeString` up to 0.7.0, and refusing those would drop the date.
+    ///
     /// A format other than `102` is *reported*, not guessed at: `20260103`
     /// under format `101` (`YYMMDD`) would silently become a date six years
     /// wrong, and the standard permits only `102`.
     fn date(&mut self, n: Node<'_, '_>, want: &str) -> Option<Date> {
         let wrapper = kid(n, want)?;
-        let s = kid(wrapper, "DateTimeString")?;
+        let s = kid(wrapper, "DateTimeString").or_else(|| kid(wrapper, "DateString"))?;
         let raw = own_text(s);
         match s.attribute("format") {
             Some(super::write::DATE_FORMAT) | None => {}
