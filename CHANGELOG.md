@@ -22,7 +22,21 @@ reader upgrading nothing about whether it affected them.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **Every CII document with a preceding invoice date (BT-26) failed the
+  schema.** The writer wrapped all dates in `udt:DateTimeString`, but D16B types
+  `ram:InvoiceReferencedDocument/ram:FormattedIssueDateTime` as
+  `qdt:FormattedDateTimeType`, whose child is `qdt:DateTimeString`. That hit
+  nearly every credit note (BT-25 with BT-26), in the EN 16931 / Factur-X and
+  the XRechnung CII profile alike: KoSIT rejected them at the schema step with
+  `cvc-complex-type.2.4.a`. BT-26 is written with the `qdt:` prefix now; nothing
+  else changes, and the reader, which matches on local names, needs no change.
+
+  It got through because nothing here checks written CII against the XSD: the
+  model validator sees the semantic model, and the round-trip tests read the
+  document back by local name, so a wrong namespace survives both.
+  `the_preceding_invoice_date_is_a_qualified_date` pins the element.
 
 ## [0.7.0] — 2026-09-04
 

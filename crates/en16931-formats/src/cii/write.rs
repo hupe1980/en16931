@@ -43,9 +43,22 @@ fn amt(a: InvoiceAmount) -> String {
 /// format attribute is not optional — a `udt:DateTimeString` without it is
 /// ambiguous between `CCYYMMDD` and half a dozen UN/EDIFACT 2379 codes.
 fn date(x: &mut Xml, wrapper: &str, d: Date) {
+    dated(x, wrapper, "udt:DateTimeString", d);
+}
+
+/// `<ram:FormattedIssueDateTime><qdt:DateTimeString format="102">…`
+///
+/// The same content as [`date`], in the other namespace: D16B types
+/// `ram:FormattedIssueDateTime` as `qdt:FormattedDateTimeType`, whose child is
+/// `qdt:DateTimeString`. A `udt:` child there fails the schema.
+fn formatted_date(x: &mut Xml, wrapper: &str, d: Date) {
+    dated(x, wrapper, "qdt:DateTimeString", d);
+}
+
+fn dated(x: &mut Xml, wrapper: &str, element: &str, d: Date) {
     x.group(wrapper, |x| {
         x.leaf(
-            "udt:DateTimeString",
+            element,
             &[("format", DATE_FORMAT)],
             &format!("{:04}{:02}{:02}", d.year(), d.month(), d.day()),
         );
@@ -629,7 +642,7 @@ fn settlement(x: &mut Xml, inv: &Invoice, ccy: &str) {
             x.group("ram:InvoiceReferencedDocument", |x| {
                 x.leaf("ram:IssuerAssignedID", &[], p.reference.as_str());
                 if let Some(d) = p.issue_date {
-                    date(x, "ram:FormattedIssueDateTime", d);
+                    formatted_date(x, "ram:FormattedIssueDateTime", d);
                 }
             });
         }
@@ -898,6 +911,24 @@ mod tests {
             "{}",
             out.xml
         );
+    }
+
+    /// BT-26 sits in a `qdt:FormattedDateTimeType`, not a `udt:DateTimeType`.
+    #[test]
+    fn the_preceding_invoice_date_is_a_qualified_date() {
+        let mut inv = Invoice::default();
+        inv.preceding_invoices = vec![PrecedingInvoice {
+            reference: DocumentReference::new("INV-1"),
+            issue_date: Some(Date::parse("2026-10-01").expect("date")),
+        }];
+        let out = write(&inv);
+        assert!(
+            out.xml
+                .contains("<qdt:DateTimeString format=\"102\">20261001</qdt:DateTimeString>"),
+            "{}",
+            out.xml
+        );
+        assert!(!out.xml.contains("udt:DateTimeString"), "{}", out.xml);
     }
 
     /// One document element for both kinds — CII tells them apart by BT-3.
