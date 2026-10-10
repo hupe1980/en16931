@@ -60,6 +60,23 @@ struct Defects {
     not_in_name_tree: bool,
     /// Write no `/AFRelationship` on the file specification.
     no_relationship: bool,
+    /// Write `/UF` and the name-tree key as UTF-16BE text strings, as Intarsys
+    /// and most Factur-X producers do. Not a defect — the common case.
+    utf16_names: bool,
+    /// Put `/AF`, the name tree's `/Names` array and `/UF` behind indirect
+    /// references. Lawful for any value, and what several producers write.
+    indirect: bool,
+}
+
+/// `name` as a UTF-16BE PDF text string, byte-order mark first.
+fn utf16be(name: &str) -> Object {
+    Object::String(
+        [0xFE, 0xFF]
+            .into_iter()
+            .chain(name.encode_utf16().flat_map(u16::to_be_bytes))
+            .collect(),
+        lopdf::StringFormat::Hexadecimal,
+    )
 }
 
 /// A conforming hybrid PDF carrying `attachments`.
@@ -114,10 +131,21 @@ fn build_full(
             dictionary! { "Type" => "EmbeddedFile", "Subtype" => "text/xml" },
             bytes.to_vec(),
         ));
+        let unicode = || {
+            if defects.utf16_names {
+                utf16be(name)
+            } else {
+                Object::string_literal(*name)
+            }
+        };
         let mut filespec = dictionary! {
             "Type" => "Filespec",
             "F" => Object::string_literal(*name),
-            "UF" => Object::string_literal(*name),
+            "UF" => if defects.indirect {
+                Object::Reference(doc.add_object(unicode()))
+            } else {
+                unicode()
+            },
             "EF" => dictionary! { "F" => stream, "UF" => stream },
         };
         if !defects.no_relationship {
@@ -125,10 +153,15 @@ fn build_full(
         }
         let spec = doc.add_object(filespec);
         associated.push(Object::Reference(spec));
-        names.push(Object::string_literal(*name));
+        names.push(unicode());
         names.push(spec.into());
     }
 
+    let names = if defects.indirect {
+        Object::Reference(doc.add_object(names))
+    } else {
+        Object::Array(names)
+    };
     let embedded = doc.add_object(dictionary! { "Names" => names });
     let mut catalog_dict = dictionary! {
         "Type" => "Catalog",
@@ -141,7 +174,12 @@ fn build_full(
         );
     }
     if !defects.not_associated {
-        catalog_dict.set("AF", Object::Array(associated));
+        let associated = if defects.indirect {
+            Object::Reference(doc.add_object(associated))
+        } else {
+            Object::Array(associated)
+        };
+        catalog_dict.set("AF", associated);
     }
     if let Some(packet) = metadata {
         let meta = doc.add_object(Stream::new(
@@ -434,6 +472,50 @@ fn an_attachment_outside_the_embedded_files_tree_is_reported() {
     );
     let got = en16931_formats::zugferd::extract(&pdf).expect("extract");
     assert_eq!(got.divergence, vec![Divergence::NotInEmbeddedFiles]);
+}
+
+/// `/UF` and the name-tree key in UTF-16BE, as PDF text strings usually are.
+///
+/// Read as UTF-8, `factur-x.xml` became `"\u{FFFD}\u{FFFD}\0f\0a…"`: no invoice
+/// found, and the name-tree check failed on the same bytes.
+#[test]
+fn utf16_file_names_are_decoded() {
+    let pdf = pdf_with_defects(
+        &[("factur-x.xml", INVOICE.as_bytes())],
+        Defects {
+            utf16_names: true,
+            ..Defects::default()
+        },
+    );
+    let files = en16931_formats::zugferd::embedded_files(&pdf).expect("parse");
+    assert_eq!(files.keys().collect::<Vec<_>>(), ["factur-x.xml"]);
+    let got = en16931_formats::zugferd::extract(&pdf).expect("extract");
+    assert_eq!(got.xml, INVOICE);
+    assert_eq!(
+        got.divergence,
+        vec![],
+        "in the name tree, associated, related"
+    );
+}
+
+/// `/AF 21 0 R` rather than an inline array — the ZUGFeRD corpus has both.
+///
+/// Reading only the inline form reported a conforming file as not associated.
+#[test]
+fn indirect_arrays_and_names_are_followed() {
+    for utf16_names in [false, true] {
+        let pdf = pdf_with_defects(
+            &[("factur-x.xml", INVOICE.as_bytes())],
+            Defects {
+                indirect: true,
+                utf16_names,
+                ..Defects::default()
+            },
+        );
+        let got = en16931_formats::zugferd::extract(&pdf).expect("extract");
+        assert_eq!(got.xml, INVOICE);
+        assert_eq!(got.divergence, vec![], "utf16_names: {utf16_names}");
+    }
 }
 
 /// Nothing in the file says whether the XML is the invoice.

@@ -22,6 +22,35 @@ reader upgrading nothing about whether it affected them.
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-10-10
+
+A ZUGFeRD extraction release: 86 of the 151 PDFs in the public ZUGFeRD corpus
+could not be read, because file names were decoded as UTF-8 and indirect
+references were not followed.
+
+### Fixed
+
+- **`zugferd::extract` could not read 86 of the 151 PDFs in the public
+  ZUGFeRD corpus**, 78 of them valid samples. Two causes:
+
+  - **File names were read as UTF-8.** PDF text strings are UTF-16BE behind a
+    `FE FF` mark, or PDFDocEncoding. `/UF` is normally the former, so
+    `factur-x.xml` came out as `"\u{FFFD}\u{FFFD}\0f\0a…"`, matched nothing,
+    and the usable `/F` was never tried. The name-tree keys behind the
+    `NotInEmbeddedFiles` check were read the same way. (67 files.)
+  - **Indirect objects were not followed.** `/AF 21 0 R`, an `/EF` or `/UF`
+    behind a reference, and a name tree whose `/Names` or `/Kids` is a
+    reference are all lawful. Each was read as absent, so the invoice was
+    not found (19 files) or was reported as `NotAssociated` (20 more).
+
+  Names are now decoded strictly. A `/UF` that does not decode falls back to
+  `/F`. A name with a byte PDFDocEncoding leaves undefined does not decode at
+  all, rather than losing that byte and matching an invoice file name it is
+  not. `lopdf::decode_text_string` alone would have padded an odd UTF-16
+  length, kept a UTF-8 byte-order mark, and dropped undefined bytes. Over the
+  corpus, the failures go from 88 to 2: one PDF with no invoice in it, and one
+  that deliberately uses the wrong file name.
+
 ## [0.7.1] — 2026-10-08
 
 A schema-conformance release for CII: three ways the writer produced documents
@@ -908,7 +937,8 @@ directions, ZUGFeRD / Factur-X extraction, and the command.
 - `en16931-cli`: `validate`, `convert`, `diff`, `extract`, `inspect`, `explain`,
   `rules`, `profiles`, and CI-shaped exit codes.
 
-[Unreleased]: https://github.com/hupe1980/en16931/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/hupe1980/en16931/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/hupe1980/en16931/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/hupe1980/en16931/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/hupe1980/en16931/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/hupe1980/en16931/compare/v0.5.0...v0.6.0
