@@ -497,6 +497,33 @@ impl Reader {
                         inv.allowances.push(a);
                     }
                 }
+                // ZUGFeRD / Factur-X EXTENDED's freight and packing charge.
+                // FeRD's BR-FXEXT-CO-12 counts it in BT-108 and its VAT rules
+                // in BT-116, so it *is* a document-level charge, and leaving it
+                // out made BT-108 disagree with the model and a UBL conversion
+                // write a charge total with no charge behind it.
+                //
+                // Only under an extension (`#conformant#` in BT-24, EN 16931
+                // §4.3). For the core, CEN's CII-SR-396 says the element should
+                // not be present and CEN's BR-CO-12 does not count it; mapping
+                // it there would accept a document CEN rejects.
+                "SpecifiedLogisticsServiceCharge"
+                    if inv
+                        .specification_id
+                        .as_deref()
+                        .is_some_and(|s| s.contains("#conformant#")) =>
+                {
+                    inv.charges.push(DocumentAllowanceCharge {
+                        amount: self.amount(c, "AppliedAmount").unwrap_or_default(),
+                        base_amount: None,
+                        percentage: None,
+                        vat: kid(c, "AppliedTradeTax")
+                            .map(|t| Self::line_vat(t))
+                            .unwrap_or_default(),
+                        reason: text(c, "Description"),
+                        reason_code: None,
+                    });
+                }
                 "SpecifiedTradePaymentTerms" => {
                     // **Not trimmed**, exactly as the UBL reader does not trim
                     // it. `BR-DE-18` requires the Skonto block to end with a

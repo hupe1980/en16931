@@ -581,3 +581,89 @@ fn the_vat_point_date_survives_both_cii_forms() {
         assert!(read.malformed.is_empty(), "{:?}", read.malformed);
     }
 }
+
+/// EXTENDED's `ram:SpecifiedLogisticsServiceCharge` is a document-level
+/// charge: FeRD's BR-FXEXT-CO-12 counts it in BT-108. Read under an extension
+/// it becomes BG-21; under the core it stays unmapped, as CEN's BR-CO-12 does
+/// not count it.
+#[cfg(feature = "cii")]
+#[test]
+fn a_logistics_service_charge_is_a_charge_only_under_an_extension() {
+    use en16931_formats::cii;
+
+    let inv = common::maximal();
+    let [freight] = &inv.charges[..] else {
+        panic!("the fixture carries one charge");
+    };
+    let written = cii::to_string(&inv);
+    let start = written
+        .find("<ram:SpecifiedTradeAllowanceCharge>\n        <ram:ChargeIndicator>\n          <udt:Indicator>true")
+        .expect("the charge is written");
+    let end = start
+        + written[start..]
+            .find("</ram:SpecifiedTradeAllowanceCharge>")
+            .expect("closed")
+        + "</ram:SpecifiedTradeAllowanceCharge>".len();
+    let logistics = format!(
+        "<ram:SpecifiedLogisticsServiceCharge>\
+           <ram:Description>freight</ram:Description>\
+           <ram:AppliedAmount>{}</ram:AppliedAmount>\
+           <ram:AppliedTradeTax>\
+             <ram:TypeCode>VAT</ram:TypeCode>\
+             <ram:CategoryCode>{}</ram:CategoryCode>\
+             <ram:RateApplicablePercent>19</ram:RateApplicablePercent>\
+           </ram:AppliedTradeTax>\
+         </ram:SpecifiedLogisticsServiceCharge>",
+        freight.amount,
+        freight.vat.category.as_str(),
+    );
+    let core = format!("{}{logistics}{}", &written[..start], &written[end..]);
+    let id = inv.specification_id.as_deref().expect("BT-24");
+    let extended = core.replace(
+        id,
+        "urn:cen.eu:en16931:2017#conformant#urn:factur-x.eu:1p0:extended",
+    );
+
+    let read = cii::from_str(&extended).expect("readable");
+    let [charge] = &read.invoice.charges[..] else {
+        panic!("one charge, got {:?}", read.invoice.charges);
+    };
+    assert_eq!(charge.amount, freight.amount);
+    assert_eq!(charge.vat, freight.vat);
+    assert_eq!(charge.reason.as_deref(), Some("freight"));
+    assert!(
+        !read
+            .unmapped
+            .iter()
+            .any(|u| u.contains("LogisticsServiceCharge")),
+        "{:?}",
+        read.unmapped
+    );
+    let report = en16931::validate(&read.invoice);
+    assert!(
+        !report
+            .findings()
+            .iter()
+            .any(|f| f.rule == "BR-CO-12" || f.rule == "BR-S-08"),
+        "{report}"
+    );
+
+    let read = cii::from_str(&core).expect("readable");
+    assert!(
+        read.invoice.charges.is_empty(),
+        "{:?}",
+        read.invoice.charges
+    );
+    assert!(
+        read.unmapped
+            .iter()
+            .any(|u| u == "ApplicableHeaderTradeSettlement/SpecifiedLogisticsServiceCharge"),
+        "{:?}",
+        read.unmapped
+    );
+    let report = en16931::validate(&read.invoice);
+    assert!(
+        report.findings().iter().any(|f| f.rule == "BR-CO-12"),
+        "{report}"
+    );
+}
