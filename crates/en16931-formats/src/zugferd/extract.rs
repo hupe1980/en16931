@@ -304,7 +304,7 @@ fn collect_embedded(doc: &lopdf::Document) -> BTreeMap<String, Vec<u8>> {
         if !is_filespec {
             continue;
         }
-        let Some(name) = filespec_name(dict) else {
+        let Some(name) = filespec_name(doc, dict) else {
             continue;
         };
         let Some(bytes) = filespec_bytes(doc, dict) else {
@@ -340,7 +340,7 @@ fn placement(doc: &lopdf::Document, filename: &str) -> Placement {
     let Some((id, dict)) = doc.objects.iter().find_map(|(id, object)| {
         let dict = object.as_dict().ok()?;
         (dict.get(b"Type").ok()?.as_name().ok()? == b"Filespec"
-            && filespec_name(dict).is_some_and(|n| n.eq_ignore_ascii_case(filename)))
+            && filespec_name(doc, dict).is_some_and(|n| n.eq_ignore_ascii_case(filename)))
         .then_some((*id, dict))
     }) else {
         return Placement::default();
@@ -367,7 +367,14 @@ fn catalog_associated_files(doc: &lopdf::Document) -> Vec<lopdf::ObjectId> {
     let Ok(catalog) = doc.catalog() else {
         return Vec::new();
     };
-    let Ok(af) = catalog.get(b"AF").and_then(lopdf::Object::as_array) else {
+    // `/AF 21 0 R` is as lawful as an inline array, and the ZUGFeRD corpus
+    // has both; reading only the inline one reported a conforming file as
+    // having nothing associated.
+    let Ok(af) = catalog
+        .get(b"AF")
+        .and_then(|o| doc.dereference(o))
+        .and_then(|(_, o)| o.as_array())
+    else {
         return Vec::new();
     };
     af.iter()
@@ -392,15 +399,27 @@ fn embedded_file_names(doc: &lopdf::Document) -> Vec<String> {
         if depth > MAX_DEPTH {
             return;
         }
-        if let Ok(names) = node.get(b"Names").and_then(lopdf::Object::as_array) {
+        if let Ok(names) = node
+            .get(b"Names")
+            .and_then(|o| doc.dereference(o))
+            .and_then(|(_, o)| o.as_array())
+        {
             // `[name value name value …]` — the names are the even positions.
             for entry in names.iter().step_by(2) {
-                if let Ok(raw) = entry.as_str() {
-                    out.push(String::from_utf8_lossy(raw).into_owned());
+                if let Some(name) = doc
+                    .dereference(entry)
+                    .ok()
+                    .and_then(|(_, o)| text_string(o))
+                {
+                    out.push(name);
                 }
             }
         }
-        if let Ok(kids) = node.get(b"Kids").and_then(lopdf::Object::as_array) {
+        if let Ok(kids) = node
+            .get(b"Kids")
+            .and_then(|o| doc.dereference(o))
+            .and_then(|(_, o)| o.as_array())
+        {
             for kid in kids {
                 if let Ok(dict) = doc.dereference(kid).and_then(|(_, o)| o.as_dict()) {
                     walk(doc, dict, depth + 1, out);
@@ -411,7 +430,10 @@ fn embedded_file_names(doc: &lopdf::Document) -> Vec<String> {
 
     let mut out = Vec::new();
     if let Ok(catalog) = doc.catalog()
-        && let Ok(names) = catalog.get(b"Names").and_then(lopdf::Object::as_dict)
+        && let Ok(names) = catalog
+            .get(b"Names")
+            .and_then(|o| doc.dereference(o))
+            .and_then(|(_, o)| o.as_dict())
         && let Ok(tree) = names
             .get(b"EmbeddedFiles")
             .and_then(|o| doc.dereference(o))
@@ -429,20 +451,63 @@ fn embedded_file_names(doc: &lopdf::Document) -> Vec<String> {
 /// "factur-x.xml" whatever it is actually named — name confusion in the one
 /// place where the name decides which bytes a receiver treats as the
 /// document.
-fn filespec_name(dict: &lopdf::Dictionary) -> Option<String> {
-    for key in [&b"UF"[..], &b"F"[..]] {
-        if let Ok(obj) = dict.get(key)
-            && let Ok(s) = obj.as_str()
-        {
-            return Some(String::from_utf8_lossy(s).into_owned());
+///
+/// A `/UF` that is present but does not decode, or decodes to nothing, falls
+/// through to `/F` rather than hiding it.
+fn filespec_name(doc: &lopdf::Document, dict: &lopdf::Dictionary) -> Option<String> {
+    [&b"UF"[..], &b"F"[..]]
+        .into_iter()
+        .filter_map(|key| dict.get(key).and_then(|o| doc.dereference(o)).ok())
+        .filter_map(|(_, o)| text_string(o))
+        .find(|name| !name.is_empty())
+}
+
+/// A PDF text string (PDF 32000-1 § 7.9.2.2), or `None` if it does not decode.
+///
+/// Not UTF-8: `/UF` is normally UTF-16BE behind a `FE FF` mark, which
+/// `from_utf8_lossy` turned into `"\u{FFFD}\u{FFFD}\0f\0a…"` and so matched no
+/// invoice file name at all. Decoded strictly, and not with
+/// `lopdf::decode_text_string` alone, for three reasons:
+///
+/// * it pads an odd trailing UTF-16 byte instead of refusing it;
+/// * it keeps the `EF BB BF` mark of a UTF-8 text string in the result, so a
+///   PDF 2.0 `/UF` still would not match;
+/// * its `PDFDocEncoding` branch drops bytes the encoding leaves undefined, so a
+///   name with one such byte could come out as exactly `factur-x.xml` — the
+///   name confusion this module refuses elsewhere (see [`filespec_name`] on
+///   `/Desc`).
+///
+/// It is still used for `PDFDocEncoding` itself, and its result is accepted only
+/// when every byte came back as a character.
+fn text_string(obj: &lopdf::Object) -> Option<String> {
+    let raw = obj.as_str().ok()?;
+    if let Some(be) = raw.strip_prefix(b"\xFE\xFF") {
+        if be.len() % 2 != 0 {
+            return None;
         }
+        let units: Vec<u16> = be
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_be_bytes(*c))
+            .collect();
+        return String::from_utf16(&units).ok();
     }
-    None
+    if let Some(utf8) = raw.strip_prefix(b"\xEF\xBB\xBF") {
+        return String::from_utf8(utf8.to_vec()).ok();
+    }
+    let s = lopdf::decode_text_string(obj).ok()?;
+    (s.chars().count() == raw.len()).then_some(s)
 }
 
 /// The decompressed contents of a `/Filespec`'s embedded stream.
 fn filespec_bytes(doc: &lopdf::Document, dict: &lopdf::Dictionary) -> Option<Vec<u8>> {
-    let ef = dict.get(b"EF").ok()?.as_dict().ok()?;
+    let ef = doc
+        .dereference(dict.get(b"EF").ok()?)
+        .ok()?
+        .1
+        .as_dict()
+        .ok()?;
     // `/F` is the usual key; `/UF` appears alongside it in files produced for
     // Unicode-aware readers and is the same stream.
     let stream_ref = ef.get(b"F").or_else(|_| ef.get(b"UF")).ok()?;
@@ -703,6 +768,7 @@ fn specification_id(xml: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lopdf::dictionary;
 
     #[test]
     fn bt24_is_found_in_a_cii_fragment() {
@@ -744,5 +810,94 @@ mod tests {
     #[test]
     fn bytes_that_are_not_a_pdf_say_so() {
         assert!(matches!(extract(b"not a pdf"), Err(Error::Pdf(_))));
+    }
+
+    fn literal(raw: &[u8]) -> lopdf::Object {
+        lopdf::Object::String(raw.to_vec(), lopdf::StringFormat::Literal)
+    }
+
+    fn utf16be(name: &str) -> Vec<u8> {
+        [0xFE, 0xFF]
+            .into_iter()
+            .chain(name.encode_utf16().flat_map(u16::to_be_bytes))
+            .collect()
+    }
+
+    #[test]
+    fn a_utf16be_text_string_is_decoded() {
+        let got = text_string(&literal(&utf16be("factur-x.xml")));
+        assert_eq!(got.as_deref(), Some("factur-x.xml"));
+    }
+
+    /// `lopdf::decode_text_string` pads the stray byte and returns a name.
+    #[test]
+    fn an_odd_utf16be_length_does_not_decode() {
+        let mut raw = utf16be("factur-x.xml");
+        raw.push(b'A');
+        assert_eq!(text_string(&literal(&raw)), None);
+    }
+
+    #[test]
+    fn an_unpaired_surrogate_does_not_decode() {
+        let mut raw = utf16be("factur-x.xml");
+        raw.extend([0xD8, 0x00]);
+        assert_eq!(text_string(&literal(&raw)), None);
+    }
+
+    /// `lopdf::decode_text_string` keeps the mark: `"\u{FEFF}factur-x.xml"`.
+    #[test]
+    fn a_utf8_text_string_loses_its_mark() {
+        let got = text_string(&literal(b"\xEF\xBB\xBFfactur-x.xml"));
+        assert_eq!(got.as_deref(), Some("factur-x.xml"));
+    }
+
+    #[test]
+    fn pdfdocencoding_is_decoded() {
+        assert_eq!(
+            text_string(&literal(b"factur-x.xml")).as_deref(),
+            Some("factur-x.xml")
+        );
+        // 0xE4 is `ä` in PDFDocEncoding; `from_utf8_lossy` made it U+FFFD.
+        assert_eq!(
+            text_string(&literal(b"rechnung-\xE4.xml")).as_deref(),
+            Some("rechnung-\u{e4}.xml")
+        );
+    }
+
+    /// 0x7F is undefined in `PDFDocEncoding`, and `lopdf` drops it: the name
+    /// would come back as exactly `factur-x.xml`.
+    #[test]
+    fn an_undefined_pdfdocencoding_byte_does_not_decode() {
+        assert_eq!(text_string(&literal(b"factur-x.xml\x7F")), None);
+        assert_eq!(text_string(&literal(b"factur\x7F-x.xml")), None);
+    }
+
+    #[test]
+    fn a_unicode_name_that_does_not_decode_falls_back_to_the_byte_name() {
+        let mut uf = utf16be("factur-x.xml");
+        uf.push(b'A');
+        let dict = dictionary! { "UF" => literal(&uf), "F" => literal(b"factur-x.xml") };
+        assert_eq!(
+            filespec_name(&lopdf::Document::new(), &dict).as_deref(),
+            Some("factur-x.xml")
+        );
+
+        let dict = dictionary! { "UF" => literal(b""), "F" => literal(b"factur-x.xml") };
+        assert_eq!(
+            filespec_name(&lopdf::Document::new(), &dict).as_deref(),
+            Some("factur-x.xml")
+        );
+    }
+
+    #[test]
+    fn the_unicode_name_wins_when_it_decodes() {
+        let dict = dictionary! {
+            "UF" => literal(&utf16be("factur-x.xml")),
+            "F" => literal(b"FACTUR~1.XML"),
+        };
+        assert_eq!(
+            filespec_name(&lopdf::Document::new(), &dict).as_deref(),
+            Some("factur-x.xml")
+        );
     }
 }
