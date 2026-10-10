@@ -22,6 +22,30 @@ reader upgrading nothing about whether it affected them.
 
 ## [Unreleased]
 
+## [0.7.3] — 2026-10-10
+
+A ZUGFeRD EXTENDED release: the CII reader now keeps the logistics service
+charge that EXTENDED counts in its totals, so four correct invoices in the
+ZUGFeRD corpus validate and convert to valid UBL.
+
+### Fixed
+
+- **The CII reader lost EXTENDED's logistics service charge.** ZUGFeRD /
+  Factur-X EXTENDED may put a header-level `ram:SpecifiedLogisticsServiceCharge`
+  (freight, packing) in `ApplicableHeaderTradeSettlement`. FeRD's
+  `BR-FXEXT-CO-12` counts it in BT-108, and its VAT rules count it in BT-116.
+  The reader listed it as unmapped and kept the totals, so the model had a
+  charge total with no charge behind it. Validation failed `BR-CO-12` and
+  `BR-S-08` on four correct invoices in the ZUGFeRD corpus, and a conversion
+  to UBL wrote an invoice that was itself invalid. Under an extension
+  (`#conformant#` in BT-24), the charge is now read as a document-level charge
+  (BG-21): amount, VAT category and rate, and the description as the reason.
+
+  A core document keeps the old behaviour. CEN's CII rules only warn about
+  the element (`CII-SR-396`) and do not count it in `BR-CO-12`, so mapping it
+  there would accept a document CEN rejects. The line-level element
+  (`CII-SR-195`) is unchanged.
+
 ## [0.7.2] — 2026-10-10
 
 A ZUGFeRD extraction release: 86 of the 151 PDFs in the public ZUGFeRD corpus
@@ -937,7 +961,8 @@ directions, ZUGFeRD / Factur-X extraction, and the command.
 - `en16931-cli`: `validate`, `convert`, `diff`, `extract`, `inspect`, `explain`,
   `rules`, `profiles`, and CI-shaped exit codes.
 
-[Unreleased]: https://github.com/hupe1980/en16931/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/hupe1980/en16931/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/hupe1980/en16931/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/hupe1980/en16931/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/hupe1980/en16931/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/hupe1980/en16931/compare/v0.6.0...v0.7.0
