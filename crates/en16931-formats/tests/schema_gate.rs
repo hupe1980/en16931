@@ -158,6 +158,8 @@ fn written(syntax: Syntax) -> (Vec<Doc>, usize) {
         vec![en16931::SubInvoiceLine {
             line: child,
             vat: Some(sub.lines[0].vat.clone()),
+            quantity_stated: true,
+            price_stated: true,
             children: vec![],
         }],
     )];

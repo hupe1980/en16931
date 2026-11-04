@@ -186,7 +186,10 @@ lines, for positions that decompose, and `BG-DEX-09` third-party payments, for
 the German digital-health case where a statutory insurer settles part of an
 invoice addressed to the insured. Both live in `en16931::extensions`, not on
 `InvoiceLine` — a core line has no child, and putting one there would make every
-consumer carry a field only one Extension populates.
+consumer carry a field only one Extension populates. A sub-line may state no
+quantity (BT-129) and no price (BG-29): `BR-22` and `BR-26` hold on
+`cac:InvoiceLine` only, and `SubInvoiceLine::quantity_stated` and
+`price_stated` say whether it did.
 
 Because it widens, §4.4.4's guarantee does not run: an Extension-valid invoice
 need **not** be core-valid, and there is deliberately no widening from it.

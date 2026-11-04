@@ -442,6 +442,8 @@ mod tests {
         let sub = |net: &str, children: Vec<SubInvoiceLine>| SubInvoiceLine {
             line: line(net),
             vat: None,
+            quantity_stated: true,
+            price_stated: true,
             children,
         };
         let mut inv = Invoice {

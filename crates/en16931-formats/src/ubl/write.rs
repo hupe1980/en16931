@@ -887,16 +887,21 @@ fn sub_line(x: &mut Xml, s: &en16931::SubInvoiceLine, i: usize, credit: bool, cc
         if let Some(n) = &s.line.note {
             x.leaf("cbc:Note", &[], n);
         }
-        let qty_name = if credit {
-            "cbc:CreditedQuantity"
-        } else {
-            "cbc:InvoicedQuantity"
-        };
-        x.leaf(
-            qty_name,
-            &[("unitCode", s.line.unit_code.as_str())],
-            &s.line.quantity.to_string(),
-        );
+        // A sub-line may leave BT-129 and BG-29 unstated
+        // (`en16931::SubInvoiceLine::quantity_stated`, `price_stated`):
+        // `BR-22` and `BR-26` never reach a `cac:SubInvoiceLine`.
+        if s.quantity_stated {
+            let qty_name = if credit {
+                "cbc:CreditedQuantity"
+            } else {
+                "cbc:InvoicedQuantity"
+            };
+            x.leaf(
+                qty_name,
+                &[("unitCode", s.line.unit_code.as_str())],
+                &s.line.quantity.to_string(),
+            );
+        }
         x.leaf(
             "cbc:LineExtensionAmount",
             &[("currencyID", ccy)],
@@ -916,7 +921,9 @@ fn sub_line(x: &mut Xml, s: &en16931::SubInvoiceLine, i: usize, credit: bool, cc
             );
         }
         item(x, &s.line.item, s.vat.as_ref());
-        price(x, &s.line.price, i, ccy);
+        if s.price_stated {
+            price(x, &s.line.price, i, ccy);
+        }
         for child in &s.children {
             sub_line(x, child, i, credit, ccy);
         }

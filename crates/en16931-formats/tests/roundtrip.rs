@@ -800,6 +800,178 @@ fn a_logistics_service_charge_is_a_charge_only_under_an_extension() {
     );
 }
 
+/// A grouping `cac:SubInvoiceLine` (one with its own child) round-trips
+/// without `cbc:InvoicedQuantity` or `cac:Price`: the writer omits them when
+/// `en16931::SubInvoiceLine::quantity_stated` / `price_stated` are `false`,
+/// and the reader puts both back absent, not as a stated zero.
+#[cfg(feature = "ubl")]
+#[test]
+fn a_grouping_sub_line_round_trips_without_quantity_or_price() {
+    use en16931_formats::Syntax;
+
+    let mut inv = common::maximal();
+    // A declared profile with no extension groups drops `cac:SubInvoiceLine`
+    // outright (`UBL-CR-646`); the Extension is the one that carries it.
+    inv.specification_id = Some(
+        en16931::profiles::XRECHNUNG_EXTENSION
+            .specification_id
+            .to_owned(),
+    );
+
+    let mut group = inv.lines[0].clone();
+    group.id = "1.".to_owned();
+    group.quantity = en16931::Quantity::default();
+    group.unit_code = en16931::invoice::Code::default();
+    group.price = en16931::invoice::PriceDetails::default();
+    let mut child = inv.lines[0].clone();
+    child.id = "1.1.".to_owned();
+    inv.extensions.sub_invoice_lines = vec![(
+        0,
+        vec![en16931::SubInvoiceLine {
+            vat: Some(group.vat.clone()),
+            quantity_stated: false,
+            price_stated: false,
+            line: group,
+            children: vec![en16931::SubInvoiceLine {
+                vat: Some(child.vat.clone()),
+                quantity_stated: true,
+                price_stated: true,
+                line: child,
+                children: vec![],
+            }],
+        }],
+    )];
+
+    let written = write(&inv, Syntax::Ubl);
+    assert!(
+        !written
+            .entries
+            .iter()
+            .any(|e| e.rule.as_deref() == Some("UBL-CR-646")),
+        "the Extension must carry the group: {:?}",
+        written.entries
+    );
+    let group_start = written
+        .xml
+        .find("<cbc:ID>1.</cbc:ID>")
+        .expect("group written");
+    let child_start = written.xml[group_start..]
+        .find("<cac:SubInvoiceLine>")
+        .expect("the child follows the group")
+        + group_start;
+    let group_xml = &written.xml[group_start..child_start];
+    assert!(
+        !group_xml.contains("InvoicedQuantity") && !group_xml.contains("<cac:Price>"),
+        "the group must not write BT-129 or BG-29:\n{group_xml}"
+    );
+
+    let back = read(&written.xml, Syntax::Ubl);
+    assert!(
+        !back
+            .entries
+            .iter()
+            .any(|e| e.level() == en16931::Severity::Fatal),
+        "{:?}",
+        back.entries
+    );
+    let group = &back.invoice.extensions.sub_lines(0)[0];
+    assert!(!group.quantity_stated, "the group states no BT-129");
+    assert!(!group.price_stated, "the group states no BG-29");
+    assert_eq!(group.line.quantity, en16931::Quantity::default());
+    assert_eq!(group.line.price, en16931::invoice::PriceDetails::default());
+    let [child] = &group.children[..] else {
+        panic!("one child, got {:?}", group.children);
+    };
+    assert!(child.quantity_stated, "the child states BT-129");
+    assert!(child.price_stated, "the child states BG-29");
+}
+
+/// A childless `cac:SubInvoiceLine` states its quantity as
+/// `cbc:CreditedQuantity` when it hangs under a `cac:CreditNoteLine` — `line`
+/// reads either tag, so `quantity_stated` must too, not only
+/// `cbc:InvoicedQuantity`.
+///
+/// Hand-built XML rather than a round trip through [`write`]: the generated
+/// `cac:CreditNoteLine` sequence table (`ubl::order::ORDER`) has no slot for
+/// `cac:SubInvoiceLine` at all (a `cac:CreditNoteLine` legally nests
+/// `cac:SubCreditNoteLine`, a distinct element this crate's writer does not
+/// emit and its reader does not read), so today's writer drops the group
+/// outright before this flag ever matters on a credit note. That gap is
+/// pre-existing and separate from `quantity_stated`; this test only pins the
+/// flag's own logic against the element name `line` already reads.
+#[cfg(feature = "ubl")]
+#[test]
+fn a_credit_notes_childless_sub_line_keeps_its_credited_quantity_stated() {
+    use en16931_formats::Syntax;
+
+    let xml = r#"<CreditNote xmlns="urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2"
+        xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+        xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+      <cac:LegalMonetaryTotal>
+        <cbc:LineExtensionAmount currencyID="EUR">300.00</cbc:LineExtensionAmount>
+        <cbc:TaxExclusiveAmount currencyID="EUR">300.00</cbc:TaxExclusiveAmount>
+        <cbc:TaxInclusiveAmount currencyID="EUR">357.00</cbc:TaxInclusiveAmount>
+        <cbc:PayableAmount currencyID="EUR">357.00</cbc:PayableAmount>
+      </cac:LegalMonetaryTotal>
+      <cac:CreditNoteLine>
+        <cbc:ID>1</cbc:ID>
+        <cbc:CreditedQuantity unitCode="C62">3</cbc:CreditedQuantity>
+        <cbc:LineExtensionAmount currencyID="EUR">300.00</cbc:LineExtensionAmount>
+        <cac:Item>
+          <cbc:Name>Widget</cbc:Name>
+          <cac:ClassifiedTaxCategory>
+            <cbc:ID>S</cbc:ID>
+            <cbc:Percent>19</cbc:Percent>
+            <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>
+          </cac:ClassifiedTaxCategory>
+        </cac:Item>
+        <cac:Price>
+          <cbc:PriceAmount currencyID="EUR">100.00</cbc:PriceAmount>
+        </cac:Price>
+        <cac:SubInvoiceLine>
+          <cbc:ID>1.</cbc:ID>
+          <cbc:CreditedQuantity unitCode="C62">3</cbc:CreditedQuantity>
+          <cbc:LineExtensionAmount currencyID="EUR">300.00</cbc:LineExtensionAmount>
+          <cac:Item>
+            <cbc:Name>Widget</cbc:Name>
+            <cac:ClassifiedTaxCategory>
+              <cbc:ID>S</cbc:ID>
+              <cbc:Percent>19</cbc:Percent>
+              <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>
+            </cac:ClassifiedTaxCategory>
+          </cac:Item>
+          <cac:Price>
+            <cbc:PriceAmount currencyID="EUR">100.00</cbc:PriceAmount>
+          </cac:Price>
+        </cac:SubInvoiceLine>
+      </cac:CreditNoteLine>
+    </CreditNote>"#;
+
+    let back = read(xml, Syntax::Ubl);
+    assert!(
+        !back
+            .entries
+            .iter()
+            .any(|e| e.level() == en16931::Severity::Fatal),
+        "a childless sub-line with both terms has no fatal entry: {:?}",
+        back.entries
+    );
+    let [sub] = back.invoice.extensions.sub_lines(0) else {
+        panic!(
+            "one sub-line, got {:?}",
+            back.invoice.extensions.sub_lines(0)
+        );
+    };
+    assert!(
+        sub.quantity_stated,
+        "cbc:CreditedQuantity was present, so the flag must read true, not false"
+    );
+    assert!(
+        sub.price_stated,
+        "cac:Price/cbc:PriceAmount was present too"
+    );
+}
+
 // ── Write, read back: the invoice is unchanged or something says why ───────────
 
 /// The extreme amounts, such as `InvoiceAmount::MIN`, survive both syntaxes.

@@ -392,6 +392,8 @@ fn cases() -> Vec<Case> {
         let sub = en16931::SubInvoiceLine {
             line: i.lines[0].clone(),
             vat: Some(i.lines[0].vat.clone()),
+            quantity_stated: true,
+            price_stated: true,
             children: vec![],
         };
         i.extensions.sub_invoice_lines.push((99, vec![sub]));
@@ -1080,6 +1082,8 @@ fn sub_line(net: &str) -> en16931::SubInvoiceLine {
     en16931::SubInvoiceLine {
         vat: Some(line.vat.clone()),
         line,
+        quantity_stated: true,
+        price_stated: true,
         children: vec![],
     }
 }

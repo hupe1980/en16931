@@ -14,6 +14,25 @@ Before 1.0, a minor release may break; every break is listed here.
 
 ## [Unreleased]
 
+### Breaking
+
+- `en16931::SubInvoiceLine` has two new fields, `quantity_stated` and
+  `price_stated`: `false` means the sub-line states no BT-129 or no BG-29, and
+  `line.quantity` or `line.price` holds a placeholder. Under `serde` both
+  default to `true`, so stored data reads as before; the JSON envelope stays
+  `"0.8"`.
+
+### Fixed
+
+- The UBL reader reported a `cac:SubInvoiceLine` without
+  `cbc:InvoicedQuantity` / `cbc:CreditedQuantity`, its `unitCode` or
+  `cac:Price` as `Missing`, so `receive` rejected a lawful XRechnung
+  Extension invoice. `BR-22`, `BR-23` and `BR-26` hold on `cac:InvoiceLine |
+  cac:CreditNoteLine` only, and the KoSIT validator accepts such a sub-line,
+  grouping or childless. A quantity element present but empty, or a
+  `cac:Price` without `cbc:PriceAmount`, is still `Malformed`: UBL's schema
+  refuses both. The UBL writer omits what a sub-line does not state.
+
 ## [0.9.0] — 2026-11-04
 
 The readers no longer invent values or drop them silently ([#14], [#15]), and

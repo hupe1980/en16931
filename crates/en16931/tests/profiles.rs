@@ -921,6 +921,8 @@ fn stranded_sub_invoice_lines_are_a_finding() {
     let sub = en16931::SubInvoiceLine {
         line: inv.lines[0].clone(),
         vat: Some(inv.lines[0].vat.clone()),
+        quantity_stated: true,
+        price_stated: true,
         children: vec![],
     };
     inv.extensions
@@ -980,6 +982,8 @@ fn a_report_says_it_checked_what_the_profile_registers() {
         vec![SubInvoiceLine {
             line: with_extension.lines[0].clone(),
             vat: Some(with_extension.lines[0].vat.clone()),
+            quantity_stated: true,
+            price_stated: true,
             children: vec![],
         }],
     )];
