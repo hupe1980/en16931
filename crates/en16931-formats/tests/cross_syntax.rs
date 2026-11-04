@@ -209,6 +209,95 @@ fn bt_90_survives_the_crossing_in_both_directions() {
     }
 }
 
+/// CII keeps the first kind of payment means it reads and reports every later
+/// one, as UBL does: BG-16 holds one of BG-17, BG-18 and BG-19.
+#[test]
+fn cii_reports_a_second_kind_of_payment_means_instead_of_replacing_the_first() {
+    use en16931::invoice::{DirectDebit, PaymentInstructions, PaymentMeans};
+    use en16931_formats::report::Kind;
+
+    const CARD: &str = "<ram:ApplicableTradeSettlementFinancialCard><ram:ID>4711</ram:ID>\
+                        </ram:ApplicableTradeSettlementFinancialCard>";
+    let not_held = |xml: &str| {
+        let got = en16931_formats::read(xml.as_bytes()).expect("readable");
+        let paths: Vec<String> = got
+            .entries_of(Kind::Unmapped)
+            .filter(|e| e.message.ends_with("BG-16 holds one kind"))
+            .map(|e| e.path.clone())
+            .collect();
+        (got.invoice.payment.and_then(|p| p.means), paths)
+    };
+
+    // A card before the debited account, then the mandate and the creditor
+    // identifier from their own aggregates.
+    let mut inv = common::maximal();
+    inv.payment = Some(PaymentInstructions {
+        means_code: Some(en16931::invoice::Code::new("59")),
+        means: Some(PaymentMeans::DirectDebit(DirectDebit {
+            mandate_reference: Some("MANDATE-1".to_owned()),
+            creditor_identifier: Some("DE98ZZZ09999999999".to_owned()),
+            debited_account: Some("DE89370400440532013000".to_owned()),
+        })),
+        ..Default::default()
+    });
+    let debit = write(&inv, Syntax::Cii).xml;
+    let card_and_debit = debit.replacen(
+        "<ram:PayerPartyDebtorFinancialAccount>",
+        &format!("{CARD}<ram:PayerPartyDebtorFinancialAccount>"),
+        1,
+    );
+    assert_ne!(card_and_debit, debit, "card inserted");
+    let (means, paths) = not_held(&card_and_debit);
+    assert!(matches!(means, Some(PaymentMeans::Card(_))), "{means:?}");
+    assert_eq!(
+        paths,
+        [
+            "SpecifiedTradeSettlementPaymentMeans/PayerPartyDebtorFinancialAccount",
+            "SpecifiedTradePaymentTerms/DirectDebitMandateID",
+            "ApplicableHeaderTradeSettlement/CreditorReferenceID",
+        ]
+    );
+
+    // A credit transfer, then a card in a further payment means element.
+    let transfer = write(&common::maximal(), Syntax::Cii).xml;
+    let close = "</ram:SpecifiedTradeSettlementPaymentMeans>";
+    let transfer_and_card = transfer.replacen(
+        close,
+        &format!(
+            "{close}<ram:SpecifiedTradeSettlementPaymentMeans><ram:TypeCode>58</ram:TypeCode>\
+             {CARD}{close}"
+        ),
+        1,
+    );
+    assert_ne!(transfer_and_card, transfer, "second element inserted");
+    let (means, paths) = not_held(&transfer_and_card);
+    assert!(
+        matches!(means, Some(PaymentMeans::CreditTransfer(_))),
+        "{means:?}"
+    );
+    assert_eq!(
+        paths,
+        ["SpecifiedTradeSettlementPaymentMeans/ApplicableTradeSettlementFinancialCard"]
+    );
+
+    // A credit transfer, then a card in the same element, out of schema order.
+    let account_then_card = transfer.replacen(
+        "</ram:PayeePartyCreditorFinancialAccount>",
+        &format!("</ram:PayeePartyCreditorFinancialAccount>{CARD}"),
+        1,
+    );
+    assert_ne!(account_then_card, transfer, "card inserted");
+    let (means, paths) = not_held(&account_then_card);
+    assert!(
+        matches!(means, Some(PaymentMeans::CreditTransfer(_))),
+        "{means:?}"
+    );
+    assert_eq!(
+        paths,
+        ["SpecifiedTradeSettlementPaymentMeans/ApplicableTradeSettlementFinancialCard"]
+    );
+}
+
 /// A CII credit note is detected from the whole UNTDID 1001 credit-note list
 /// (`396`, `532`, `83`, …), not from `381` alone: BT-3 is the only signal.
 #[test]
