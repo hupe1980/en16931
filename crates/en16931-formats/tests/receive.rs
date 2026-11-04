@@ -826,16 +826,20 @@ fn an_empty_quantity_or_price_on_a_group_is_rejected() {
         "the empty price must be reported: {malformed:?}"
     );
 
+    // The fixture lacks more than these two terms; the rejection must name
+    // the sub-line's own, or it proves nothing about them.
     let got = receive(
         xml.as_bytes(),
         &policy(Some(&profiles::XRECHNUNG_EXTENSION)),
     );
-    assert_eq!(
-        got.recommendation,
-        Recommendation::Reject,
-        "{:?}",
-        got.reasons
-    );
+    let reasons = got.reasons.join("; ");
+    assert_eq!(got.recommendation, Recommendation::Reject, "{reasons}");
+    for term in ["BT-129", "BT-146"] {
+        assert!(
+            reasons.contains(&format!("(BG-DEX-01[1]/{term})")),
+            "the rejection names the sub-line's {term}: {reasons}"
+        );
+    }
 }
 
 /// As the previous test, on a childless sub-line (no `cac:SubInvoiceLine`
@@ -902,14 +906,107 @@ fn an_empty_quantity_or_price_on_a_childless_sub_line_is_rejected() {
         "the empty price must be reported: {malformed:?}"
     );
 
+    // The fixture lacks more than these two terms; the rejection must name
+    // the sub-line's own, or it proves nothing about them.
     let got = receive(
         xml.as_bytes(),
         &policy(Some(&profiles::XRECHNUNG_EXTENSION)),
     );
-    assert_eq!(
-        got.recommendation,
-        Recommendation::Reject,
-        "{:?}",
-        got.reasons
+    let reasons = got.reasons.join("; ");
+    assert_eq!(got.recommendation, Recommendation::Reject, "{reasons}");
+    for term in ["BT-129", "BT-146"] {
+        assert!(
+            reasons.contains(&format!("(BG-DEX-01[1]/{term})")),
+            "the rejection names the sub-line's {term}: {reasons}"
+        );
+    }
+}
+
+/// `xml` with the text of the first `<tag …>` after the child sub-line's ID
+/// replaced by `value`.
+fn on_the_child(xml: &str, tag: &str, value: &str) -> String {
+    let child = xml
+        .find("<cbc:ID>1.1.</cbc:ID>")
+        .expect("the child sub-line");
+    let open = child + xml[child..].find(&format!("<{tag}")).expect("its element");
+    let content = open + xml[open..].find('>').expect("end of tag") + 1;
+    let end = content + xml[content..].find('<').expect("end of content");
+    format!("{}{value}{}", &xml[..content], &xml[end..])
+}
+
+/// A sub-line may state its quantity without a unit (`BR-23` holds on lines
+/// only); written back, the quantity carries no empty `unitCode`.
+#[test]
+fn a_sub_line_quantity_without_a_unit_is_written_without_one() {
+    let written =
+        String::from_utf8(xml(&xrechnung_extension_with_a_group(), Syntax::Ubl)).expect("utf-8");
+    let child = written
+        .find("<cbc:ID>1.1.</cbc:ID>")
+        .expect("the child sub-line");
+    let open = child
+        + written[child..]
+            .find("<cbc:InvoicedQuantity")
+            .expect("its quantity");
+    let close = open + written[open..].find('>').expect("end of tag");
+    let probe = format!(
+        "{}<cbc:InvoicedQuantity{}",
+        &written[..open],
+        &written[close..]
     );
+
+    let read = en16931_formats::read(probe.as_bytes()).expect("readable");
+    let fatal: Vec<_> = read
+        .entries
+        .iter()
+        .filter(|e| e.level() == Severity::Fatal)
+        .collect();
+    assert!(fatal.is_empty(), "{fatal:?}");
+    let child = &read.invoice.extensions.sub_lines(0)[0].children[0];
+    assert!(child.quantity_stated);
+    assert_eq!(child.line.unit_code.as_str(), "");
+
+    let back = String::from_utf8(xml(&read.invoice, Syntax::Ubl)).expect("utf-8");
+    let quantity = format!(
+        "<cbc:InvoicedQuantity>{}</cbc:InvoicedQuantity>",
+        child.line.quantity
+    );
+    assert!(back.contains(&quantity), "{quantity} not in {back}");
+}
+
+/// A sub-line's quantity or price that does not parse is `Malformed`, and the
+/// rest of what the sub-line states is kept and written back, as on a line:
+/// the element is stated, its value is a placeholder.
+#[test]
+fn a_sub_line_value_that_does_not_parse_keeps_its_element() {
+    let inv = xrechnung_extension_with_a_group();
+    assert!(
+        inv.lines[0].price.base_quantity.is_some(),
+        "the fixture's price carries BT-149"
+    );
+    let written = String::from_utf8(xml(&inv, Syntax::Ubl)).expect("utf-8");
+    for tag in ["cbc:InvoicedQuantity", "cbc:PriceAmount"] {
+        let probe = on_the_child(&written, tag, "abc");
+        let read = en16931_formats::read(probe.as_bytes()).expect("readable");
+        let values: Vec<_> = read
+            .entries_of(Kind::Malformed)
+            .map(|e| e.value.as_deref())
+            .collect();
+        assert_eq!(values, [Some("abc")], "{tag}");
+        let child = &read.invoice.extensions.sub_lines(0)[0].children[0];
+        assert!(child.quantity_stated && child.price_stated, "{tag}");
+        assert_eq!(child.line.unit_code, inv.lines[0].unit_code, "{tag}");
+        assert_eq!(
+            child.line.price.base_quantity, inv.lines[0].price.base_quantity,
+            "{tag}"
+        );
+
+        let back = String::from_utf8(xml(&read.invoice, Syntax::Ubl)).expect("utf-8");
+        for element in ["<cbc:InvoicedQuantity", "<cac:Price>", "<cbc:BaseQuantity"] {
+            assert_eq!(
+                back.matches(element).count(),
+                written.matches(element).count(),
+                "{tag}: {element}"
+            );
+        }
+    }
 }

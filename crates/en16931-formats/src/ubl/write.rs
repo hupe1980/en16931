@@ -896,11 +896,14 @@ fn sub_line(x: &mut Xml, s: &en16931::SubInvoiceLine, i: usize, credit: bool, cc
             } else {
                 "cbc:InvoicedQuantity"
             };
-            x.leaf(
-                qty_name,
-                &[("unitCode", s.line.unit_code.as_str())],
-                &s.line.quantity.to_string(),
-            );
+            // BT-130 may be absent on a sub-line (`BR-23` holds on lines only).
+            let unit = s.line.unit_code.as_str();
+            let attributes: &[(&str, &str)] = if unit.is_empty() {
+                &[]
+            } else {
+                &[("unitCode", unit)]
+            };
+            x.leaf(qty_name, attributes, &s.line.quantity.to_string());
         }
         x.leaf(
             "cbc:LineExtensionAmount",

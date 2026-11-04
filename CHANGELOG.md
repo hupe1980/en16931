@@ -31,7 +31,8 @@ Before 1.0, a minor release may break; every break is listed here.
   cac:CreditNoteLine` only, and the KoSIT validator accepts such a sub-line,
   grouping or childless. A quantity element present but empty, or a
   `cac:Price` without `cbc:PriceAmount`, is still `Malformed`: UBL's schema
-  refuses both. The UBL writer omits what a sub-line does not state.
+  refuses both. The UBL writer omits what a sub-line does not state, an
+  absent unit included.
 
 ## [0.9.0] — 2026-11-04
 
