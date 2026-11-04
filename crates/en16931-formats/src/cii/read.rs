@@ -187,27 +187,25 @@ impl Reader {
         term: Term<'_>,
     ) -> Option<rust_decimal::Decimal> {
         let raw = text(n, want)?;
-        if let Ok(d) = raw.parse::<rust_decimal::Decimal>() {
-            Some(d)
-        } else {
-            self.entries.push(
-                Entry::new(
-                    Kind::Malformed,
-                    format!("{}/{want}", name(n)),
-                    "not a decimal number the model can hold",
-                )
-                .term(term.to_string())
-                .value(raw),
-            );
-            None
+        match crate::xml::xs_decimal(&raw) {
+            Ok(d) => Some(d),
+            Err(e) => {
+                self.entries.push(
+                    Entry::new(Kind::Malformed, format!("{}/{want}", name(n)), e)
+                        .term(term.to_string())
+                        .value(raw),
+                );
+                None
+            }
         }
     }
 
     /// A percentage in `want` (`19` is 19 %), recording text that is not one.
     fn percent(&mut self, n: Node<'_, '_>, want: &str, term: Term<'_>) -> Option<Percentage> {
+        // Read as written, as the UBL reader does: dividing by 100 and
+        // multiplying back rounds a rate below 10^-26 to zero.
         self.decimal(n, want, term)
-            .map(|d| d / rust_decimal::Decimal::from(100))
-            .and_then(Percentage::from_fraction)
+            .map(|d| Percentage::new(d.normalize()))
     }
 
     /// Record that `term`, which the model requires, is not in the group `at`.

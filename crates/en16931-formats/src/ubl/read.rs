@@ -77,7 +77,7 @@ fn non_empty(s: String) -> Option<String> {
 /// A UBL `xs:date`, whose optional time zone (`2026-07-31+02:00`) is dropped,
 /// not applied: EN 16931-1 §6.5.9 has no term for one, and the day is the day.
 fn xs_date(raw: &str) -> Option<Date> {
-    Date::parse(without_timezone(raw.trim())).ok()
+    without_timezone(raw.trim()).and_then(|day| Date::parse(day).ok())
 }
 
 /// `cbc:ChargeIndicator` as `xs:boolean`: `true`, `false`, `1` or `0`.
@@ -95,16 +95,29 @@ fn xs_boolean(raw: &str) -> Option<bool> {
 ///
 /// Anything else is returned untouched, so a malformed date still fails in
 /// [`Date::parse`].
-fn without_timezone(s: &str) -> &str {
+///
+/// `None` for an offset `xs:date` does not allow: hours above 14, minutes
+/// above 59, or 14 with minutes.
+fn without_timezone(s: &str) -> Option<&str> {
     let b = s.as_bytes();
     // A zone can only follow the ten characters of a date, so the `-` of an
     // offset is never the `-` inside one.
-    let zoned = match b.len() {
-        11 => b[10] == b'Z',
-        16 => matches!(b[10], b'+' | b'-') && b[13] == b':',
-        _ => false,
-    };
-    if zoned { &s[..10] } else { s }
+    match b.len() {
+        11 if b[10] == b'Z' => Some(&s[..10]),
+        16 if matches!(b[10], b'+' | b'-') && b[13] == b':' => {
+            let two = |at: usize| {
+                s.get(at..at + 2)
+                    .filter(|t| t.bytes().all(|c| c.is_ascii_digit()))
+                    .and_then(|t| t.parse::<u8>().ok())
+            };
+            match (two(11), two(14)) {
+                (Some(hours), Some(minutes)) if hours < 14 && minutes < 60 => Some(&s[..10]),
+                (Some(14), Some(0)) => Some(&s[..10]),
+                _ => None,
+            }
+        }
+        _ => Some(s),
+    }
 }
 
 /// Whether an element is present with text the model cannot hold.
@@ -344,10 +357,7 @@ impl Reader {
         want: &str,
         term: Term<'_>,
     ) -> Option<rust_decimal::Decimal> {
-        self.value(n, want, Some(term), |t| {
-            t.parse::<rust_decimal::Decimal>()
-                .map_err(|_| "not a decimal number the model can hold")
-        })
+        self.value(n, want, Some(term), crate::xml::xs_decimal)
     }
 
     fn date(&mut self, n: Node<'_, '_>, want: &str) -> Option<Date> {
