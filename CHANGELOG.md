@@ -16,10 +16,12 @@ Before 1.0, a minor release may break; every break is listed here.
 
 ### Fixed
 
-- The CII reader keeps the first kind of payment means it reads, as the UBL
-  reader does, and reports every later card, debited account, mandate,
-  creditor identifier or creditor account as `Unmapped`. It used to replace
-  the first one silently, so a card followed by a debited account read as a
+- The CII reader keeps the first card, debited account or creditor account it
+  reads, as the UBL reader does, and reports every later one as `Unmapped`.
+  A mandate reference (BT-89) or creditor identifier (BT-90) joins a direct
+  debit and is reported beside a card or a credit transfer. The reader used to
+  replace the first one silently: a card followed by a debited account read
+  as a direct debit, a mandate beside a credit transfer turned it into a
   direct debit, and a creditor account followed by a card in the same element
   read as a card.
 
