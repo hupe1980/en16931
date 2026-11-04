@@ -14,6 +14,25 @@ Before 1.0, a minor release may break; every break is listed here.
 
 ## [Unreleased]
 
+### Fixed
+
+- `PEPPOL-EN16931-R120` and `R040` no longer panic when expected minus stated
+  amount overflows, and no longer skip a line or allowance whose expected
+  amount exceeds the `Decimal` range: they report it, with a hint. When
+  quantity × price alone overflows, R120 divides the larger factor by the base
+  quantity first, so a price is not rounded away. `R046` reports a gross price
+  minus discount beyond the range instead of panicking.
+- No total or tax rule passes on overflow any more. `BR-CO-10` … `BR-CO-16`,
+  the category `-08` rows, R120's line allowances and charges, `BR-DEX-02` and
+  `BR-DEX-09` sum the amounts exactly in `Decimal` instead of skipping when a
+  sum of `InvoiceAmount`s overflows; `BR-CO-17` and the category `-09` rows
+  report a tax beyond the `Decimal` range, with a hint.
+- Rule products and differences keep every digit or are reported:
+  `rust_decimal` rounds a result beyond 28 places without saying so, which
+  turned a tax just below half a cent into a cent (`BR-CO-17`, `-09`, the
+  reconciler's BT-117) and let R120, R040 and R046 compare rounded values.
+  R040 compares a hundredfold instead of dividing by 100.
+
 ## [0.9.0] — 2026-11-04
 
 The readers no longer invent values or drop them silently ([#14], [#15]), and

@@ -24,7 +24,9 @@ use crate::codes::generated as lists;
 use crate::invoice::{Invoice, terms as bt};
 use crate::{InvoiceAmount, VatCategory};
 
-use arith::{derived_vat, within_vat_tolerance, xpath_round};
+/// Exact products for the reconciler, as the rules compute them.
+pub(crate) use arith::exact_mul;
+use arith::{BEYOND_RANGE, derived_vat, exact_sum, within_vat_tolerance, xpath_round};
 
 /// Declare a rule with its metadata beside its predicate.
 macro_rules! rule {
@@ -261,16 +263,11 @@ rule!(BR_CO_18, "BR-CO-18", Fatal, Both, terms: [],
 
 // ── The totals chain — EXACT ──────────────────────────────────────────────────
 
-/// Checked sum; `None` on overflow (the rule then reports nothing).
-fn sum(amounts: impl IntoIterator<Item = InvoiceAmount>) -> Option<InvoiceAmount> {
-    InvoiceAmount::checked_sum(amounts).ok()
-}
-
 rule!(BR_CO_10, "BR-CO-10", Fatal, Both, terms: [bt::LINE_TOTAL, bt::LINE_NET_AMOUNT],
 "Sum of Invoice line net amount (BT-106) = Σ Invoice line net amount (BT-131).",
 |inv, f| {
-    let Some(expected) = sum(inv.lines.iter().map(|l| l.net_amount)) else { return };
-    if expected != inv.totals.line_total {
+    let expected = exact_sum(inv.lines.iter().map(|l| l.net_amount));
+    if expected != inv.totals.line_total.into_decimal() {
         f.arithmetic(
             Path::group_term(Group::Totals, bt::LINE_TOTAL),
             expected,
@@ -283,9 +280,9 @@ rule!(BR_CO_11, "BR-CO-11", Fatal, Both, terms: [bt::ALLOWANCE_TOTAL, bt::ALLOWA
 "Sum of allowances on document level (BT-107) = Σ Document level allowance amount (BT-92).",
 |inv, f| {
     let path = Path::group_term(Group::Totals, bt::ALLOWANCE_TOTAL);
-    let Some(expected) = sum(inv.allowances.iter().map(|a| a.amount)) else { return };
+    let expected = exact_sum(inv.allowances.iter().map(|a| a.amount));
     match inv.totals.allowance_total {
-        Some(stated) if stated != expected => f.arithmetic(path, expected, stated),
+        Some(stated) if stated.into_decimal() != expected => f.arithmetic(path, expected, stated),
         // BT-107 may be omitted only when there are no allowances.
         None if !inv.allowances.is_empty() => f.arithmetic(path, expected, "absent"),
         _ => {}
@@ -296,9 +293,9 @@ rule!(BR_CO_12, "BR-CO-12", Fatal, Both, terms: [bt::CHARGE_TOTAL, bt::CHARGE_AM
 "Sum of charges on document level (BT-108) = Σ Document level charge amount (BT-99).",
 |inv, f| {
     let path = Path::group_term(Group::Totals, bt::CHARGE_TOTAL);
-    let Some(expected) = sum(inv.charges.iter().map(|c| c.amount)) else { return };
+    let expected = exact_sum(inv.charges.iter().map(|c| c.amount));
     match inv.totals.charge_total {
-        Some(stated) if stated != expected => f.arithmetic(path, expected, stated),
+        Some(stated) if stated.into_decimal() != expected => f.arithmetic(path, expected, stated),
         None if !inv.charges.is_empty() => f.arithmetic(path, expected, "absent"),
         _ => {}
     }
@@ -312,12 +309,9 @@ terms: [bt::TAXABLE_TOTAL, bt::LINE_TOTAL, bt::ALLOWANCE_TOTAL, bt::CHARGE_TOTAL
     let t = &inv.totals;
     let allowances = t.allowance_total.unwrap_or(InvoiceAmount::ZERO);
     let charges = t.charge_total.unwrap_or(InvoiceAmount::ZERO);
-    let Ok(expected) = t
-        .line_total
-        .checked_sub(allowances)
-        .and_then(|v| v.checked_add(charges))
-    else { return };
-    if expected != t.taxable_total {
+    // Three amounts of at most an `i64` of cents each: exact in `Decimal`.
+    let expected = t.line_total.into_decimal() - allowances.into_decimal() + charges.into_decimal();
+    if expected != t.taxable_total.into_decimal() {
         f.arithmetic(
             Path::group_term(Group::Totals, bt::TAXABLE_TOTAL),
             expected,
@@ -330,10 +324,10 @@ rule!(BR_CO_14, "BR-CO-14", Fatal, Both, terms: [bt::VAT_TOTAL, bt::VAT_TAX_AMOU
 "Invoice total VAT amount (BT-110) = Σ VAT category tax amount (BT-117).",
 |inv, f| {
     let path = Path::group_term(Group::Totals, bt::VAT_TOTAL);
-    let Some(expected) = sum(inv.vat_breakdown.iter().map(|e| e.tax_amount)) else { return };
+    let expected = exact_sum(inv.vat_breakdown.iter().map(|e| e.tax_amount));
     match inv.totals.vat_total {
         // Exact, no tolerance.
-        Some(stated) if stated != expected => f.arithmetic(path, expected, stated),
+        Some(stated) if stated.into_decimal() != expected => f.arithmetic(path, expected, stated),
         None if !expected.is_zero() => f.arithmetic(path, expected, "absent"),
         _ => {}
     }
@@ -345,8 +339,8 @@ rule!(BR_CO_15, "BR-CO-15", Fatal, Both, terms: [bt::GROSS_TOTAL, bt::TAXABLE_TO
 |inv, f| {
     let t = &inv.totals;
     let vat = t.vat_total.unwrap_or(InvoiceAmount::ZERO);
-    let Ok(expected) = t.taxable_total.checked_add(vat) else { return };
-    if expected != t.gross_total {
+    let expected = t.taxable_total.into_decimal() + vat.into_decimal();
+    if expected != t.gross_total.into_decimal() {
         f.arithmetic(
             Path::group_term(Group::Totals, bt::GROSS_TOTAL),
             expected,
@@ -362,12 +356,8 @@ rule!(BR_CO_16, "BR-CO-16", Fatal, Both, terms: [bt::DUE, bt::GROSS_TOTAL, bt::P
     let t = &inv.totals;
     let paid = t.paid.unwrap_or(InvoiceAmount::ZERO);
     let rounding = t.rounding.unwrap_or(InvoiceAmount::ZERO);
-    let Ok(expected) = t
-        .gross_total
-        .checked_sub(paid)
-        .and_then(|v| v.checked_add(rounding))
-    else { return };
-    if expected != t.due {
+    let expected = t.gross_total.into_decimal() - paid.into_decimal() + rounding.into_decimal();
+    if expected != t.due.into_decimal() {
         f.arithmetic(Path::group_term(Group::Totals, bt::DUE), expected, t.due);
     }
 });
@@ -391,9 +381,10 @@ rule!(BR_CO_17, "BR-CO-17", Fatal, Both, terms: [bt::VAT_TAX_AMOUNT, bt::VAT_TAX
             continue;
         }
 
-        // Absolute values on both sides, ±1.00. On overflow, skip this group
-        // only.
+        // Absolute values on both sides, ±1.00. A tax beyond `Decimal`'s range
+        // matches no stated amount.
         let Some(expected) = derived_vat(e.taxable_amount.into_decimal(), rate) else {
+            f.at_with_hint(path, BEYOND_RANGE);
             continue;
         };
         let stated = e.tax_amount.into_decimal().abs();

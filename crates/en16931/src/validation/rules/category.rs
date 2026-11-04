@@ -18,9 +18,9 @@ use rust_decimal::Decimal;
 use crate::bt::{Group, Path};
 use crate::invoice::{Invoice, VatBreakdown, terms as bt};
 use crate::validation::{Findings, Rule, RuleId, Severity, Source};
-use crate::{InvoiceAmount, Percentage, VatCategory};
+use crate::{Percentage, VatCategory};
 
-use super::arith::{derived_vat, within_vat_tolerance};
+use super::arith::{BEYOND_RANGE, derived_vat, exact_sum, within_vat_tolerance};
 
 /// How many BG-23 groups a category may occupy — the `-01` row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -300,20 +300,11 @@ pub fn check_taxable_amount(inv: &Invoice, p: CategoryProfile, f: &mut Findings<
             .filter(|a| matches(&a.vat))
             .map(|a| a.amount);
 
-        // On overflow, skip this group only.
-        let (Ok(pos), Ok(neg)) = (
-            InvoiceAmount::checked_sum(lines.chain(charges)),
-            InvoiceAmount::checked_sum(allowances),
-        ) else {
-            continue;
-        };
-        let Ok(expected) = pos.checked_sub(neg) else {
-            continue;
-        };
+        let expected = exact_sum(lines.chain(charges)) - exact_sum(allowances);
 
         // ±1.00 on the signed values, as the artefacts write it (unlike `-09`,
         // which takes absolutes).
-        if !within_vat_tolerance(entry.taxable_amount.into_decimal(), expected.into_decimal()) {
+        if !within_vat_tolerance(entry.taxable_amount.into_decimal(), expected) {
             f.arithmetic(
                 Path::at_term(Group::VatBreakdown, i, bt::VAT_TAXABLE_AMOUNT),
                 expected,
@@ -339,6 +330,7 @@ pub fn check_tax_amount(inv: &Invoice, p: CategoryProfile, f: &mut Findings<'_>)
             TaxRule::Derived => {
                 let rate = entry.rate.map_or(Decimal::ZERO, Percentage::into_decimal);
                 let Some(expected) = derived_vat(entry.taxable_amount.into_decimal(), rate) else {
+                    f.at_with_hint(path, BEYOND_RANGE);
                     continue;
                 };
                 let stated = entry.tax_amount.into_decimal().abs();

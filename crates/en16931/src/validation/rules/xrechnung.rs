@@ -1002,11 +1002,9 @@ pub mod extension {
         path: Path,
         f: &mut Findings<'_>,
     ) {
-        let Ok(sum) = crate::InvoiceAmount::checked_sum(children.iter().map(|c| c.line.net_amount))
-        else {
-            return;
-        };
-        if sum != stated {
+        let sum =
+            crate::validation::rules::arith::exact_sum(children.iter().map(|c| c.line.net_amount));
+        if sum != stated.into_decimal() {
             f.arithmetic(path, sum, stated);
         }
     }
@@ -1147,17 +1145,13 @@ pub mod extension {
         // Replaces BR-CO-16, which the Extension profile re-levels to
         // information.
         let t = &inv.totals;
-        let zero = crate::InvoiceAmount::ZERO;
-        let Ok(third_party) = inv.extensions.third_party_total() else {
-            return;
-        };
-        let expected = t
-            .gross_total
-            .checked_sub(t.paid.unwrap_or(zero))
-            .and_then(|v| v.checked_add(t.rounding.unwrap_or(zero)))
-            .and_then(|v| v.checked_add(third_party));
-        let Ok(expected) = expected else { return };
-        if expected != t.due {
+        let amounts = [t.gross_total]
+            .into_iter()
+            .chain(t.rounding)
+            .chain(inv.extensions.third_party_payments.iter().filter_map(|p| p.amount));
+        let paid = t.paid.map_or(rust_decimal::Decimal::ZERO, crate::InvoiceAmount::into_decimal);
+        let expected = crate::validation::rules::arith::exact_sum(amounts) - paid;
+        if expected != t.due.into_decimal() {
             f.arithmetic(Path::term(BtId(115)), expected, t.due);
         }
     });

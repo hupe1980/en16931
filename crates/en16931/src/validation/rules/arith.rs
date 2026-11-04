@@ -18,6 +18,8 @@
 
 use rust_decimal::Decimal;
 
+use crate::InvoiceAmount;
+
 /// The ±1.00 the artefacts allow on `BR-CO-17` and the category `-08`/`-09`
 /// rows. Not in EN 16931-1 §6.4.2, which states a plain equation.
 pub(crate) const VAT_TOLERANCE: Decimal = Decimal::ONE;
@@ -34,11 +36,45 @@ pub(crate) fn xpath_round(x: Decimal) -> Decimal {
 /// The artefacts' derived VAT amount: `round(|base| × rate ÷ 100 × 100) ÷ 100`.
 ///
 /// Computed as the equivalent `round(|base| × rate) ÷ 100`. `None` when the
-/// product overflows; callers skip that group.
+/// product is not exact ([`exact_mul`]); callers report that group.
 pub(crate) fn derived_vat(base: Decimal, rate: Decimal) -> Option<Decimal> {
-    base.abs()
-        .checked_mul(rate)
-        .map(|product| xpath_round(product) / Decimal::ONE_HUNDRED)
+    exact_mul(base.abs(), rate).map(|product| xpath_round(product) / Decimal::ONE_HUNDRED)
+}
+
+/// `a × b` when a `Decimal` holds it exactly. `None` when it overflows, or when
+/// it needs more than 28 places, which `rust_decimal` would round without
+/// saying so. Trailing zeros of the factors do not count.
+pub(crate) fn exact_mul(a: Decimal, b: Decimal) -> Option<Decimal> {
+    // A zero factor gives an exact zero, whatever scale `rust_decimal` keeps.
+    if a.is_zero() || b.is_zero() {
+        return Some(Decimal::ZERO);
+    }
+    let (a, b) = (a.normalize(), b.normalize());
+    a.checked_mul(b)
+        .filter(|product| product.scale() == a.scale() + b.scale())
+}
+
+/// `a − b` when a `Decimal` holds it exactly, as [`exact_mul`].
+pub(crate) fn exact_sub(a: Decimal, b: Decimal) -> Option<Decimal> {
+    if a == b {
+        return Some(Decimal::ZERO);
+    }
+    let (a, b) = (a.normalize(), b.normalize());
+    a.checked_sub(b)
+        .filter(|difference| difference.scale() == a.scale().max(b.scale()))
+}
+
+/// Advice for a finding whose expected amount does not fit a `Decimal`.
+pub(crate) const BEYOND_RANGE: &str = "The expected amount exceeds the range or the 28 places \
+     of a decimal, so it cannot be checked exactly.";
+
+/// The exact sum of `amounts`. Each fits an `i64` of cents, so a `Decimal`
+/// holds the sum of more amounts than a document can carry, where a sum of
+/// [`InvoiceAmount`]s overflows and would leave its rule unchecked.
+pub(crate) fn exact_sum(amounts: impl IntoIterator<Item = InvoiceAmount>) -> Decimal {
+    amounts.into_iter().fold(Decimal::new(0, 2), |sum, amount| {
+        sum + amount.into_decimal()
+    })
 }
 
 /// Whether a stated VAT amount is within the artefacts' ±1.00 of `expected`.
@@ -64,6 +100,24 @@ mod tests {
         assert_eq!(xpath_round(dec!(0.6)), dec!(1));
         assert_eq!(xpath_round(dec!(-0.6)), dec!(-1));
         assert_eq!(xpath_round(dec!(19)), dec!(19));
+    }
+
+    /// 1.01 × 1.4851485148514851485148514851 is just below 1.5; rounded to
+    /// `Decimal`'s 28 places it would be 1.5 and round up to 0.02.
+    #[test]
+    fn a_product_beyond_decimal_precision_is_not_rounded_silently() {
+        assert_eq!(
+            derived_vat(dec!(1.01), dec!(1.4851485148514851485148514851)),
+            None
+        );
+    }
+
+    /// A zero factor or two equal values give an exact zero (CEN's
+    /// `BIS_Billing_30-Telefoni.xml` has 693.8 × 0).
+    #[test]
+    fn zero_is_exact() {
+        assert_eq!(exact_mul(dec!(693.8), dec!(0)), Some(Decimal::ZERO));
+        assert_eq!(exact_sub(dec!(1.50), dec!(1.5)), Some(Decimal::ZERO));
     }
 
     #[test]

@@ -63,7 +63,8 @@ pub enum ReconcileError {
         category: VatCategory,
     },
 
-    /// A sum did not fit in [`InvoiceAmount`], or an intermediate overflowed.
+    /// A sum did not fit in [`InvoiceAmount`], or an intermediate overflowed or
+    /// needed more than a `Decimal`'s 28 places.
     #[error("{term} overflowed while reconciling; the amounts involved are not representable")]
     Overflow {
         /// Which business term was being computed.
@@ -428,15 +429,13 @@ fn breakdown_rate(rate: Option<Percentage>) -> Option<Percentage> {
 /// Rounds half away from zero (`−0.125` → `−0.13`).
 fn tax_on(base: InvoiceAmount, rate: Option<Percentage>) -> Result<InvoiceAmount, ReconcileError> {
     let rate = rate.map_or(Decimal::ZERO, Percentage::into_decimal);
-    let exact = base
-        .into_decimal()
-        .checked_mul(rate)
-        .map(|v| v / Decimal::ONE_HUNDRED)
-        .ok_or(ReconcileError::Overflow { term: "BT-117" })?;
-    InvoiceAmount::from_decimal_exact(
-        exact.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero),
-    )
-    .map_err(|_| ReconcileError::Overflow { term: "BT-117" })
+    let overflow = || ReconcileError::Overflow { term: "BT-117" };
+    let exact =
+        crate::validation::rules::exact_mul(base.into_decimal(), rate).ok_or_else(overflow)?;
+    // `round(x ÷ 100, 2)` is `round(x, 0) ÷ 100`; rounding first divides an
+    // integer, which loses no digit.
+    let cents = exact.round_dp_with_strategy(0, RoundingStrategy::MidpointAwayFromZero);
+    InvoiceAmount::from_decimal_exact(cents / Decimal::ONE_HUNDRED).map_err(|_| overflow())
 }
 
 #[cfg(test)]
@@ -444,6 +443,15 @@ mod tests {
     use rust_decimal::dec;
 
     use super::*;
+
+    /// 0.01 × 49.99999999999999999999999999 % is just below half a cent;
+    /// divided by 100 first it rounds to half a cent and then up to 0.01.
+    #[test]
+    fn tax_just_below_half_a_cent_rounds_down() {
+        let base = InvoiceAmount::parse("0.01").unwrap();
+        let rate = Percentage::new(dec!(49.99999999999999999999999999));
+        assert_eq!(tax_on(base, Some(rate)), Ok(InvoiceAmount::ZERO));
+    }
     use crate::invoice::{DocumentAllowanceCharge, Item, LineVat, PriceDetails};
     use crate::{Date, InvoiceLine, Quantity, validate};
 
