@@ -14,8 +14,8 @@ business rule. This crate re-implements none of the 334.
 
 ```toml
 [dependencies]
-en16931 = "0.8"
-en16931-formats = { version = "0.8", features = ["ubl", "cii"] }
+en16931 = "0.9"
+en16931-formats = { version = "0.9", features = ["ubl", "cii"] }
 ```
 
 | Feature | Default | Graph | What |
@@ -65,7 +65,7 @@ BASIC WL; **accept** otherwise.
 | Layer | Holds | Invalid when |
 |---|---|---|
 | container | a PDF's divergences from its payload | the PDF was refused, or its XMP and BT-24 disagree |
-| syntax | unmapped elements, malformed values | a value or the document could not be read |
+| syntax | unmapped elements, malformed values, missing required terms | a value or the document could not be read, or a required term is absent |
 | schema | duplicates of single-occurrence elements, spellings the schema does not admit | any of them, unless CEN publishes the rule as a warning |
 | semantic | the profile's findings | a finding is fatal |
 

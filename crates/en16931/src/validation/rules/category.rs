@@ -1,5 +1,5 @@
 //! The nine VAT category families — `BR-S-*`, `BR-Z-*`, `BR-E-*`, `BR-AE-*`,
-//! `BR-IC-*`, `BR-G-*`, `BR-O-*`, `BR-AF-*`, `BR-AG-*` — plus `BR-B-*`.
+//! `BR-IC-*`, `BR-G-*`, `BR-O-*`, `BR-IG-*`, `BR-IP-*` — plus `BR-B-*`.
 //!
 //! EN 16931-1 §6.4.3 writes nine parallel tables with the same ten rows. Here
 //! each row is one checker parameterised by a [`CategoryProfile`], and a macro
@@ -38,7 +38,7 @@ pub enum RateRule {
     Positive,
     /// `BR-Z-05` and friends: *"shall be 0 (zero)"*.
     Zero,
-    /// `BR-AF-05` / `BR-AG-05`: *"shall be 0 (zero) or greater than zero"*.
+    /// `BR-IG-05` / `BR-IP-05`: *"shall be 0 (zero) or greater than zero"*.
     ZeroOrPositive,
     /// `BR-O-05`: *"shall not contain"* a rate at all — absent, not zero.
     Absent,
@@ -454,8 +454,8 @@ category_family!(ReverseCharge, "BR-AE", ae);
 category_family!(IntraCommunity, "BR-IC", ic);
 category_family!(Export, "BR-G", g);
 category_family!(OutOfScope, "BR-O", o);
-category_family!(CanaryIslands, "BR-AF", af);
-category_family!(CeutaMelilla, "BR-AG", ag);
+category_family!(CanaryIslands, "BR-IG", ig);
+category_family!(CeutaMelilla, "BR-IP", ip);
 
 // ── `B` — split payment, which has only two rules of its own ─────────────────
 
@@ -608,8 +608,8 @@ pub static ALL: std::sync::LazyLock<Vec<&'static Rule>> = std::sync::LazyLock::n
         ic::ALL,
         g::ALL,
         o::ALL,
-        af::ALL,
-        ag::ALL,
+        ig::ALL,
+        ip::ALL,
     ];
     let extras: [&'static Rule; 6] = [&BR_B_01, &BR_B_02, &BR_O_11, &BR_O_12, &BR_O_13, &BR_O_14];
     families
@@ -675,8 +675,8 @@ mod tests {
         let ids: Vec<_> = ALL.iter().map(|r| r.id.as_str()).collect();
         for expect in [
             "BR-S-02", "BR-S-06", "BR-S-07", "BR-S-08", "BR-Z-09", "BR-E-10", "BR-AE-01",
-            "BR-AE-03", "BR-IC-04", "BR-IC-05", "BR-G-08", "BR-O-05", "BR-O-14", "BR-AF-10",
-            "BR-AG-09", "BR-B-01",
+            "BR-AE-03", "BR-IC-04", "BR-IC-05", "BR-G-08", "BR-O-05", "BR-O-14", "BR-IG-10",
+            "BR-IP-09", "BR-B-01",
         ] {
             assert!(ids.contains(&expect), "{expect} missing from {ids:?}");
         }
@@ -685,11 +685,13 @@ mod tests {
     }
 
     #[test]
-    fn the_ig_ip_spellings_reach_no_rule() {
-        // EN 16931-1's BR-IG-*/BR-IP-* are not mapped onto BR-AF-*/BR-AG-*.
+    fn the_ig_ip_spellings_are_the_rules_and_af_ag_are_gone() {
+        // CEN 1.3.17 names them as EN 16931-1 does; the old `BR-AF-*` /
+        // `BR-AG-*` spellings are not aliases.
         let by = |q: &str| ALL.iter().find(|r| r.id.matches(q)).map(|r| r.id.as_str());
-        assert_eq!(by("BR-IG-1"), None);
-        assert_eq!(by("BR-IP-10"), None);
-        assert_eq!(by("BR-AF-1"), Some("BR-AF-01"));
+        assert_eq!(by("BR-IG-1"), Some("BR-IG-01"));
+        assert_eq!(by("BR-IP-10"), Some("BR-IP-10"));
+        assert_eq!(by("BR-AF-1"), None);
+        assert_eq!(by("BR-AG-10"), None);
     }
 }

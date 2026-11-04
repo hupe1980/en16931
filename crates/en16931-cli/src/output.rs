@@ -203,6 +203,19 @@ pub fn rule(o: &mut String, r: &'static Rule) {
         let terms: Vec<String> = r.terms.iter().map(ToString::to_string).collect();
         let _ = writeln!(o, "\n  terms: {}", terms.join(", "));
     }
+    // A rule the model's types retire runs no predicate; say how it is held,
+    // or a reader of `explain` would take it for checked like the others.
+    if en16931::validation::rules::structural::STRUCTURAL_BY_TYPE
+        .iter()
+        .any(|b| core::ptr::eq(*b, r))
+    {
+        let _ = writeln!(
+            o,
+            "  held by: the model's types — an invoice built in code cannot break it; a\n           \
+             document that does is reported by its reader (`missing`, or `malformed`\n           \
+             for a currency), and `receive` rejects it"
+        );
+    }
     if !carried.is_empty() {
         let list: Vec<String> = carried
             .iter()

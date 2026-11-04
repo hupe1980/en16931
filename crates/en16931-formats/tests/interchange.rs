@@ -105,12 +105,31 @@ fn svrl_renders_every_layer() {
         .children()
         .filter(|n| n.has_tag_name((ns, "failed-assert")))
         .collect();
+    // The layers' entries first, in layer order: the probe has no BG-22, so
+    // the syntax layer says each required total is missing; then the schema
+    // layer's duplicate BT-1.
+    let layer_ids: Vec<&str> = asserts
+        .iter()
+        .filter_map(|n| n.attribute("id"))
+        .filter(|id| id.starts_with("en16931:"))
+        .collect();
     assert_eq!(
-        asserts[0].attribute("id"),
-        Some("en16931:schema:duplicate"),
+        layer_ids,
+        [
+            "en16931:syntax:missing",
+            "en16931:syntax:missing",
+            "en16931:syntax:missing",
+            "en16931:syntax:missing",
+            "en16931:schema:duplicate",
+        ],
         "{svrl}"
     );
-    assert_eq!(asserts[0].attribute("flag"), Some("fatal"));
+    assert!(
+        asserts
+            .iter()
+            .take(5)
+            .all(|n| n.attribute("flag") == Some("fatal"))
+    );
     // Every finding follows, in the report's order.
     let ids: Vec<&str> = asserts
         .iter()

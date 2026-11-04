@@ -17,7 +17,7 @@ recommendation: REJECT
   because under the declared XRechnung 3.0: 1 fatal finding(s): BR-DE-15
 declared: XRechnung 3.0
 document: Lieferant GmbH — invoice 1234567 of 2018-04-13
-rule set: XRechnung 3.0 (CEN validation-1.3.16, KoSIT v2.6.0, KoSIT v2026-08-31, OpenPeppol 806866b…)
+rule set: XRechnung 3.0 (CEN validation-1.3.17, KoSIT v2.6.0, KoSIT v2026-08-31, OpenPeppol 5df0eff…)
 most severe: fatal
 container  valid
 syntax     valid
@@ -341,8 +341,8 @@ en16931 rules [-p <profile>] [--term BT-117] [--format text|json]
 ```
 
 `explain` resolves rule ids up to zero-padding and case. It does not map one
-rule family onto another: the IGIC and IPSI rules are `BR-AF-*` and `BR-AG-*`,
-the artefacts' ids. It answers for **profile restrictions** too, which are
+rule family onto another: the IGIC and IPSI rules are `BR-IG-*` and `BR-IP-*`,
+CEN's ids since 1.3.17 (`BR-AF-*` / `BR-AG-*` before). It answers for **profile restrictions** too, which are
 data rather than predicates and still appear in reports under their own ids.
 
 It also says which profiles run the check and at what severity, which is the
@@ -365,7 +365,7 @@ typeable. It lists the ZUGFeRD / Factur-X profiles a received document's BT-24
 is recognised as, and the **authority releases** this build was verified
 against — CEN's, KoSIT's Schematron, KoSIT's validator configuration and
 OpenPeppol's. The same list travels in every report, per profile, because
-`BR-DE-15` is KoSIT's rule on KoSIT's cadence and stamping `validation-1.3.16`
+`BR-DE-15` is KoSIT's rule on KoSIT's cadence and stamping `validation-1.3.17`
 beside it would name the wrong authority.
 
 `rules` prints the whole catalogue, derived from the registry the validator

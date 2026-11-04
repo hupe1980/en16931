@@ -231,11 +231,10 @@ pub fn compare_repo(
     for (v, tag, sha) in tagged {
         let text = match pinned_commit {
             Some(pin) if by_commit && pinned.as_deref() == Some(v.as_slice()) => {
+                // The release's tag naming the pinned commit is the strongest
+                // pin: both agree, and a later re-tag is noticed here.
                 if sha == pin {
-                    format!(
-                        "tag `{tag}` is the pinned release and points at the pinned commit: \
-                         the pin can move to the tag"
-                    )
+                    continue;
                 } else {
                     format!(
                         "tag `{tag}` is the pinned release, but points at {}, not at the \
@@ -827,15 +826,9 @@ b436fc4bf0 refs/tags/v2026-08-31
     fn a_commit_pins_release_tag_says_whether_it_is_the_pinned_commit() {
         let peppol = &fetch::REPOS[1];
         let notes = Ok((vec![3, 0, 21], "3.0.21".to_owned()));
+        // The tag names the pinned commit: current, nothing to report.
         let at_pin = Refs::parse(&format!("{} refs/tags/v3.0.21\n", fetch::PEPPOL_REF));
-        assert_eq!(
-            texts(&compare_repo(peppol, &at_pin, Some(&notes))),
-            [(
-                State::Released,
-                "tag `v3.0.21` is the pinned release and points at the pinned commit: \
-                 the pin can move to the tag"
-            )]
-        );
+        assert!(compare_repo(peppol, &at_pin, Some(&notes)).is_empty());
         let elsewhere = Refs::parse("abcdef0123 refs/tags/3.0.21\nfedcba9876 refs/tags/3.0.22\n");
         assert_eq!(
             texts(&compare_repo(peppol, &elsewhere, Some(&notes))),
@@ -843,7 +836,7 @@ b436fc4bf0 refs/tags/v2026-08-31
                 (
                     State::Released,
                     "tag `3.0.21` is the pinned release, but points at abcdef0, not at the \
-                     pinned commit 806866b"
+                     pinned commit 5df0eff"
                 ),
                 (State::Released, "release tag `3.0.22` (fedcba9)"),
             ]
@@ -1019,8 +1012,8 @@ b436fc4bf0 refs/tags/v2026-08-31
         let tags = |extra: &[(&str, Option<String>)]| -> Vec<(String, Option<String>)> {
             [
                 ("latest", digest.clone()),
-                ("v1.30.1", None),
-                ("v1.30.2", digest.clone()),
+                ("v1.30.2", None),
+                ("v1.30.3", digest.clone()),
             ]
             .iter()
             .chain(extra)
@@ -1031,14 +1024,14 @@ b436fc4bf0 refs/tags/v2026-08-31
         assert_eq!(
             texts(&compare_image(
                 rest,
-                &tags(&[("v1.30.3", None), ("v1.31.0", None)])
+                &tags(&[("v1.30.4", None), ("v1.31.0", None)])
             )),
             [
-                (State::Released, "release tag `v1.30.3`"),
+                (State::Released, "release tag `v1.30.4`"),
                 (State::Released, "release tag `v1.31.0`")
             ]
         );
-        let repushed = vec![("v1.30.2".to_owned(), Some("sha256:00".to_owned()))];
+        let repushed = vec![("v1.30.3".to_owned(), Some("sha256:00".to_owned()))];
         assert_eq!(compare_image(rest, &repushed)[0].state, State::Released);
         assert_eq!(compare_image(rest, &[])[0].state, State::Unknown);
     }

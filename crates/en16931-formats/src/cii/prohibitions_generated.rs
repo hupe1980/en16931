@@ -245,22 +245,22 @@ pub static FORBIDDEN_PATHS: &[(&str, &str, &str)] = &[
     ),
     (
         "CII-SR-035",
-        "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:IncludedSupplyChainTradeLineItem",
+        "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:IncludedSupplyChainTradeLineItem/ram:AssociatedDocumentLineDocument",
         "ram:DescriptionCode",
     ),
     (
         "CII-SR-036",
-        "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:IncludedSupplyChainTradeLineItem",
+        "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:IncludedSupplyChainTradeLineItem/ram:AssociatedDocumentLineDocument",
         "ram:ParentLineID",
     ),
     (
         "CII-SR-037",
-        "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:IncludedSupplyChainTradeLineItem",
+        "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:IncludedSupplyChainTradeLineItem/ram:AssociatedDocumentLineDocument",
         "ram:LineStatusCode",
     ),
     (
         "CII-SR-038",
-        "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:IncludedSupplyChainTradeLineItem",
+        "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:IncludedSupplyChainTradeLineItem/ram:AssociatedDocumentLineDocument",
         "ram:LineStatusReasonCode",
     ),
     (
@@ -1120,7 +1120,7 @@ pub static FORBIDDEN_PATHS: &[(&str, &str, &str)] = &[
     ),
     (
         "CII-SR-221",
-        "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:IncludedSupplyChainTradeLineItem",
+        "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:IncludedSupplyChainTradeLineItem/ram:AssociatedDocumentLineDocument",
         "ram:IncludedSubordinateTradeLineItem",
     ),
     (

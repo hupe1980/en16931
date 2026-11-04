@@ -355,7 +355,11 @@ fn fatal_entries(layer: &Layer) -> String {
         .entries
         .iter()
         .filter(|e| e.level() == Severity::Fatal)
-        .map(|e| format!("{} {}", e.kind.as_str(), e.path))
+        .map(|e| match &e.term {
+            // A reason names the business term, not only the syntax path.
+            Some(t) => format!("{} {} ({t})", e.kind.as_str(), e.path),
+            None => format!("{} {}", e.kind.as_str(), e.path),
+        })
         .collect::<Vec<_>>()
         .join("; ")
 }

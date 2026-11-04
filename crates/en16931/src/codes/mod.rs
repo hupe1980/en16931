@@ -1,6 +1,6 @@
 //! Code lists — EN 16931-1 §6.5.8 `Code. Type`. Codes are case-sensitive.
 //!
-//! Eighteen lists, **4 876 values**, all generated from the pinned CEN
+//! Eighteen lists, **4 896 values**, all generated from the pinned CEN
 //! validation artefacts by `cargo xtask codegen` and re-verified against them by
 //! `tests/codelists.rs`. See [`generated`].
 //!
@@ -248,7 +248,7 @@ impl VatCategory {
     }
 
     /// Whether a VAT breakdown in this category must not state BT-120 or BT-121
-    /// (BR-S-10, BR-Z-10, BR-AF-10, BR-AG-10).
+    /// (BR-S-10, BR-Z-10, BR-IG-10, BR-IP-10).
     #[must_use]
     pub const fn forbids_exemption_reason(self) -> bool {
         matches!(

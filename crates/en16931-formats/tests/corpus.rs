@@ -178,7 +178,15 @@ syntaxes! {
     // already read, in the negative instances for `BR-CO-15` (no multiple BT-110)
     // and Peppol's `R053` / `R054`; the first is read. Anywhere else it would be
     // a reader bug.
+    //
+    // `AdditionalDocumentReference/DocumentTypeCode`: a code other than 130 on
+    // a supporting document — CEN's Max_content credit note carries 50, the
+    // older credit-note spelling of BT-17, which both bindings now put in
+    // `cac:OriginatorDocumentReference`. `InvoiceLine/DocumentReference/
+    // DocumentTypeCode`: a line reference other than BT-128 (Peppol `R101`).
     "ubl" => (ubl, Ubl, 200, &[
+        "AdditionalDocumentReference/DocumentTypeCode",
+        "InvoiceLine/DocumentReference/DocumentTypeCode",
         "Invoice/UBLExtensions",
         "Invoice/PaymentMeans",
         "PaymentMeans/CreditAccount",

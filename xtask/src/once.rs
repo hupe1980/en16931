@@ -6,8 +6,8 @@
 //! * The schemas: for each `(parent, child)` pair the authorities' instances use,
 //!   the child's `maxOccurs` in the parent's type (CII: CEN's uncoupled D16B
 //!   subset schema; UBL: OASIS UBL 2.1). The row's rule cell is empty.
-//! * CEN's `count(path) <= 1` syntax rules from the preprocessed Schematron
-//!   (e.g. `UBL-SR-09`), plus KoSIT's replacements listed in `REPLACED`. A path is
+//! * CEN's syntax rules from the preprocessed Schematron that count (e.g.
+//!   `UBL-SR-09`; see [`clauses`] for the shapes understood). A path is
 //!   a chain of child steps, optionally led by `//`, each with at most one
 //!   predicate comparing a child's value (optionally upper-cased or
 //!   whitespace-normalised) to a literal. Anything else goes to `UNCHECKED` with
@@ -283,6 +283,107 @@ fn relative(path: &str) -> Result<String, &'static str> {
     Ok(format!("{lead}{}", out.join("/")))
 }
 
+/// Split on ` and ` / ` or ` outside brackets.
+fn top_level<'a>(test: &'a str, op: &str) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    let (mut depth, mut start) = (0usize, 0usize);
+    let b = test.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth = depth.saturating_sub(1),
+            _ if depth == 0 && test[i..].starts_with(op) => {
+                out.push(test[start..i].trim());
+                i += op.len();
+                start = i;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out.push(test[start..].trim());
+    out
+}
+
+/// `(context predicate, counted path)` per clause of a syntax rule's test.
+type Clauses = Vec<(Option<String>, String)>;
+
+/// What a syntax rule's test says about occurrences: `(context predicate,
+/// counted path)` per clause, `None` for a test that counts nothing, or why
+/// it cannot be expressed. Three shapes are understood:
+///
+/// * `count(p) <= 1` or `count(p) = 1`, alone or as a conjunction of them;
+/// * `not(g) or count(g/…) = 1` (or `<= 1`): at most once, whether `g` is
+///   there or not — the "at least once" half is not this table's;
+/// * `normalize-space(x) != 'L' or count(p) <= 1`: the same rule under the
+///   context predicate `[normalize-space(x) = 'L']`.
+fn clauses(test: &str) -> Option<Result<Clauses, &'static str>> {
+    if !test.contains("count(") {
+        return None;
+    }
+    let t = test.trim();
+    let t = t
+        .strip_prefix('(')
+        .and_then(|r| r.strip_suffix(')'))
+        .filter(|r| !r.contains(") or (") && !r.contains(") and ("))
+        .map_or(t, str::trim);
+    if t.contains("distinct-values(") {
+        return Some(Err(
+            "a distinct-value count, which is not a count of occurrences",
+        ));
+    }
+    let ands = top_level(t, " and ");
+    if ands.len() > 1 {
+        let paths: Option<Vec<_>> = ands
+            .iter()
+            .map(|c| counted(c).or_else(|| exactly_one(c)))
+            .collect();
+        return Some(
+            paths
+                .map(|ps| ps.into_iter().map(|p| (None, p.to_owned())).collect())
+                .ok_or("a conjunction with a clause that is not `count(…) <= 1`"),
+        );
+    }
+    let ors = top_level(t, " or ");
+    if let [guard, count] = ors.as_slice() {
+        let path = counted(count).or_else(|| exactly_one(count));
+        let Some(path) = path else {
+            return Some(Err("a count inside a condition this table cannot express"));
+        };
+        if let Some(g) = guard.strip_prefix("not(").and_then(|r| r.strip_suffix(')')) {
+            let g = g.trim();
+            return Some(if path == g || path.starts_with(&format!("{g}/")) {
+                Ok(vec![(None, path.to_owned())])
+            } else {
+                Err("a count guarded by an unrelated absence")
+            });
+        }
+        if let Some((lhs, rhs)) = guard.split_once("!=") {
+            return Some(Ok(vec![(
+                Some(format!("{} = {}", lhs.trim(), rhs.trim())),
+                path.to_owned(),
+            )]));
+        }
+        return Some(Err("a count inside a condition this table cannot express"));
+    }
+    // `count(p) = 1` is "exactly once"; its "at most once" half is this table's.
+    match counted(t).or_else(|| exactly_one(t)) {
+        Some(p) => Some(Ok(vec![(None, p.to_owned())])),
+        None => Some(Err("a count this table cannot express")),
+    }
+}
+
+/// `count(x) = 1` — `x`.
+fn exactly_one(test: &str) -> Option<&str> {
+    let (lhs, rhs) = test.trim().rsplit_once('=')?;
+    if rhs.trim() != "1" || lhs.ends_with('<') || lhs.ends_with('!') {
+        return None;
+    }
+    lhs.trim().strip_prefix("count(")?.strip_suffix(')')
+}
+
 /// `count(x) <= 1`, with or without parentheses and spaces — `x`.
 fn counted(test: &str) -> Option<&str> {
     let t = test.trim();
@@ -298,14 +399,6 @@ fn counted(test: &str) -> Option<&str> {
 }
 
 type Row = (String, String, String, String);
-
-/// CEN syntax rules KoSIT replaces with a corrected rule, and the replacement
-/// (paired in a comment beside each replacement in KoSIT's Schematron).
-const REPLACED: &[(&str, &str)] = &[("CII-SR-475", "BR-TMP-4"), ("CII-SR-476", "BR-TMP-5")];
-
-/// KoSIT's CII Schematron, where the replacements live.
-const KOSIT_CII: &str =
-    "xrechnung-schematron/src/validation/schematron/cii/XRechnung-CII-validation.sch";
 
 /// A rule context's branches in the canonical spelling: element chains, the
 /// last step optionally carrying one predicate.
@@ -346,39 +439,6 @@ fn contexts(context: &str) -> Result<Vec<String>, &'static str> {
         .collect()
 }
 
-/// The `count(…) <= 1` rows of KoSIT's replacements for [`REPLACED`].
-fn kosit_rows(spec: &Path) -> Result<Vec<Row>, String> {
-    let path = spec.join(KOSIT_CII);
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let doc = roxmltree::Document::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut rows = Vec::new();
-    for rule in doc.descendants().filter(|n| n.has_tag_name("rule")) {
-        let context = rule.attribute("context").unwrap_or("").trim();
-        for a in rule.children().filter(|n| n.has_tag_name("assert")) {
-            let (Some(id), Some(test)) = (a.attribute("id"), a.attribute("test")) else {
-                continue;
-            };
-            if !REPLACED.iter().any(|(_, by)| *by == id) {
-                continue;
-            }
-            let rel = counted(test)
-                .ok_or_else(|| format!("{id} is no longer a `count(…) <= 1` rule"))
-                .and_then(|p| relative(p).map_err(|e| format!("{id}: {e}")))?;
-            for b in contexts(context).map_err(|e| format!("{id}: {e}"))? {
-                let level = a.attribute("flag").unwrap_or("fatal").to_owned();
-                rows.push((id.to_owned(), level, b, rel.clone()));
-            }
-        }
-    }
-    if rows.len() != REPLACED.len() {
-        return Err(format!(
-            "KoSIT's replacements for {REPLACED:?} were not all found in {}",
-            path.display()
-        ));
-    }
-    Ok(rows)
-}
-
 /// `(rule id, why it is not expressible)` for assertions outside the subset.
 type Unchecked = Vec<(String, String)>;
 
@@ -394,31 +454,35 @@ fn rules(syntax: Syntax, spec: &Path) -> Result<(Vec<Row>, Unchecked), String> {
             let (Some(id), Some(test)) = (a.attribute("id"), a.attribute("test")) else {
                 continue;
             };
-            let syntax_rule = id.split('-').nth(1) == Some("SR");
-            let Some(path) = counted(test).filter(|_| syntax_rule) else {
+            if id.split('-').nth(1) != Some("SR") {
+                continue;
+            }
+            // Every syntax rule that counts is either expressed or listed with
+            // its reason — never skipped.
+            let Some(parsed) = clauses(test) else {
                 continue;
             };
             let level = a.attribute("flag").unwrap_or("fatal");
-            if let Some((_, by)) = REPLACED.iter().find(|(cen, _)| *cen == id) {
-                unchecked.push((
-                    id.to_owned(),
-                    format!(
-                        "its context counts across every BG-24 (CEN issue 508); KoSIT's {by} \
-                         checks it per BG-24 and is used instead"
-                    ),
-                ));
-                continue;
-            }
-            let Ok(branches) = contexts(context) else {
-                unchecked.push((id.to_owned(), "a conditional rule context".to_owned()));
-                continue;
-            };
-            match relative(path) {
-                Ok(rel) => {
-                    for b in branches {
-                        rows.push((id.to_owned(), level.to_owned(), b, rel.clone()));
+            let expressed = parsed.and_then(|cs| {
+                let mut out = Vec::new();
+                for (guard, path) in cs {
+                    let rel = relative(&path)?;
+                    let guard = guard.map(|g| predicate(&g)).transpose()?;
+                    for b in contexts(context).map_err(|_| "a conditional rule context")? {
+                        let b = match &guard {
+                            None => b,
+                            Some(_) if b.ends_with(']') => {
+                                return Err("a guard on a context that already has a predicate");
+                            }
+                            Some(g) => format!("{b}[{g}]"),
+                        };
+                        out.push((id.to_owned(), level.to_owned(), b, rel.clone()));
                     }
                 }
+                Ok(out)
+            });
+            match expressed {
+                Ok(r) => rows.extend(r),
                 Err(why) => unchecked.push((id.to_owned(), why.to_owned())),
             }
         }
@@ -467,10 +531,7 @@ pub fn derive(
             }
         ));
     }
-    let (mut rule_rows, mut unchecked) = rules(syntax, spec)?;
-    if syntax == Syntax::Cii {
-        rule_rows.extend(kosit_rows(spec)?);
-    }
+    let (rule_rows, mut unchecked) = rules(syntax, spec)?;
     let rule_count = rule_rows.len();
     rows.extend(rule_rows);
     unchecked.sort();
@@ -567,6 +628,34 @@ mod tests {
         assert_eq!(counted("( count(ram:A/ram:B)  <= 1)"), Some("ram:A/ram:B"));
         assert_eq!(counted("count(x) <= 2"), None);
         assert_eq!(counted("not(cbc:X)"), None);
+    }
+
+    #[test]
+    fn conjunctions_guards_and_exactly_one_are_understood() {
+        let ok = |t: &str| clauses(t).unwrap().unwrap();
+        assert_eq!(
+            ok("count(a:P/b:X) <= 1 and count(a:Q/b:X) <= 1"),
+            [(None, "a:P/b:X".to_owned()), (None, "a:Q/b:X".to_owned())]
+        );
+        assert_eq!(
+            ok("not(a:D) or count(a:D/b:N) = 1"),
+            [(None, "a:D/b:N".to_owned())]
+        );
+        assert_eq!(
+            ok("normalize-space(ram:TypeCode) != '916' or count(ram:Name) <= 1"),
+            [(
+                Some("normalize-space(ram:TypeCode) = '916'".to_owned()),
+                "ram:Name".to_owned()
+            )]
+        );
+        assert!(
+            clauses("count(distinct-values(//cbc:PaymentID)) <= 1")
+                .unwrap()
+                .is_err()
+        );
+        assert_eq!(ok("not(a:L) or count(a:L) = 1"), [(None, "a:L".to_owned())]);
+        assert!(clauses("not(a:D) or count(b:N) = 1").unwrap().is_err());
+        assert!(clauses("exists(cbc:ID)").is_none());
     }
 
     #[test]

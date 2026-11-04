@@ -1153,7 +1153,7 @@ const _: () = {
 struct Family {
     /// The UNCL 5305 code.
     code: &'static str,
-    /// The rule-id prefix (`K` is `BR-IC`, `L` is `BR-AF`, `M` is `BR-AG`).
+    /// The rule-id prefix (`K` is `BR-IC`, `L` is `BR-IG`, `M` is `BR-IP`).
     prefix: &'static str,
     /// A rate this category accepts.
     rate: Option<Percentage>,
@@ -1166,8 +1166,8 @@ struct Family {
 #[rustfmt::skip]
 const FAMILIES: &[Family] = &[
     Family { code: "S",  prefix: "BR-S",  rate: Some(Percentage::new(dec!(19))), needs_reason: false, taxed: true },
-    Family { code: "L",  prefix: "BR-AF", rate: Some(Percentage::new(dec!(7))),  needs_reason: false, taxed: true },
-    Family { code: "M",  prefix: "BR-AG", rate: Some(Percentage::new(dec!(10))), needs_reason: false, taxed: true },
+    Family { code: "L",  prefix: "BR-IG", rate: Some(Percentage::new(dec!(7))),  needs_reason: false, taxed: true },
+    Family { code: "M",  prefix: "BR-IP", rate: Some(Percentage::new(dec!(10))), needs_reason: false, taxed: true },
     Family { code: "Z",  prefix: "BR-Z",  rate: Some(Percentage::ZERO),          needs_reason: false, taxed: false },
     Family { code: "E",  prefix: "BR-E",  rate: Some(Percentage::ZERO),          needs_reason: true,  taxed: false },
     Family { code: "AE", prefix: "BR-AE", rate: Some(Percentage::ZERO),          needs_reason: true,  taxed: false },
@@ -1397,7 +1397,10 @@ enum Why {
 ///
 /// There is no `Todo` variant: an unimplemented rule stays out of the registry.
 const UNCOVERED: &[(&str, Why, &str)] = &[
-    // Retired by the type system.
+    // Retired by the type system — for an invoice built in code. A document
+    // can lack the term: the readers in `en16931-formats` then report it
+    // (`Kind::Missing`), and that crate's conformance suite judges CEN's cases
+    // for these rules by the report.
     ("BR-12", Why::Retired, "BT-106 is non-Option"),
     ("BR-13", Why::Retired, "BT-109 is non-Option"),
     ("BR-14", Why::Retired, "BT-112 is non-Option"),

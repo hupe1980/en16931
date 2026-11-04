@@ -166,6 +166,36 @@ pub(crate) fn child_text(n: Node<'_, '_>, want: &str) -> Option<String> {
     kid(n, want).and_then(text)
 }
 
+/// A business-term path, `BG-23[1]` + `BT-117`, formatted only when an entry
+/// is recorded (eager formatting at every field read cost ~10 % read time).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Term<'a> {
+    group: &'a str,
+    term: &'a str,
+}
+
+impl<'a> Term<'a> {
+    /// `term` within `group`; an empty group is the term alone.
+    pub(crate) const fn new(group: &'a str, term: &'a str) -> Self {
+        Self { group, term }
+    }
+
+    /// The last part, `BT-117`.
+    pub(crate) const fn term(self) -> &'a str {
+        self.term
+    }
+}
+
+impl std::fmt::Display for Term<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.group.is_empty() {
+            f.write_str(self.term)
+        } else {
+            write!(f, "{}/{}", self.group, self.term)
+        }
+    }
+}
+
 /// The chain of local names from the document element down to `n`.
 pub(crate) fn path_of(n: Node<'_, '_>) -> String {
     let mut names: Vec<&str> = n
@@ -1033,21 +1063,32 @@ pub(crate) fn base64(bytes: &[u8]) -> String {
     out
 }
 
-/// Decode base64, RFC 4648 §4, ignoring whitespace.
-pub(crate) fn decode_base64(s: &str) -> Vec<u8> {
+/// Decode `xs:base64Binary` (RFC 4648 §4), ignoring XML whitespace. Any other
+/// byte outside the alphabet, misplaced padding or a length not a multiple of
+/// four is refused, never skipped into plausible bytes.
+pub(crate) fn decode_base64(s: &str) -> Result<Vec<u8>, &'static str> {
     let mut out = Vec::with_capacity(s.len() / 4 * 3);
     let mut acc: u32 = 0;
     let mut bits = 0u32;
+    let mut count = 0usize;
+    let mut padding = 0usize;
     for c in s.bytes() {
         let v = match c {
+            b' ' | b'\t' | b'\n' | b'\r' => continue,
+            b'=' => {
+                padding += 1;
+                count += 1;
+                continue;
+            }
+            _ if padding > 0 => return Err("base64 content continues after its padding"),
             b'A'..=b'Z' => c - b'A',
             b'a'..=b'z' => c - b'a' + 26,
             b'0'..=b'9' => c - b'0' + 52,
             b'+' => 62,
             b'/' => 63,
-            b'=' => break,
-            _ => continue, // whitespace and line breaks are legal in XML text
+            _ => return Err("not base64: a character outside the base64 alphabet"),
         };
+        count += 1;
         acc = acc << 6 | u32::from(v);
         bits += 6;
         if bits >= 8 {
@@ -1058,7 +1099,10 @@ pub(crate) fn decode_base64(s: &str) -> Vec<u8> {
             out.push((acc >> bits) as u8);
         }
     }
-    out
+    if padding > 2 || !count.is_multiple_of(4) {
+        return Err("not base64: the length is not a multiple of four");
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -1163,13 +1207,34 @@ mod tests {
             (b"foobar", "Zm9vYmFy"),
         ] {
             assert_eq!(base64(plain), encoded);
-            assert_eq!(decode_base64(encoded), plain, "round trip {encoded}");
+            assert_eq!(
+                decode_base64(encoded).unwrap(),
+                plain,
+                "round trip {encoded}"
+            );
         }
     }
 
     #[test]
     fn decoding_ignores_the_whitespace_xml_permits() {
-        assert_eq!(decode_base64("Zm9v\n  YmFy"), b"foobar");
+        assert_eq!(decode_base64("Zm9v\n  YmFy").unwrap(), b"foobar");
+    }
+
+    /// Corrupt content is refused, never decoded into plausible bytes.
+    #[test]
+    fn decoding_refuses_what_is_not_base64() {
+        for bad in [
+            "abc!",
+            "abc",
+            "Zg=",
+            "Zg===",
+            "Zg==Zg==",
+            "Zm9v YmF",
+            "Zm9-",
+            "\u{e9}AAA",
+        ] {
+            assert!(decode_base64(bad).is_err(), "{bad:?} must be refused");
+        }
     }
 
     #[test]

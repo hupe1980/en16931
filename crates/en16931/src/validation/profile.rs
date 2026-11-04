@@ -384,7 +384,10 @@ pub enum Core {
 
 impl Core {
     /// Whether a core rule with this id runs.
-    fn runs(self, id: &str) -> bool {
+    /// Readers ask it before reporting a term missing: ZUGFeRD MINIMUM does
+    /// not run `BR-12`, so its lawful lack of BT-106 is not reported.
+    #[must_use]
+    pub fn runs(self, id: &str) -> bool {
         match self {
             Self::All => true,
             Self::Only(ids) => ids.contains(&id),

@@ -17,7 +17,7 @@ I/O, no `unsafe`; two dependencies, and it builds for `wasm32`.
 
 ```toml
 [dependencies]
-en16931 = "0.8"
+en16931 = "0.9"
 rust_decimal = "1"
 ```
 

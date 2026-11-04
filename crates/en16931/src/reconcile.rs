@@ -652,8 +652,8 @@ mod tests {
 
             // The totals chain, BR-48 and every category family's rows.
             const FAMILIES: [&str; 10] = [
-                "BR-S-", "BR-Z-", "BR-E-", "BR-AE-", "BR-IC-", "BR-G-", "BR-O-", "BR-AF-",
-                "BR-AG-", "BR-B-",
+                "BR-S-", "BR-Z-", "BR-E-", "BR-AE-", "BR-IC-", "BR-G-", "BR-O-", "BR-IG-",
+                "BR-IP-", "BR-B-",
             ];
             let arithmetic = |r: &str| {
                 r.starts_with("BR-CO-1")

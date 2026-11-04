@@ -169,6 +169,16 @@ pub(crate) fn write(inv: &Invoice) -> Written {
             date(x, "ram:IssueDateTime", d);
         }
         for n in &inv.notes {
+            if n.note.is_none() {
+                x.note(
+                    Entry::new(
+                        Kind::Derived,
+                        "rsm:ExchangedDocument/ram:IncludedNote/ram:Content",
+                        "absent while BT-21 is present, and D16B requires the element: written empty",
+                    )
+                    .term("BG-1/BT-22"),
+                );
+            }
             x.group("ram:IncludedNote", |x| {
                 x.leaf("ram:Content", &[], n.note.as_deref().unwrap_or_default());
                 // BT-21 has its own element in CII.
@@ -799,7 +809,24 @@ fn line(x: &mut Xml, l: &InvoiceLine, i: usize, ccy: &str) {
             if let Some(d) = &i.description {
                 x.leaf("ram:Description", &[], d);
             }
-            for a in &i.attributes {
+            for (j, a) in i.attributes.iter().enumerate() {
+                // D16B requires both; an absent one is written empty and said
+                // (`BR-54` already finds the attribute incomplete).
+                for (el, term, v) in [
+                    ("ram:Description", "BT-160", &a.name),
+                    ("ram:Value", "BT-161", &a.value),
+                ] {
+                    if v.is_none() {
+                        x.note(
+                            Entry::new(
+                                Kind::Derived,
+                                format!("ram:SpecifiedTradeProduct/ram:ApplicableProductCharacteristic/{el}"),
+                                "absent, and D16B requires the element: written empty",
+                            )
+                            .term(format!("BG-32[{}]/{term}", j + 1)),
+                        );
+                    }
+                }
                 x.group("ram:ApplicableProductCharacteristic", |x| {
                     x.leaf(
                         "ram:Description",

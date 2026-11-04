@@ -58,7 +58,8 @@ known, a hint:
 | Kind | Means |
 |---|---|
 | `Unmapped` | an element outside the EN 16931 subset — another CIUS's addition, an extension |
-| `Malformed` | present, and not representable — a third decimal, a timestamp where a date belongs |
+| `Malformed` | present, and not representable — a third decimal, a timestamp where a date belongs, `abc` as a quantity, an amount in another currency than BT-5 |
+| `Missing` | a term the model requires that the document does not carry — no `ram:CalculatedAmount` in a VAT breakdown; the field holds a placeholder |
 | `Duplicate` | a second occurrence of an element the schema (or a CEN syntax rule) allows once; the first is read |
 | `Repeated` | the same, where CEN publishes the rule as a warning |
 | `Schema` | a spelling the schema does not admit, read anyway; writing, a required element the model lacks |
@@ -69,7 +70,14 @@ known, a hint:
 | `Prohibited` | writing: an element CEN's syntax rules fence out of the EN 16931 subset |
 | `Derived` | writing: a value the syntax requires and the model lacked, derived |
 
-`Unmapped` and `Malformed` are not errors on their own, and neither is silent. `Display` on an entry is the one text rendering:
+`Unmapped`, `Malformed` and `Missing` are not errors on their own, and none is silent.
+
+**A reader never invents a value.** A required term the document lacks gets a
+placeholder and a `Missing` entry (`BG-23[1]/BT-117`), so `receive` rejects it;
+a number that does not parse is `Malformed`, never zero. What is required
+follows the declared profile: ZUGFeRD MINIMUM lawfully has no BT-106.
+
+`Display` on an entry is the one text rendering:
 
 ```text
 malformed    …/ChargeIndicator/Indicator (BG-20) = "yes" — not an xs:boolean [hint: the value must be `true` or `false`]
@@ -181,14 +189,14 @@ report.
 
 ## The 91 % that costs a writer nothing
 
-CEN's artefacts carry **1 339** syntax rules. **1 218 of them (91 %)** say some
+CEN's artefacts carry **1 346** syntax rules. **1 218 of them (91 %)** say some
 element "shall not be used" — they fence off the parts of UBL 2.1 and CII D16B
 that EN 16931 does not use. That inverts the usual expectation:
 
 | | Rules that apply | Why |
 |---|---|---|
 | **Writer** | ~119 | It has no way to express `cbc:UUID` — the model has no term for it. The prohibitions are *unreachable*, not cheaply satisfied. |
-| **Reader** | all 1 339 | The document came from somewhere else. |
+| **Reader** | all 1 346 | The document came from somewhere else. |
 
 Unreachability is a claim, so the serialiser enforces it against prohibitions
 extracted from CEN's own Schematron, and a test asserts the writer never needs
@@ -216,8 +224,8 @@ Six tables are **generated from the authorities' artefacts**, never transcribed:
 | CII element order | CEN's D16B subset schema, over the parents and children of **175** published CII instances | 38 parents |
 | UBL prohibitions | preprocessed `EN16931-UBL-validation` | 1 548 paths + 21 attributes |
 | CII prohibitions | preprocessed `EN16931-CII-validation` | 447 paths |
-| UBL single occurrence | the OASIS UBL 2.1 schemas and CEN's `count(…) <= 1` rules | 239 rows |
-| CII single occurrence | CEN's D16B subset schema and CEN's `count(…) <= 1` rules | 177 rows |
+| UBL single occurrence | the OASIS UBL 2.1 schemas and CEN's `count(…) <= 1` rules | 253 rows |
+| CII single occurrence | CEN's D16B subset schema and CEN's `count(…) <= 1` rules | 186 rows |
 
 Both syntaxes' content models are XSD `sequence`s, so a document with exactly the
 right elements **in the wrong order** is invalid — and no Schematron rule says

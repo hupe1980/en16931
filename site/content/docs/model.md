@@ -157,9 +157,9 @@ credits 10 returned ones **on the same ordinary invoice**:
 The sign lives on the **quantity**, never on the price — BR-27 forbids a negative
 item net price.
 
-## Code lists — 4 876 values, generated
+## Code lists — 4 896 values, generated
 
-4 876 values across 18 tables, generated from the CEN artefacts and re-verified
+4 896 values across 18 tables, generated from the CEN artefacts and re-verified
 in CI:
 ISO 3166-1 countries, ISO 4217 currencies, UNTDID 1001 document types, UNTDID
 5305 VAT categories, UNTDID 4451 note subjects, UN/ECE Rec 20 and Rec 21 unit

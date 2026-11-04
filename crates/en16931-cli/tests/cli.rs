@@ -539,11 +539,11 @@ fn suppressions_are_recorded_in_the_output() {
 
 #[test]
 fn explain_resolves_rules_restrictions_and_every_spelling() {
-    for query in ["BR-CO-14", "br-co-3", "br-af-1"] {
+    for query in ["BR-CO-14", "br-co-3", "br-ig-1"] {
         cli().args(["explain", query]).assert().success();
     }
     // No family is mapped onto another.
-    cli().args(["explain", "BR-IG-1"]).assert().failure();
+    cli().args(["explain", "BR-AF-1"]).assert().failure();
     // A restriction is not a rule and still appears in reports under its id.
     cli()
         .args(["explain", "BR-DE-3"])
@@ -1283,4 +1283,50 @@ fn embed_refuses_with_exit_one_and_misuse_with_two() {
         .assert()
         .code(2);
     assert!(!out.exists(), "nothing is written on a refusal");
+}
+
+/// GitHub #14 and #15 through the command line: an unreadable quantity and an
+/// absent VAT category tax amount are rejected, each named by business term.
+#[test]
+fn a_value_the_reader_cannot_read_or_a_missing_term_is_rejected_by_name() {
+    let valid = valid_ubl();
+    let at = valid
+        .find("<cbc:InvoicedQuantity")
+        .expect("the fixture has a line");
+    let open = at + valid[at..].find('>').unwrap() + 1;
+    let close = open + valid[open..].find('<').unwrap();
+    let abc = format!("{}abc{}", &valid[..open], &valid[close..]);
+    let path = write_temp("quantity.xml", &abc);
+    cli()
+        .args(["validate", path.to_str().unwrap()])
+        .assert()
+        .code(1)
+        .stdout(contains("malformed"))
+        .stdout(contains("BT-129"));
+
+    let start = valid
+        .find("<cac:TaxSubtotal>")
+        .and_then(|s| valid[s..].find("<cbc:TaxAmount").map(|t| s + t))
+        .expect("the fixture has a VAT breakdown");
+    let end = start + valid[start..].find("</cbc:TaxAmount>").unwrap() + "</cbc:TaxAmount>".len();
+    let without = format!("{}{}", &valid[..start], &valid[end..]);
+    let path = write_temp("bt117.xml", &without);
+    cli()
+        .args(["validate", path.to_str().unwrap()])
+        .assert()
+        .code(1)
+        .stdout(contains("missing"))
+        .stdout(contains("BG-23[1]/BT-117"));
+}
+
+/// `explain` says how a rule the types retire is held, rather than letting it
+/// read like the rules a predicate checks.
+#[test]
+fn explain_says_how_a_type_retired_rule_is_held() {
+    cli()
+        .args(["explain", "BR-46"])
+        .assert()
+        .success()
+        .stdout(contains("terms: BT-117"))
+        .stdout(contains("held by: the model's types"));
 }

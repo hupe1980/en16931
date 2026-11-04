@@ -43,12 +43,11 @@ pub const KOSIT_CONFIG: ArtefactRef = ArtefactRef {
 /// OpenPeppol's release — the source of every `PEPPOL-EN16931-*` and
 /// `PEPPOL-COMMON-*`.
 ///
-/// BIS Billing 3.0.21, which has no tag: the reference is the commit whose
-/// Schematron docs.peppol.eu publishes.
+/// BIS Billing 3.0.21-hotfix (2026-10-28), the commit tag `3.0.21` names.
 pub const PEPPOL: ArtefactRef = ArtefactRef {
     authority: "OpenPeppol",
     repo: "OpenPEPPOL/peppol-bis-invoice-3",
-    git_ref: "806866bd2bd91d7e9623b68f08164e8fbe9e67a0",
+    git_ref: "5df0eff7c8efafd7c79c0dacce55082d175db759",
 };
 
 // ── EN 16931 core ─────────────────────────────────────────────────────────────

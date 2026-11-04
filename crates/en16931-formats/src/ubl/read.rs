@@ -9,6 +9,7 @@
 use std::collections::BTreeSet;
 
 use crate::report::{Entry, Kind};
+use crate::xml::Term;
 use crate::xml::{Node, kid, kids, name};
 
 use en16931::invoice::{
@@ -32,6 +33,12 @@ pub(crate) struct Reader {
     /// Everything else the reader has to say, in document order — values
     /// present and not representable, combinations the model cannot hold.
     entries: Vec<Entry>,
+    /// BT-5, pre-scanned, against which every amount's `@currencyID` is
+    /// checked.
+    currency: Option<String>,
+    /// BT-24, pre-scanned: a term is missing only if the declared profile
+    /// runs the rule requiring it (`crate::required`).
+    bt24: Option<String>,
 }
 
 /// One `cac:TaxTotal/cbc:TaxAmount`, held until BT-5 and BT-6 are known.
@@ -43,6 +50,13 @@ struct TaxAmountSeen {
     /// Its text, as written.
     raw: String,
     amount: Option<InvoiceAmount>,
+}
+
+/// Whether a UBL `cac:TaxScheme/cbc:ID` names VAT, as CEN's binding tests it
+/// (`normalize-space(upper-case(cbc:ID)) = 'VAT'`): only then is the category
+/// or the company identifier beside it a VAT term.
+fn is_vat(scheme: Option<&str>) -> bool {
+    scheme.is_some_and(|s| s.trim().eq_ignore_ascii_case("VAT"))
 }
 
 /// Trimmed text of the first child named `want`.
@@ -166,27 +180,126 @@ impl Reader {
         &mut self,
         n: Node<'_, '_>,
         want: &str,
+        term: Option<Term<'_>>,
         parse: impl Fn(&str) -> Result<T, E>,
     ) -> Option<T> {
         let raw = text(n, want)?;
         match parse(&raw) {
             Ok(v) => Some(v),
             Err(e) => {
-                self.entries.push(
-                    Entry::new(
-                        Kind::Malformed,
-                        format!("{}/{want}", name(n)),
-                        e.to_string(),
-                    )
-                    .value(raw),
-                );
+                let entry = Entry::new(
+                    Kind::Malformed,
+                    format!("{}/{want}", name(n)),
+                    e.to_string(),
+                )
+                .value(raw);
+                self.entries.push(match term {
+                    Some(t) => entry.term(t.to_string()),
+                    None => entry,
+                });
                 None
             }
         }
     }
 
-    fn amount(&mut self, n: Node<'_, '_>, want: &str) -> Option<InvoiceAmount> {
-        self.value(n, want, InvoiceAmount::parse)
+    /// An amount in `want`, recording one the model cannot hold: not an
+    /// amount, more than two decimals, or in another currency than BT-5.
+    fn amount(&mut self, n: Node<'_, '_>, want: &str, term: Term<'_>) -> Option<InvoiceAmount> {
+        if let Some(e) = kid(n, want)
+            && !self.in_document_currency(e, term)
+        {
+            return None;
+        }
+        self.value(n, want, Some(term), InvoiceAmount::parse)
+    }
+
+    /// Whether the amount element `e` is in BT-5. A blank or absent
+    /// `@currencyID` means BT-5; another currency is recorded and the amount
+    /// left out — reading it as BT-5 would change its value.
+    fn in_document_currency(&mut self, e: Node<'_, '_>, term: Term<'_>) -> bool {
+        let Some(ccy) = e
+            .attribute("currencyID")
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+        else {
+            return true;
+        };
+        // `BR-CL-03`: the code itself must be ISO 4217, whatever BT-5 is.
+        if !en16931::codes::contains(en16931::codes::generated::CURRENCY_CODES, ccy) {
+            self.entries.push(
+                Entry::new(
+                    Kind::Malformed,
+                    e.parent_element().map_or_else(
+                        || name(e).to_owned(),
+                        |p| format!("{}/{}", name(p), name(e)),
+                    ),
+                    format!("{ccy} is not an ISO 4217 currency code; the amount is not read"),
+                )
+                .term(term.to_string())
+                .value(ccy.to_owned())
+                .hint("BR-CL-03: currencyID MUST be coded using ISO code list 4217 alpha-3"),
+            );
+            return false;
+        }
+        match self.currency.as_deref() {
+            Some(doc) if doc != ccy => {
+                let path = e.parent_element().map_or_else(
+                    || name(e).to_owned(),
+                    |p| format!("{}/{}", name(p), name(e)),
+                );
+                self.entries.push(
+                    Entry::new(
+                        Kind::Malformed,
+                        path,
+                        format!("an amount in {ccy}, not in the invoice currency (BT-5 = {doc}); not read"),
+                    )
+                    .term(term.to_string())
+                    .value(ccy.to_owned()),
+                );
+                false
+            }
+            _ => true,
+        }
+    }
+
+    /// Record that `term`, which the model requires, is not in the group `at`.
+    fn missing(&mut self, at: Node<'_, '_>, term: Term<'_>, what: &str) {
+        self.missing_at(crate::xml::path_of(at), term, what);
+    }
+
+    /// [`Self::missing`] at a path, for a group that is itself absent.
+    fn missing_at(&mut self, path: String, term: Term<'_>, what: &str) {
+        if !crate::required::is_required(self.bt24.as_deref(), term.term()) {
+            return;
+        }
+        let why = crate::required::rule_for(term.term()).map_or_else(
+            || "the model requires it".to_owned(),
+            |r| format!("{r} requires it"),
+        );
+        self.entries.push(
+            Entry::new(
+                Kind::Missing,
+                path,
+                format!("{what} is absent; {why}, and the model holds a placeholder"),
+            )
+            .term(term.to_string()),
+        );
+    }
+
+    /// A required amount: absent or empty is [`Kind::Missing`], unreadable
+    /// [`Kind::Malformed`]; either way the placeholder is zero.
+    fn required_amount(
+        &mut self,
+        n: Node<'_, '_>,
+        want: &str,
+        term: Term<'_>,
+        what: &str,
+    ) -> InvoiceAmount {
+        if text(n, want).is_none() {
+            self.missing(n, term, what);
+            return InvoiceAmount::default();
+        }
+        self.amount(n, want, term).unwrap_or_default()
     }
 
     /// The amount in `n` itself.
@@ -208,17 +321,44 @@ impl Reader {
         }
     }
 
-    fn decimal(&mut self, n: Node<'_, '_>, want: &str) -> Option<rust_decimal::Decimal> {
-        self.value(n, want, str::parse::<rust_decimal::Decimal>)
+    /// A unit price in `want`: a number, in BT-5.
+    fn unit_price(
+        &mut self,
+        n: Node<'_, '_>,
+        want: &str,
+        term: Term<'_>,
+    ) -> Option<en16931::UnitPriceAmount> {
+        if let Some(e) = kid(n, want)
+            && !self.in_document_currency(e, term)
+        {
+            return None;
+        }
+        self.decimal(n, want, term)
+            .map(en16931::UnitPriceAmount::new)
+    }
+
+    /// A number in `want`, recording text that is not one.
+    fn decimal(
+        &mut self,
+        n: Node<'_, '_>,
+        want: &str,
+        term: Term<'_>,
+    ) -> Option<rust_decimal::Decimal> {
+        self.value(n, want, Some(term), |t| {
+            t.parse::<rust_decimal::Decimal>()
+                .map_err(|_| "not a decimal number the model can hold")
+        })
     }
 
     fn date(&mut self, n: Node<'_, '_>, want: &str) -> Option<Date> {
-        self.value(n, want, |t| xs_date(t).ok_or("not an xs:date"))
+        self.value(n, want, None, |t| xs_date(t).ok_or("not an xs:date"))
     }
 
     /// Read a UBL `Invoice` or `CreditNote` root element.
     pub(crate) fn read(&mut self, root: Node<'_, '_>) -> Invoice {
         let mut inv = Invoice::default();
+        self.bt24 = text(root, "CustomizationID");
+        self.currency = text(root, "DocumentCurrencyCode");
         // The root element is the document kind.
         inv.kind = if name(root) == "CreditNote" {
             DocumentKind::CreditNote
@@ -269,6 +409,14 @@ impl Reader {
                 }
                 "BillingReference" => {
                     if let Some(r) = kid(c, "InvoiceDocumentReference") {
+                        if text(r, "ID").is_none() {
+                            let term = format!("BG-3[{}]/BT-25", inv.preceding_invoices.len() + 1);
+                            self.missing(
+                                r,
+                                Term::new("", &term),
+                                "the preceding invoice reference",
+                            );
+                        }
                         inv.preceding_invoices.push(PrecedingInvoice {
                             reference: text(r, "ID")
                                 .map_or_else(|| DocumentReference::new(""), DocumentReference::new),
@@ -322,7 +470,12 @@ impl Reader {
                 }
                 "AllowanceCharge" => {
                     let is_charge = self.charge_indicator(c, "AllowanceCharge");
-                    let ac = self.allowance(c);
+                    let index = if is_charge {
+                        inv.charges.len()
+                    } else {
+                        inv.allowances.len()
+                    } + 1;
+                    let ac = self.allowance(c, is_charge, index);
                     if is_charge {
                         inv.charges.push(ac);
                     } else {
@@ -338,13 +491,20 @@ impl Reader {
                         .third_party_payments
                         .push(en16931::ThirdPartyPayment {
                             payment_type: text(c, "ID"),
-                            amount: self.amount(c, "PaidAmount"),
+                            amount: self.amount(
+                                c,
+                                "PaidAmount",
+                                Term::new("BG-DEX-09", "BT-DEX-002"),
+                            ),
                             description: text(c, "InstructionID"),
                         });
                 }
-                "LegalMonetaryTotal" => self.totals(c, &mut inv),
+                "LegalMonetaryTotal" => {
+                    self.totals(c, &mut inv);
+                    self.required_totals(root, Some(c), &mut inv);
+                }
                 "InvoiceLine" | "CreditNoteLine" => {
-                    let l = self.line(c);
+                    let l = self.line(c, inv.lines.len() + 1);
                     // BG-DEX-01 hangs beneath the line, keyed by its index.
                     let subs = self.sub_lines(c);
                     if !subs.is_empty() {
@@ -387,6 +547,9 @@ impl Reader {
             }
         }
 
+        if kid(root, "LegalMonetaryTotal").is_none() {
+            self.required_totals(root, None, &mut inv);
+        }
         // Resolve BT-110 / BT-111 now that BT-5 and BT-6 are known. When the
         // two currencies coincide, one element is both, as CEN's `BR-53`
         // binding reads it.
@@ -415,15 +578,16 @@ impl Reader {
                                 .unwrap_or("the invoice currency"),
                         ),
                     )
-                    .term(term)
+                    .term(term.to_string())
                     .value(seen.raw),
                 );
                 continue;
             }
             if !is_doc && !is_tax {
-                // A total in a third currency: the model has no place for it.
+                // A total in a third currency: the model has no place for it,
+                // and as information it let BT-110 go missing unremarked.
                 let e = Entry::new(
-                    Kind::Unmapped,
+                    Kind::Malformed,
                     seen.path,
                     format!(
                         "a tax total in {}, which is neither the invoice currency (BT-5{}) \
@@ -502,10 +666,23 @@ impl Reader {
                     // registration identifier.
                     let scheme = kid(c, "TaxScheme").and_then(|s| text(s, "ID"));
                     let id = text(c, "CompanyID");
-                    if scheme.as_deref() == Some("VAT") {
-                        p.vat_identifier = id;
-                    } else {
-                        p.tax_registration = id;
+                    match scheme {
+                        Some(s) if is_vat(Some(&s)) => p.vat_identifier = id,
+                        Some(_) => p.tax_registration = id,
+                        // CEN binds both by the scheme (`= 'VAT'` / `!= 'VAT'`),
+                        // and neither holds without one: not guessed.
+                        None => self.entries.push({
+                            let e = Entry::new(
+                                Kind::Unmapped,
+                                "Party/PartyTaxScheme/TaxScheme",
+                                "a party tax scheme without a scheme identifier is neither the VAT \
+                                 identifier nor the tax registration identifier; not mapped",
+                            );
+                            match id {
+                                Some(v) => e.value(v),
+                                None => e,
+                            }
+                        }),
                     }
                 }
                 "PartyLegalEntity" => {
@@ -547,6 +724,18 @@ impl Reader {
 
     fn tax_rep(&mut self, n: Node<'_, '_>) -> TaxRepresentative {
         let p = self.party(n);
+        if let Some(id) = &p.tax_registration {
+            self.entries.push(
+                Entry::new(
+                    Kind::Unmapped,
+                    "TaxRepresentativeParty/PartyTaxScheme",
+                    "a tax registration under a scheme other than VAT; BG-11 holds only the VAT \
+                     identifier (BT-63); not mapped",
+                )
+                .term("BG-11")
+                .value(id.clone()),
+            );
+        }
         TaxRepresentative {
             name: p.name.or(p.trading_name),
             vat_identifier: p.vat_identifier,
@@ -667,6 +856,8 @@ impl Reader {
     fn tax_category(
         &mut self,
         n: Node<'_, '_>,
+        category: Term<'_>,
+        rate: Term<'_>,
     ) -> (Code, Option<Percentage>, Option<String>, Option<Code>) {
         let mut reason = None;
         let mut reason_code = None;
@@ -678,20 +869,62 @@ impl Reader {
                 _ => self.skip("TaxCategory", c),
             }
         }
+        // The category is read whatever the scheme: CEN's own `BR-CL-17` /
+        // `BR-CL-18` cases carry it with no `cac:TaxScheme` and expect it
+        // checked. A scheme stated as something other than VAT is said —
+        // EN 16931 carries VAT only, and `BR-47`'s binding would not count it.
+        if let Some(scheme) = kid(n, "TaxScheme").and_then(|s| text(s, "ID"))
+            && !is_vat(Some(&scheme))
+        {
+            self.entries.push(
+                Entry::new(
+                    Kind::Unmapped,
+                    "TaxCategory/TaxScheme/ID",
+                    "a tax category under a scheme other than VAT; EN 16931 carries VAT only, and \
+                     the category is read as a VAT category",
+                )
+                .term(category.to_string())
+                .value(scheme),
+            );
+        }
+        let cat = code(n, "ID").unwrap_or_else(|| {
+            self.missing(n, category, "the VAT category code");
+            Code::default()
+        });
         (
-            code(n, "ID").unwrap_or_default(),
-            self.decimal(n, "Percent").map(Percentage::new),
+            cat,
+            self.decimal(n, "Percent", rate).map(Percentage::new),
             reason,
             reason_code,
         )
     }
 
-    fn allowance(&mut self, n: Node<'_, '_>) -> DocumentAllowanceCharge {
+    fn allowance(
+        &mut self,
+        n: Node<'_, '_>,
+        is_charge: bool,
+        index: usize,
+    ) -> DocumentAllowanceCharge {
+        let (group, [amount, base, pct, cat, rate]) = if is_charge {
+            (
+                format!("BG-21[{index}]"),
+                ["BT-99", "BT-100", "BT-101", "BT-102", "BT-103"],
+            )
+        } else {
+            (
+                format!("BG-20[{index}]"),
+                ["BT-92", "BT-93", "BT-94", "BT-95", "BT-96"],
+            )
+        };
+        if kid(n, "TaxCategory").is_none() {
+            self.missing(n, Term::new(&group, cat), "the VAT category code");
+        }
         let mut vat = LineVat::default();
         for c in kids(n) {
             match name(c) {
                 "TaxCategory" => {
-                    let (cat, pct, _, _) = self.tax_category(c);
+                    let (cat, pct, _, _) =
+                        self.tax_category(c, Term::new(&group, cat), Term::new(&group, rate));
                     vat = LineVat {
                         category: cat,
                         rate: pct,
@@ -708,10 +941,19 @@ impl Reader {
             }
         }
         DocumentAllowanceCharge {
-            amount: self.amount(n, "Amount").unwrap_or_default(),
-            base_amount: self.amount(n, "BaseAmount"),
+            amount: self.required_amount(
+                n,
+                "Amount",
+                Term::new(&group, amount),
+                if is_charge {
+                    "the charge amount"
+                } else {
+                    "the allowance amount"
+                },
+            ),
+            base_amount: self.amount(n, "BaseAmount", Term::new(&group, base)),
             percentage: self
-                .decimal(n, "MultiplierFactorNumeric")
+                .decimal(n, "MultiplierFactorNumeric", Term::new(&group, pct))
                 .map(Percentage::new),
             vat,
             reason: text(n, "AllowanceChargeReason"),
@@ -739,6 +981,10 @@ impl Reader {
             return;
         }
         for st in subtotals {
+            let group = format!("BG-23[{}]", inv.vat_breakdown.len() + 1);
+            if kid(st, "TaxCategory").is_none() {
+                self.missing(st, Term::new(&group, "BT-118"), "the VAT category code");
+            }
             let mut cat = Code::default();
             let mut rate = None;
             let mut reason = None;
@@ -746,7 +992,11 @@ impl Reader {
             for c in kids(st) {
                 match name(c) {
                     "TaxCategory" => {
-                        let (a, b, r, rc) = self.tax_category(c);
+                        let (a, b, r, rc) = self.tax_category(
+                            c,
+                            Term::new(&group, "BT-118"),
+                            Term::new(&group, "BT-119"),
+                        );
                         cat = a;
                         rate = b;
                         reason = r;
@@ -757,8 +1007,18 @@ impl Reader {
                 }
             }
             inv.vat_breakdown.push(VatBreakdown {
-                taxable_amount: self.amount(st, "TaxableAmount").unwrap_or_default(),
-                tax_amount: self.amount(st, "TaxAmount").unwrap_or_default(),
+                taxable_amount: self.required_amount(
+                    st,
+                    "TaxableAmount",
+                    Term::new(&group, "BT-116"),
+                    "the VAT category taxable amount",
+                ),
+                tax_amount: self.required_amount(
+                    st,
+                    "TaxAmount",
+                    Term::new(&group, "BT-117"),
+                    "the VAT category tax amount",
+                ),
                 category: cat,
                 rate,
                 exemption_reason: reason,
@@ -769,10 +1029,31 @@ impl Reader {
 
     /// An amount, recording the value if the model cannot hold it.
     fn opt_amt(&mut self, n: Node<'_, '_>, what: &str) -> Option<InvoiceAmount> {
+        let term = Self::total_term(what);
+        if !self.in_document_currency(n, term) {
+            return None;
+        }
         let raw = own_text(n);
         let parsed = InvoiceAmount::parse(&raw).ok();
         if parsed.is_none() && !raw.is_empty() {
-            let term = match what {
+            self.entries.push(
+                Entry::new(
+                    Kind::Malformed,
+                    format!("LegalMonetaryTotal/{what}"),
+                    "not an amount the model can hold (at most two decimals)",
+                )
+                .term(term.to_string())
+                .value(raw),
+            );
+        }
+        parsed
+    }
+
+    /// The BG-22 term each `cac:LegalMonetaryTotal` child carries.
+    fn total_term(what: &str) -> Term<'static> {
+        Term::new(
+            "BG-22",
+            match what {
                 "LineExtensionAmount" => "BT-106",
                 "TaxExclusiveAmount" => "BT-109",
                 "TaxInclusiveAmount" => "BT-112",
@@ -781,62 +1062,146 @@ impl Reader {
                 "PrepaidAmount" => "BT-113",
                 "PayableRoundingAmount" => "BT-114",
                 _ => "BT-115",
-            };
-            self.entries.push(
-                Entry::new(
-                    Kind::Malformed,
-                    format!("LegalMonetaryTotal/{what}"),
-                    "not an amount the model can hold (at most two decimals)",
-                )
-                .term(term)
-                .value(raw),
-            );
-        }
-        parsed
+            },
+        )
     }
 
-    fn amt(&mut self, n: Node<'_, '_>, what: &str) -> InvoiceAmount {
-        self.opt_amt(n, what).unwrap_or_default()
+    /// BG-22's four required amounts, said when absent — whether the element
+    /// or the whole `cac:LegalMonetaryTotal` is missing (`at` is then the
+    /// document element).
+    fn required_totals(
+        &mut self,
+        at: Node<'_, '_>,
+        totals: Option<Node<'_, '_>>,
+        inv: &mut Invoice,
+    ) {
+        for (what, label) in [
+            ("LineExtensionAmount", "the sum of invoice line net amounts"),
+            ("TaxExclusiveAmount", "the invoice total amount without VAT"),
+            ("TaxInclusiveAmount", "the invoice total amount with VAT"),
+            ("PayableAmount", "the amount due for payment"),
+        ] {
+            let el = totals.and_then(|t| kid(t, what));
+            let value = match el {
+                Some(e) if !own_text(e).is_empty() => self.opt_amt(e, what).unwrap_or_default(),
+                _ => {
+                    match totals {
+                        Some(t) => self.missing(t, Self::total_term(what), label),
+                        // The whole group is absent: its path is where it would be.
+                        None => self.missing_at(
+                            format!("{}/LegalMonetaryTotal", crate::xml::path_of(at)),
+                            Self::total_term(what),
+                            label,
+                        ),
+                    }
+                    InvoiceAmount::default()
+                }
+            };
+            let t = &mut inv.totals;
+            match what {
+                "LineExtensionAmount" => t.line_total = value,
+                "TaxExclusiveAmount" => t.taxable_total = value,
+                "TaxInclusiveAmount" => t.gross_total = value,
+                _ => t.due = value,
+            }
+        }
     }
 
     fn totals(&mut self, n: Node<'_, '_>, inv: &mut Invoice) {
         let t = &mut inv.totals;
         for c in kids(n) {
             match name(c) {
-                "LineExtensionAmount" => t.line_total = self.amt(c, "LineExtensionAmount"),
-                "TaxExclusiveAmount" => t.taxable_total = self.amt(c, "TaxExclusiveAmount"),
-                "TaxInclusiveAmount" => t.gross_total = self.amt(c, "TaxInclusiveAmount"),
+                // Required: read by `required_totals`, so an absent one is said.
+                "LineExtensionAmount"
+                | "TaxExclusiveAmount"
+                | "TaxInclusiveAmount"
+                | "PayableAmount" => {}
                 "AllowanceTotalAmount" => {
                     t.allowance_total = self.opt_amt(c, "AllowanceTotalAmount");
                 }
                 "ChargeTotalAmount" => t.charge_total = self.opt_amt(c, "ChargeTotalAmount"),
                 "PrepaidAmount" => t.paid = self.opt_amt(c, "PrepaidAmount"),
                 "PayableRoundingAmount" => t.rounding = self.opt_amt(c, "PayableRoundingAmount"),
-                "PayableAmount" => t.due = self.amt(c, "PayableAmount"),
                 _ => self.skip("LegalMonetaryTotal", c),
             }
         }
     }
 
-    fn line(&mut self, n: Node<'_, '_>) -> InvoiceLine {
+    /// One line; `index` is its 1-based position among its siblings, passed
+    /// in rather than counted, which would make a document quadratic.
+    fn line(&mut self, n: Node<'_, '_>, index: usize) -> InvoiceLine {
+        // A sub-line is BG-DEX-01; its index is among its siblings, and its
+        // path says which line it hangs beneath.
+        let group = if name(n) == "SubInvoiceLine" {
+            format!("BG-DEX-01[{index}]")
+        } else {
+            format!("BG-25[{index}]")
+        };
+        let quantity_el = if kid(n, "InvoicedQuantity").is_some() {
+            "InvoicedQuantity"
+        } else {
+            "CreditedQuantity"
+        };
+        let id = text(n, "ID").unwrap_or_else(|| {
+            self.missing(
+                n,
+                Term::new(&group, "BT-126"),
+                "the invoice line identifier",
+            );
+            String::new()
+        });
+        let quantity = if text(n, quantity_el).is_some() {
+            self.decimal(n, quantity_el, Term::new(&group, "BT-129"))
+                .map_or(Quantity::ZERO, Quantity::new)
+        } else {
+            self.missing(n, Term::new(&group, "BT-129"), "the invoiced quantity");
+            Quantity::ZERO
+        };
+        let unit_code = if let Some(u) = kid(n, quantity_el)
+            .and_then(|q| q.attribute("unitCode"))
+            .map(str::trim)
+            .filter(|u| !u.is_empty())
+        {
+            Code::new(u)
+        } else {
+            self.missing(
+                n,
+                Term::new(&group, "BT-130"),
+                "the invoiced quantity unit of measure code",
+            );
+            Code::default()
+        };
+        let net_amount = self.required_amount(
+            n,
+            "LineExtensionAmount",
+            Term::new(&group, "BT-131"),
+            "the invoice line net amount",
+        );
+        if kid(n, "Price").is_none() {
+            self.missing(n, Term::new(&group, "BT-146"), "the item net price");
+        }
+        // A sub-line's BG-DEX-06 is optional in the model (`BR-DEX-03` checks
+        // it); only a line's BT-151 is filled with a placeholder.
+        if name(n) != "SubInvoiceLine"
+            && kid(n, "Item")
+                .and_then(|i| kid(i, "ClassifiedTaxCategory"))
+                .is_none()
+        {
+            self.missing(
+                n,
+                Term::new(&group, "BT-151"),
+                "the invoiced item VAT category code",
+            );
+        }
         let mut l = InvoiceLine {
-            id: text(n, "ID").unwrap_or_default(),
+            id,
             note: text(n, "Note"),
             order_line_reference: None,
             accounting_reference: text(n, "AccountingCost"),
             object_identifier: None,
-            quantity: Quantity::new(
-                text(n, "InvoicedQuantity")
-                    .or_else(|| text(n, "CreditedQuantity"))
-                    .and_then(|q| q.parse().ok())
-                    .unwrap_or_default(),
-            ),
-            unit_code: kid(n, "InvoicedQuantity")
-                .or_else(|| kid(n, "CreditedQuantity"))
-                .and_then(|q| q.attribute("unitCode"))
-                .map(Code::new)
-                .unwrap_or_default(),
-            net_amount: self.amount(n, "LineExtensionAmount").unwrap_or_default(),
+            quantity,
+            unit_code,
+            net_amount,
             period: None,
             allowances: vec![],
             charges: vec![],
@@ -851,19 +1216,54 @@ impl Reader {
                     l.order_line_reference = text(c, "LineID").map(DocumentReference::new);
                 }
                 "DocumentReference" => {
-                    if text(c, "DocumentTypeCode").as_deref() == Some("130")
-                        && let Some(id) = kid(c, "ID")
-                    {
-                        l.object_identifier = Some(identifier(id));
+                    if text(c, "DocumentTypeCode").as_deref() == Some("130") {
+                        if let Some(id) = kid(c, "ID") {
+                            l.object_identifier = Some(identifier(id));
+                        }
+                    } else {
+                        // BT-128 is the line's only document reference
+                        // (`PEPPOL-EN16931-R101`); another is said, not dropped.
+                        let e = Entry::new(
+                            Kind::Unmapped,
+                            "InvoiceLine/DocumentReference/DocumentTypeCode",
+                            "a line-level document reference other than the invoiced object \
+                             (BT-128, type code 130); not mapped",
+                        )
+                        .term(format!("{group}/BT-128"))
+                        .rule("PEPPOL-EN16931-R101");
+                        self.entries.push(match text(c, "DocumentTypeCode") {
+                            Some(v) => e.value(v),
+                            None => e,
+                        });
                     }
                 }
                 "AllowanceCharge" => {
                     let is_charge = self.charge_indicator(c, "InvoiceLine/AllowanceCharge");
+                    let (sub, [amount, base, pct]) = if is_charge {
+                        (
+                            format!("{group}/BG-28[{}]", l.charges.len() + 1),
+                            ["BT-141", "BT-142", "BT-143"],
+                        )
+                    } else {
+                        (
+                            format!("{group}/BG-27[{}]", l.allowances.len() + 1),
+                            ["BT-136", "BT-137", "BT-138"],
+                        )
+                    };
                     let a = LineAllowanceCharge {
-                        amount: self.amount(c, "Amount").unwrap_or_default(),
-                        base_amount: self.amount(c, "BaseAmount"),
+                        amount: self.required_amount(
+                            c,
+                            "Amount",
+                            Term::new(&sub, amount),
+                            if is_charge {
+                                "the line charge amount"
+                            } else {
+                                "the line allowance amount"
+                            },
+                        ),
+                        base_amount: self.amount(c, "BaseAmount", Term::new(&sub, base)),
                         percentage: self
-                            .decimal(c, "MultiplierFactorNumeric")
+                            .decimal(c, "MultiplierFactorNumeric", Term::new(&sub, pct))
                             .map(Percentage::new),
                         reason: text(c, "AllowanceChargeReason"),
                         reason_code: code(c, "AllowanceChargeReasonCode"),
@@ -874,9 +1274,9 @@ impl Reader {
                         l.allowances.push(a);
                     }
                 }
-                "Price" => l.price = self.price(c),
+                "Price" => l.price = self.price(c, &group),
                 "Item" => {
-                    let (item, vat) = self.item(c);
+                    let (item, vat) = self.item(c, &group);
                     l.item = item;
                     l.vat = vat;
                 }
@@ -898,8 +1298,9 @@ impl Reader {
     fn sub_lines(&mut self, n: Node<'_, '_>) -> Vec<en16931::SubInvoiceLine> {
         kids(n)
             .filter(|c| name(*c) == "SubInvoiceLine")
-            .map(|c| {
-                let line = self.line(c);
+            .enumerate()
+            .map(|(i, c)| {
+                let line = self.line(c, i + 1);
                 // BG-DEX-06: `BR-DEX-03` requires exactly one, so two map to
                 // `None` and the rule fires.
                 let categories = kid(c, "Item").map_or(0, |i| {
@@ -916,15 +1317,19 @@ impl Reader {
             .collect()
     }
 
-    fn price(&mut self, n: Node<'_, '_>) -> PriceDetails {
+    fn price(&mut self, n: Node<'_, '_>, group: &str) -> PriceDetails {
+        if text(n, "PriceAmount").is_none() {
+            self.missing(n, Term::new(group, "BT-146"), "the item net price");
+        }
         let mut p = PriceDetails {
-            net_price: text(n, "PriceAmount")
-                .and_then(|t| t.parse().ok())
-                .map(en16931::UnitPriceAmount::new)
+            net_price: self
+                .unit_price(n, "PriceAmount", Term::new(group, "BT-146"))
                 .unwrap_or_default(),
             price_discount: None,
             gross_price: None,
-            base_quantity: self.decimal(n, "BaseQuantity").map(Quantity::new),
+            base_quantity: self
+                .decimal(n, "BaseQuantity", Term::new(group, "BT-149"))
+                .map(Quantity::new),
             // An empty `unitCode` is an absent BT-150 (`PEPPOL-EN16931-R130`).
             base_quantity_code: kid(n, "BaseQuantity")
                 .and_then(|q| q.attribute("unitCode"))
@@ -950,12 +1355,8 @@ impl Reader {
                         );
                         continue;
                     }
-                    p.price_discount = text(c, "Amount")
-                        .and_then(|t| t.parse().ok())
-                        .map(en16931::UnitPriceAmount::new);
-                    p.gross_price = text(c, "BaseAmount")
-                        .and_then(|t| t.parse().ok())
-                        .map(en16931::UnitPriceAmount::new);
+                    p.price_discount = self.unit_price(c, "Amount", Term::new(group, "BT-147"));
+                    p.gross_price = self.unit_price(c, "BaseAmount", Term::new(group, "BT-148"));
                 }
                 "PriceAmount" | "BaseQuantity" => {}
                 _ => self.skip("Price", c),
@@ -964,7 +1365,7 @@ impl Reader {
         p
     }
 
-    fn item(&mut self, n: Node<'_, '_>) -> (Item, LineVat) {
+    fn item(&mut self, n: Node<'_, '_>, group: &str) -> (Item, LineVat) {
         let mut item = Item {
             name: text(n, "Name"),
             description: text(n, "Description"),
@@ -981,7 +1382,11 @@ impl Reader {
         for c in kids(n) {
             match name(c) {
                 "ClassifiedTaxCategory" => {
-                    let (cat, pct, _, _) = self.tax_category(c);
+                    let (cat, pct, _, _) = self.tax_category(
+                        c,
+                        Term::new(group, "BT-151"),
+                        Term::new(group, "BT-152"),
+                    );
                     vat = LineVat {
                         category: cat,
                         rate: pct,
@@ -1022,13 +1427,53 @@ impl Reader {
             }
             return;
         }
+        let group = format!("BG-24[{}]", inv.attachments.len() + 1);
+        // CEN's binding reads any other code as a supporting document and maps
+        // no code there; it is said rather than dropped.
+        if let Some(code) = text(n, "DocumentTypeCode") {
+            let message = if code == "50" && name(n.parent_element().unwrap_or(n)) == "CreditNote" {
+                // UBL-SR-43 tolerates it; CEN's and Peppol's bindings both put
+                // BT-17 in `cac:OriginatorDocumentReference`, credit notes too.
+                "type code 50 is an older credit-note spelling of the tender reference; \
+                 BT-17 is `cac:OriginatorDocumentReference` in both bindings, so this is read \
+                 as a supporting document (BG-24) and the code not mapped"
+            } else {
+                "a document type code on a supporting document (BG-24), which has no term \
+                 for it; read as a supporting document, the code not mapped"
+            };
+            self.entries.push(
+                Entry::new(
+                    Kind::Unmapped,
+                    "AdditionalDocumentReference/DocumentTypeCode",
+                    message,
+                )
+                .term(group.clone())
+                .value(code),
+            );
+        }
+        if text(n, "ID").is_none() {
+            self.missing(
+                n,
+                Term::new(&group, "BT-122"),
+                "the supporting document reference",
+            );
+        }
         // An attachment without mime code or filename violates §6.5.11 and is
         // reported.
         let attachment = kid(n, "Attachment")
             .and_then(|a| kid(a, "EmbeddedDocumentBinaryObject"))
             .and_then(|b| {
+                let bytes = match crate::xml::decode_base64(&own_text(b)) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        self.entries.push(
+                            Entry::new(Kind::Malformed, "AdditionalDocumentReference/Attachment/EmbeddedDocumentBinaryObject", e).term("BT-125"),
+                        );
+                        return None;
+                    }
+                };
                 match en16931::Attachment::new(
-                    crate::xml::decode_base64(&own_text(b)),
+                    bytes,
                     b.attribute("mimeCode").unwrap_or_default(),
                     b.attribute("filename").unwrap_or_default(),
                 ) {

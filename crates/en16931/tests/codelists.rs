@@ -124,7 +124,7 @@ fn the_multi_list_rules_still_have_the_shape_we_assume() {
     sizes.sort_unstable();
     assert_eq!(
         sizes,
-        vec![1, 243],
+        vec![1, 246],
         "BR-CL-10 is no longer ICD + one literal"
     );
     assert!(
@@ -399,7 +399,7 @@ fn the_syntax_rule_count_is_measured() {
     eprintln!("syntax rules (`en16931-formats`' job): {}", ids.len());
     assert_eq!(
         ids.len(),
-        1339,
+        1346,
         "the documented syntax-rule count must match the artefacts"
     );
 }
@@ -438,15 +438,6 @@ fn cen_unit_tests_agree_with_our_dispositions() {
                 }
                 _ => stem,
             };
-            // CEN 1.3.16's test files say `BR-IG-*` / `BR-IP-*` where the
-            // Schematron says `BR-AF-*` / `BR-AG-*`; mapped here only, not in `RuleId`.
-            let base = if let Some(rest) = base.strip_prefix("BR-IG-") {
-                format!("BR-AF-{rest}")
-            } else if let Some(rest) = base.strip_prefix("BR-IP-") {
-                format!("BR-AG-{rest}")
-            } else {
-                base
-            };
             tested.insert(en16931::validation::RuleId::new(Box::leak(
                 base.into_boxed_str(),
             )));
@@ -480,8 +471,8 @@ fn cen_unit_tests_agree_with_our_dispositions() {
     );
 
     assert!(
-        has_test("BR-AF-01") && has_test("BR-AG-01"),
-        "CEN's suite spells these BR-IG-01 / BR-IP-01, mapped above"
+        has_test("BR-IG-01") && has_test("BR-IP-01"),
+        "CEN's suite names the IGIC and IPSI rules BR-IG-01 / BR-IP-01"
     );
     eprintln!("CEN unit-test instances: {} rules exercised", tested.len());
 }

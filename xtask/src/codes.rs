@@ -12,7 +12,7 @@ use crate::read;
 
 /// The pinned artefact revision. Must equal `fetch::CEN_REF` and
 /// `en16931::ARTEFACT_VERSION` (asserted by `artefact_pin.rs`).
-const ARTEFACT: &str = "validation-1.3.16";
+const ARTEFACT: &str = "validation-1.3.17";
 
 const CODES_SCH: &str = "eInvoicing-EN16931/ubl/schematron/codelist/EN16931-UBL-codes.sch";
 const PEPPOL_SCH: &str = "peppol-bis-invoice-3/rules/sch/PEPPOL-EN16931-UBL.sch";

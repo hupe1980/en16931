@@ -45,14 +45,18 @@ macro_rules! rule {
 macro_rules! by_type {
     // `expr` not `literal`: the `BR-DEC-*` texts are built with `concat!`.
     ($konst:ident, $id:literal, $text:expr) => {
+        by_type!($konst, $id, [], $text);
+    };
+    ($konst:ident, $id:literal, [$($bt:literal),*], $text:expr) => {
         #[doc = $text]
         #[doc = ""]
-        #[doc = "Satisfied by the model's types — see the module documentation."]
+        #[doc = "Satisfied by the model's types — see the module documentation. A document"]
+        #[doc = "that lacks the term is reported by its reader, not by this rule."]
         pub static $konst: Rule = Rule {
             id: RuleId::new($id),
             severity: Severity::Fatal,
             text: $text,
-            terms: &[],
+            terms: &[$(crate::bt::BtId($bt)),*],
             source: Source::Both,
             eval: |_, _| {},
         };
@@ -413,76 +417,91 @@ rule!(BR_CL_22, "BR-CL-22", Fatal, ArtefactOnly, terms: [bt::EXEMPTION_REASON_CO
 by_type!(
     BR_12,
     "BR-12",
+    [106],
     "An Invoice shall have the Sum of Invoice line net amount (BT-106)."
 );
 by_type!(
     BR_13,
     "BR-13",
+    [109],
     "An Invoice shall have the Invoice total amount without VAT (BT-109)."
 );
 by_type!(
     BR_14,
     "BR-14",
+    [112],
     "An Invoice shall have the Invoice total amount with VAT (BT-112)."
 );
 by_type!(
     BR_15,
     "BR-15",
+    [115],
     "An Invoice shall have the Amount due for payment (BT-115)."
 );
 by_type!(
     BR_22,
     "BR-22",
+    [129],
     "Each Invoice line (BG-25) shall have an Invoiced quantity (BT-129)."
 );
 by_type!(
     BR_24,
     "BR-24",
+    [131],
     "Each Invoice line (BG-25) shall have an Invoice line net amount (BT-131)."
 );
 by_type!(
     BR_26,
     "BR-26",
+    [146],
     "Each Invoice line (BG-25) shall contain the Item net price (BT-146)."
 );
 by_type!(
     BR_31,
     "BR-31",
+    [92],
     "Each Document level allowance (BG-20) shall have a Document level allowance amount (BT-92)."
 );
 by_type!(
     BR_32,
     "BR-32",
+    [95],
     "Each Document level allowance (BG-20) shall have a Document level allowance VAT category code (BT-95)."
 );
 by_type!(
     BR_36,
     "BR-36",
+    [99],
     "Each Document level charge (BG-21) shall have a Document level charge amount (BT-99)."
 );
 by_type!(
     BR_37,
     "BR-37",
+    [102],
     "Each Document level charge (BG-21) shall have a Document level charge VAT category code (BT-102)."
 );
 by_type!(
     BR_41,
     "BR-41",
+    [136],
     "Each Invoice line allowance (BG-27) shall have an Invoice line allowance amount (BT-136)."
 );
 by_type!(
     BR_43,
     "BR-43",
+    [141],
     "Each Invoice line charge (BG-28) shall have an Invoice line charge amount (BT-141)."
 );
 by_type!(
     BR_45,
     "BR-45",
+    [116],
     "Each VAT breakdown (BG-23) shall have a VAT category taxable amount (BT-116)."
 );
 by_type!(
     BR_46,
     "BR-46",
+    [117],
     "Each VAT breakdown (BG-23) shall have a VAT category tax amount (BT-117)."
 );
 

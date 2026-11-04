@@ -5,7 +5,7 @@
 //! | Regime | Rules | Tolerance | Whose |
 //! |---|---|---|---|
 //! | Totals chain | `BR-CO-10` … `BR-CO-16` | exact | CEN |
-//! | VAT derivation | `BR-CO-17`, `BR-S-08/09`, `BR-AF/AG-08/09` | ±1.00 | CEN artefacts |
+//! | VAT derivation | `BR-CO-17`, `BR-S-08/09`, `BR-IG/IP-08/09` | ±1.00 | CEN artefacts |
 //! | Line & allowance derivation | `PEPPOL-EN16931-R120`, `-R040` | ±0.02 | Peppol |
 //!
 //! Rounding follows XPath (ties towards +∞); see `arith`.
@@ -754,16 +754,16 @@ mod registry_tests {
     #[test]
     fn all_nine_category_families_are_registered() {
         for prefix in [
-            "BR-S", "BR-Z", "BR-E", "BR-AE", "BR-IC", "BR-G", "BR-O", "BR-AF", "BR-AG",
+            "BR-S", "BR-Z", "BR-E", "BR-AE", "BR-IC", "BR-G", "BR-O", "BR-IG", "BR-IP",
         ] {
             for row in ["01", "05", "08", "09", "10"] {
                 let id = format!("{prefix}-{row}");
                 assert!(explain(&id).is_some(), "{id} missing");
             }
         }
-        // No other family's spelling reaches them.
-        assert!(explain("BR-IG-8").is_none());
-        assert!(explain("BR-IP-9").is_none());
+        // CEN's spellings before 1.3.17 reach nothing.
+        assert!(explain("BR-AF-8").is_none());
+        assert!(explain("BR-AG-9").is_none());
     }
 }
 

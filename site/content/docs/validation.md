@@ -43,7 +43,7 @@ The composition, by family:
 | `BR-TMP-*` | 2 | temporary CEN rules |
 | `EN-*` | 4 | this crate's own, namespaced so they cannot be mistaken for CEN's |
 
-Out of scope: the **1 339 syntax rules** (`UBL-*`, `CII-*`) belong to
+Out of scope: the **1 346 syntax rules** (`UBL-*`, `CII-*`) belong to
 [`en16931-formats`](@/docs/syntaxes.md), and most of Peppol's national rules are
 not implemented — [Peppol's national rules](@/docs/profiles.md#peppol-s-national-rules)
 says which.
@@ -206,12 +206,12 @@ One field to fix, not three.
 
 ### A third source: the CEN release each authority built against
 
-KoSIT's `v2026-08-31` configuration and Peppol BIS Billing 3.0.21 both name CEN
-`1.3.16`, the release this crate derives CEN's rules from. A code list that
-differs between two CEN releases turns a valid invoice fatal, so
-`tests/artefact_pin.rs` reads the CEN release out of each authority's own
+A code list that differs between two CEN releases turns a valid invoice fatal,
+so `tests/artefact_pin.rs` reads the CEN release out of each authority's own
 artefact and fails when one differs from this crate's, unless that skew is
-declared with every diverging code value asserted. None is declared.
+declared with every diverging code value asserted. This crate runs CEN
+`1.3.17`; KoSIT's `v2026-08-31` configuration and Peppol BIS Billing 3.0.21
+still name `1.3.16`, and both skews are declared.
 
 **Getting either file wrong rejects invoices Germany accepts.** `BR-CL-21` and
 `BR-CL-23` are code-list rules whose CEN tables lag the registries they track
@@ -234,7 +234,7 @@ standard's own wording — so the registry is listable, filterable and explainab
 use en16931::validation::rules::{explain, explain_restriction};
 
 assert_eq!(explain("BR-CO-3").map(|r| r.id.as_str()), Some("BR-CO-03"));   // padding
-assert!(explain("BR-IG-8").is_none());                                      // no family mapping
+assert!(explain("BR-AF-8").is_none());                                      // no family mapping
 assert!(explain("PEPPOL-EN16931-R120").is_some());
 assert!(explain_restriction("br-de-3").is_some());                          // a restriction
 ```
@@ -341,13 +341,13 @@ assert!(out.layers.is_empty());   // a bare model: there was no document
   "rulesChecked": 282,
   "artefacts": [
     { "authority": "CEN",        "repo": "ConnectingEurope/eInvoicing-EN16931",
-      "gitRef": "validation-1.3.16" },
+      "gitRef": "validation-1.3.17" },
     { "authority": "KoSIT",      "repo": "itplr-kosit/xrechnung-schematron",
       "gitRef": "v2.6.0" },
     { "authority": "KoSIT",      "repo": "itplr-kosit/validator-configuration-xrechnung",
       "gitRef": "v2026-08-31" },
     { "authority": "OpenPeppol", "repo": "OpenPEPPOL/peppol-bis-invoice-3",
-      "gitRef": "806866bd2bd91d7e9623b68f08164e8fbe9e67a0" }
+      "gitRef": "5df0eff7c8efafd7c79c0dacce55082d175db759" }
   ],
   "suppressed": [], "relevelled": [], "leftOut": [],
   "source": null, "identity": null, "declaration": null,
@@ -384,7 +384,7 @@ rules were verified against.
 
 That last one is per profile, and the reason is `BR-DE-15`. It is KoSIT's rule,
 it moves on KoSIT's release cadence, and a report stamped only
-`validation-1.3.16` beside it names CEN for something CEN never published. An
+`validation-1.3.17` beside it names CEN for something CEN never published. An
 XRechnung report cites four releases because its rules come from four: CEN's
 model, KoSIT's Schematron, KoSIT's *validator configuration* — a separate
 release, and the one that decides the severities — and OpenPeppol's, 31 of whose

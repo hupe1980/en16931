@@ -66,7 +66,7 @@ impl Percentage {
         self.0.is_zero()
     }
 
-    /// Whether the rate is above zero — BR-S-05, BR-AF-05, BR-AG-05.
+    /// Whether the rate is above zero — BR-S-05, BR-IG-05, BR-IP-05.
     #[must_use]
     pub fn is_positive(self) -> bool {
         self.0 > Decimal::ZERO

@@ -66,6 +66,8 @@ pub mod cii;
 #[cfg(any(feature = "ubl", feature = "cii"))]
 mod receive;
 pub mod report;
+#[cfg(any(feature = "ubl", feature = "cii"))]
+mod required;
 #[cfg(feature = "ubl")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ubl")))]
 pub mod ubl;

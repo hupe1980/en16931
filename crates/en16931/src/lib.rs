@@ -90,7 +90,7 @@ pub const ATTRIBUTION: &str = "implementation of the EN 16931-1 semantic data mo
 /// lists are generated from.
 ///
 /// Exposed so a bug report can say which rule text was in force.
-pub const ARTEFACT_VERSION: &str = "validation-1.3.16";
+pub const ARTEFACT_VERSION: &str = "validation-1.3.17";
 
 /// The edition of EN 16931-1 this crate's core rule set targets by default.
 ///

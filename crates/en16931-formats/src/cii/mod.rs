@@ -36,11 +36,12 @@ pub mod prohibitions_generated;
 
 /// CII single-occurrence rules ([`once`]) that KoSIT's XRechnung configuration
 /// raises from warning to error: a second `ram:SpecifiedTradePaymentTerms`
-/// (`CII-SR-452`) or a second description in one (`CII-SR-453`).
+/// (`CII-SR-452`), a second description in one (`CII-SR-453`), or a second
+/// `ram:ApplicableTradeTax` on a line (`CII-SR-454`, a `count(…) = 1` rule).
 ///
 /// Applied only under a profile whose artefacts include
 /// [`en16931::profiles::KOSIT_CONFIG`].
-pub const KOSIT_RAISED: &[&str] = &["CII-SR-452", "CII-SR-453"];
+pub const KOSIT_RAISED: &[&str] = &["CII-SR-452", "CII-SR-453", "CII-SR-454"];
 
 /// BT-8, model (UNTDID 2005, as EN 16931 and UBL spell it) against CII
 /// (UNTDID 2475, CEN's CII code list for `ram:DueDateTypeCode`), by meaning:
