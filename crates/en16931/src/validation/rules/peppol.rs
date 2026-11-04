@@ -8,7 +8,7 @@
 
 use rust_decimal::Decimal;
 
-use super::arith::{BEYOND_RANGE, exact_mul, exact_sub, exact_sum};
+use super::arith::{BEYOND_RANGE, exact_add, exact_mul, exact_sub, exact_sum};
 use super::{Findings, Rule, RuleId, Severity, Source};
 use crate::bt::BtId;
 use crate::bt::{Group, Path};
@@ -105,8 +105,10 @@ pub(crate) fn check_line_amount(
                     .checked_div(base)
                     .and_then(|share| exact_mul(share, small))
             })
-            .and_then(|p| p.checked_add(charges))
-            .and_then(|p| p.checked_sub(allowances));
+            // The division rounds at 28 places, as XPath's decimal division
+            // does; the charges and allowances keep every digit or are reported.
+            .and_then(|p| exact_add(p, charges))
+            .and_then(|p| exact_sub(p, allowances));
         match expected {
             None => f.at_with_hint(path, BEYOND_RANGE),
             Some(expected) if !within(expected, line.net_amount.into_decimal(), tolerance) => {
@@ -1012,6 +1014,37 @@ mod tests {
         assert!(fired(&R120, &inv).is_empty());
         inv.lines[0].net_amount = InvoiceAmount::parse("0.00").unwrap();
         assert_eq!(fired(&R120, &inv).len(), 1);
+    }
+
+    /// 0.0200000000000000000000000001 plus a charge of 10.00 needs more digits
+    /// than `Decimal` holds; rounded, the allowance of 10.00 would bring it back
+    /// onto the slack of 0.02 from a stated 0.00.
+    #[test]
+    fn r120_does_not_round_away_a_digit_when_charges_are_added() {
+        let d = |s: &str| Decimal::from_str_exact(s).unwrap();
+        let mut inv = one_line(d("0.0200000000000000000000000001"), Decimal::ONE, "0.00");
+        let ten = LineAllowanceCharge {
+            amount: InvoiceAmount::parse("10.00").unwrap(),
+            base_amount: None,
+            percentage: None,
+            reason: None,
+            reason_code: None,
+        };
+        inv.lines[0].charges.push(ten.clone());
+        inv.lines[0].allowances.push(ten);
+        assert_eq!(fired(&R120, &inv).len(), 1);
+    }
+
+    /// Gross 4 + 5·10^-28 minus its negative is 8 + 10^-27: exact, though
+    /// `rust_decimal` drops a trailing zero to hold it.
+    #[test]
+    fn r046_accepts_a_difference_that_drops_only_zeros() {
+        let d = |s: &str| Decimal::from_str_exact(s).unwrap();
+        let gross = d("4.0000000000000000000000000005");
+        let mut inv = one_line(Decimal::ONE, d("8.000000000000000000000000001"), "8.00");
+        inv.lines[0].price.gross_price = Some(crate::UnitPriceAmount::new(gross));
+        inv.lines[0].price.price_discount = Some(crate::UnitPriceAmount::new(-gross));
+        assert!(fired(&R046, &inv).is_empty());
     }
 
     /// 10^28 minus a discount of 0.01 needs more places than `Decimal` has;

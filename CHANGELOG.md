@@ -31,7 +31,9 @@ Before 1.0, a minor release may break; every break is listed here.
   `rust_decimal` rounds a result beyond 28 places without saying so, which
   turned a tax just below half a cent into a cent (`BR-CO-17`, `-09`, the
   reconciler's BT-117) and let R120, R040 and R046 compare rounded values.
-  R040 compares a hundredfold instead of dividing by 100.
+  R040 compares a hundredfold instead of dividing by 100, and XPath's
+  `round` no longer rounds `x + 0.5` first. Only R120's division by the base
+  quantity rounds at 28 places, as XPath's decimal division does.
 
 ## [0.9.0] — 2026-11-04
 

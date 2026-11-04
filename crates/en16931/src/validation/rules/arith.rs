@@ -27,10 +27,17 @@ pub(crate) const VAT_TOLERANCE: Decimal = Decimal::ONE;
 /// `0.5`, as the constant `floor(x + 0.5)` needs.
 const HALF: Decimal = Decimal::from_parts(5, 0, 0, false, 1);
 
-/// XPath's `fn:round` — `floor(x + 0.5)`, ties towards +∞. Returns `x`
-/// unchanged if `x + 0.5` overflows.
+/// XPath's `fn:round` — `floor(x + 0.5)`, ties towards +∞. Taken as
+/// `floor(x)`, plus one when the fraction is at least a half: `x + 0.5`
+/// itself would round when `x` has 28 places. Returns `x` unchanged if the
+/// result overflows.
 pub(crate) fn xpath_round(x: Decimal) -> Decimal {
-    x.checked_add(HALF).map_or(x, |shifted| shifted.floor())
+    let floor = x.floor();
+    if x - floor >= HALF {
+        floor.checked_add(Decimal::ONE).unwrap_or(x)
+    } else {
+        floor
+    }
 }
 
 /// The artefacts' derived VAT amount: `round(|base| × rate ÷ 100 × 100) ÷ 100`.
@@ -43,25 +50,56 @@ pub(crate) fn derived_vat(base: Decimal, rate: Decimal) -> Option<Decimal> {
 
 /// `a × b` when a `Decimal` holds it exactly. `None` when it overflows, or when
 /// it needs more than 28 places, which `rust_decimal` would round without
-/// saying so. Trailing zeros of the factors do not count.
+/// saying so.
 pub(crate) fn exact_mul(a: Decimal, b: Decimal) -> Option<Decimal> {
     // A zero factor gives an exact zero, whatever scale `rust_decimal` keeps.
     if a.is_zero() || b.is_zero() {
         return Some(Decimal::ZERO);
     }
-    let (a, b) = (a.normalize(), b.normalize());
-    a.checked_mul(b)
-        .filter(|product| product.scale() == a.scale() + b.scale())
+    let product = a.checked_mul(b)?;
+    // The exact product has the scale `a.scale() + b.scale()`. To hold it,
+    // `rust_decimal` drops its lowest digits; the product is exact when each
+    // of them is zero, that is when the mantissas have as many factors of 2
+    // and of 5 between them.
+    let dropped = (a.scale() + b.scale()).saturating_sub(product.scale());
+    let (ma, mb) = (a.mantissa().unsigned_abs(), b.mantissa().unsigned_abs());
+    let holds = |prime: u128| factors(ma, prime) + factors(mb, prime) >= dropped;
+    (holds(2) && holds(5)).then_some(product)
+}
+
+/// How often `prime` divides `m`, which is not zero.
+fn factors(mut m: u128, prime: u128) -> u32 {
+    let mut count = 0;
+    while m.is_multiple_of(prime) {
+        m /= prime;
+        count += 1;
+    }
+    count
 }
 
 /// `a − b` when a `Decimal` holds it exactly, as [`exact_mul`].
 pub(crate) fn exact_sub(a: Decimal, b: Decimal) -> Option<Decimal> {
-    if a == b {
-        return Some(Decimal::ZERO);
-    }
-    let (a, b) = (a.normalize(), b.normalize());
-    a.checked_sub(b)
-        .filter(|difference| difference.scale() == a.scale().max(b.scale()))
+    let difference = a.checked_sub(b)?;
+    // The exact difference has the larger scale of the two; the digits
+    // `rust_decimal` drops below the result's scale must all be zero.
+    let scale = a.scale().max(b.scale());
+    let dropped = scale.saturating_sub(difference.scale());
+    let modulus = 10_i128.pow(dropped);
+    // A value at `scale`, modulo `modulus`: its mantissa shifted to that scale.
+    let rest = |d: Decimal| {
+        let shift = scale - d.scale();
+        if shift >= dropped {
+            0
+        } else {
+            d.mantissa().rem_euclid(10_i128.pow(dropped - shift)) * 10_i128.pow(shift)
+        }
+    };
+    ((rest(a) - rest(b)).rem_euclid(modulus) == 0).then_some(difference)
+}
+
+/// `a + b` when a `Decimal` holds it exactly, as [`exact_mul`].
+pub(crate) fn exact_add(a: Decimal, b: Decimal) -> Option<Decimal> {
+    exact_sub(a, -b)
 }
 
 /// Advice for a finding whose expected amount does not fit a `Decimal`.
@@ -139,5 +177,46 @@ mod tests {
         assert!(within_vat_tolerance(dec!(190.99), dec!(190.00)));
         assert!(!within_vat_tolerance(dec!(191.00), dec!(190.00)));
         assert!(!within_vat_tolerance(dec!(189.00), dec!(190.00)));
+    }
+
+    /// The exact product needs scale 30; `rust_decimal` drops its two trailing
+    /// zeros, and nothing else.
+    #[test]
+    fn a_product_that_drops_only_zeros_is_exact() {
+        assert_eq!(
+            exact_mul(dec!(0.20), dec!(5.0000000000000000000000000005)),
+            Some(dec!(1.0000000000000000000000000001))
+        );
+        assert_eq!(
+            derived_vat(dec!(0.20), dec!(5.0000000000000000000000000005)),
+            Some(dec!(0.01))
+        );
+    }
+
+    /// The exact difference needs 29 digits at scale 28; `rust_decimal` drops
+    /// its trailing zero, or rounds a digit that is not one.
+    #[test]
+    fn a_difference_that_drops_only_zeros_is_exact() {
+        let gross = dec!(4.0000000000000000000000000005);
+        assert_eq!(
+            exact_sub(gross, -gross),
+            Some(dec!(8.000000000000000000000000001))
+        );
+        assert_eq!(
+            exact_sub(gross, dec!(-4.0000000000000000000000000004)),
+            None
+        );
+    }
+
+    /// `x + 0.5` would round 7.4999…9 (28 nines after the point) to 8 before
+    /// `floor`; XPath's `round` gives 7.
+    #[test]
+    fn rounding_half_up_rounds_once() {
+        assert_eq!(xpath_round(dec!(7.4999999999999999999999999999)), dec!(7));
+        assert_eq!(xpath_round(dec!(-7.5000000000000000000000000001)), dec!(-8));
+        assert_eq!(
+            derived_vat(dec!(1.00), dec!(7.4999999999999999999999999999)),
+            Some(dec!(0.07))
+        );
     }
 }
