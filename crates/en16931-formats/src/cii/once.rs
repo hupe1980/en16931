@@ -8,10 +8,10 @@
 //! * 137 rows come from the schema: of the 199 `(parent, child)`
 //!   pairs the authorities' instances use, those whose child CEN's uncoupled D16B subset schema declare
 //!   `maxOccurs="1"` in the parent's type. Their rule cell is empty.
-//! * 40 rows come from CEN's `count(…) <= 1` syntax rules, with the
+//! * 49 rows come from CEN's `count(…) <= 1` syntax rules, with the
 //!   level CEN publishes for each — and, where KoSIT replaces a CEN rule whose
 //!   context is wrong, from KoSIT's replacement.
-//! * [`UNCHECKED`] lists the 2 such rules this table cannot express, and why.
+//! * [`UNCHECKED`] lists the 5 such rules this table cannot express, and why.
 //!
 //! A context beginning `/` anchors at the document element; `//` or a bare
 //! name matches at any depth; a context's last step may carry a predicate.
@@ -489,22 +489,28 @@ pub static ONCE: &[(&str, &str, &str, &str)] = &[
     ),
     ("", "fatal", "URIUniversalCommunication", "URIID"),
     (
-        "BR-TMP-4",
-        "warning",
-        "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:ApplicableHeaderTradeAgreement/ram:AdditionalReferencedDocument[ram:TypeCode=916]",
-        "ram:Name",
-    ),
-    (
-        "BR-TMP-5",
-        "warning",
-        "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:ApplicableHeaderTradeAgreement/ram:AdditionalReferencedDocument[ram:TypeCode=916]",
-        "ram:AttachmentBinaryObject",
-    ),
-    (
         "CII-SR-003",
         "warning",
         "/rsm:CrossIndustryInvoice/rsm:ExchangedDocumentContext",
         "ram:BusinessProcessSpecifiedDocumentContextParameter",
+    ),
+    (
+        "CII-SR-009",
+        "fatal",
+        "/rsm:CrossIndustryInvoice/rsm:ExchangedDocumentContext",
+        "ram:GuidelineSpecifiedDocumentContextParameter",
+    ),
+    (
+        "CII-SR-010",
+        "fatal",
+        "/rsm:CrossIndustryInvoice/rsm:ExchangedDocumentContext",
+        "ram:GuidelineSpecifiedDocumentContextParameter/ram:ID",
+    ),
+    (
+        "CII-SR-014",
+        "fatal",
+        "/rsm:CrossIndustryInvoice/rsm:ExchangedDocument",
+        "ram:TypeCode",
     ),
     (
         "CII-SR-030",
@@ -523,6 +529,24 @@ pub static ONCE: &[(&str, &str, &str, &str)] = &[
         "warning",
         "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:IncludedSupplyChainTradeLineItem/ram:AssociatedDocumentLineDocument",
         "ram:IncludedNote/ram:Content",
+    ),
+    (
+        "CII-SR-069",
+        "fatal",
+        "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:IncludedSupplyChainTradeLineItem/ram:SpecifiedTradeProduct/ram:ApplicableProductCharacteristic",
+        "ram:Description",
+    ),
+    (
+        "CII-SR-072",
+        "fatal",
+        "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:IncludedSupplyChainTradeLineItem/ram:SpecifiedTradeProduct/ram:ApplicableProductCharacteristic",
+        "ram:Value",
+    ),
+    (
+        "CII-SR-439",
+        "fatal",
+        "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:IncludedSupplyChainTradeLineItem/ram:SpecifiedLineTradeAgreement",
+        "ram:NetPriceProductTradePrice/ram:ChargeAmount",
     ),
     (
         "CII-SR-440",
@@ -547,6 +571,12 @@ pub static ONCE: &[(&str, &str, &str, &str)] = &[
         "warning",
         "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:ApplicableHeaderTradeSettlement",
         "ram:SpecifiedTradePaymentTerms/ram:Description",
+    ),
+    (
+        "CII-SR-454",
+        "warning",
+        "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:IncludedSupplyChainTradeLineItem/ram:SpecifiedLineTradeSettlement",
+        "ram:ApplicableTradeTax",
     ),
     (
         "CII-SR-455",
@@ -597,12 +627,6 @@ pub static ONCE: &[(&str, &str, &str, &str)] = &[
         "//ram:ApplicableHeaderTradeSettlement/ram:PaymentReference",
     ),
     (
-        "CII-SR-471",
-        "fatal",
-        "//ram:SpecifiedTradeAllowanceCharge",
-        "ram:RateApplicablePercent",
-    ),
-    (
         "CII-SR-472",
         "fatal",
         "//ram:SpecifiedTradeAllowanceCharge",
@@ -619,6 +643,18 @@ pub static ONCE: &[(&str, &str, &str, &str)] = &[
         "warning",
         "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:IncludedSupplyChainTradeLineItem/ram:SpecifiedLineTradeSettlement",
         "ram:AdditionalReferencedDocument[norm:ram:TypeCode=130]",
+    ),
+    (
+        "CII-SR-475",
+        "warning",
+        "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:ApplicableHeaderTradeAgreement/ram:AdditionalReferencedDocument[norm:ram:TypeCode=916]",
+        "ram:Name",
+    ),
+    (
+        "CII-SR-476",
+        "warning",
+        "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:ApplicableHeaderTradeAgreement/ram:AdditionalReferencedDocument[norm:ram:TypeCode=916]",
+        "ram:AttachmentBinaryObject",
     ),
     (
         "CII-SR-477",
@@ -728,16 +764,37 @@ pub static ONCE: &[(&str, &str, &str, &str)] = &[
         "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:ApplicableHeaderTradeSettlement/ram:SpecifiedTradeSettlementHeaderMonetarySummation",
         "ram:NetIncludingTaxesLineTotalAmount",
     ),
+    (
+        "CII-SR-495",
+        "fatal",
+        "/rsm:CrossIndustryInvoice",
+        "//ram:SpecifiedTradeSettlementPaymentMeans/ram:ApplicableTradeSettlementFinancialCard",
+    ),
+    (
+        "CII-SR-496",
+        "fatal",
+        "/rsm:CrossIndustryInvoice",
+        "//ram:SpecifiedTradeSettlementPaymentMeans/ram:PayerPartyDebtorFinancialAccount",
+    ),
+    (
+        "CII-SR-497",
+        "fatal",
+        "/rsm:CrossIndustryInvoice/rsm:SupplyChainTradeTransaction/ram:ApplicableHeaderTradeSettlement",
+        "ram:SpecifiedTradePaymentTerms/ram:DirectDebitMandateID",
+    ),
 ];
 
 /// `count(…) <= 1` syntax rules this table cannot express, with the reason.
 pub static UNCHECKED: &[(&str, &str)] = &[
     (
-        "CII-SR-475",
-        "its context counts across every BG-24 (CEN issue 508); KoSIT's BR-TMP-4 checks it per BG-24 and is used instead",
+        "CII-SR-090",
+        "a count inside a condition this table cannot express",
     ),
     (
-        "CII-SR-476",
-        "its context counts across every BG-24 (CEN issue 508); KoSIT's BR-TMP-5 checks it per BG-24 and is used instead",
+        "CII-SR-462",
+        "a distinct-value count, which is not a count of occurrences",
     ),
+    ("CII-SR-467", "a count this table cannot express"),
+    ("CII-SR-468", "a count this table cannot express"),
+    ("CII-SR-470", "a count this table cannot express"),
 ];

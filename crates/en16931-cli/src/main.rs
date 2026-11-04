@@ -761,7 +761,7 @@ fn explain(query: &str) -> Result<ExitCode, String> {
     Err(format!(
         "no rule or restriction called {query:?}. Ids are matched loosely — \
          `BR-CO-3`, `BR-CO-03` and `br-co-3` are the same rule. The IGIC and \
-         IPSI rules are `BR-AF-*` and `BR-AG-*`."
+         IPSI rules are `BR-IG-*` and `BR-IP-*` (`BR-AF-*` / `BR-AG-*` before CEN 1.3.17)."
     ))
 }
 

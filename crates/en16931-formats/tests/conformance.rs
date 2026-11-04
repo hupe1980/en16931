@@ -57,8 +57,12 @@ struct Case {
 }
 
 /// Exact counts of what each suite runs at the pinned releases (CEN
-/// `validation-1.3.16`, KoSIT `v2.6.0`, Peppol BIS Billing 3.0.21), so a
+/// `validation-1.3.17`, KoSIT `v2.6.0`, Peppol BIS Billing 3.0.21), so a
 /// truncated fetch or moved directory cannot pass with a smaller denominator.
+/// CEN cases for the type-retired rules at the pinned release, each judged by
+/// the reader's report rather than skipped.
+const CEN_BY_TYPE_ASSERTIONS: usize = 66;
+
 const CEN_ASSERTIONS: usize = 1_025;
 /// See [`CEN_ASSERTIONS`]. 381 mutations run of 471 runnable.
 const KOSIT_MUTATIONS: usize = 381;
@@ -170,6 +174,10 @@ fn cases() -> Vec<Case> {
 fn unevaluated() -> BTreeSet<String> {
     /// The rules `tests/corpus.rs` declares `Why::Retired` or `Why::Undecidable`.
     /// Duplicated, not shared; `the_unevaluated_set_matches_the_corpus` keeps them in sync.
+    ///
+    /// The type-retired rules are in it too: `the_unevaluated_set_matches_the_corpus`
+    /// compares against the corpus's whole list. They are not *skipped*: a case
+    /// for one of [`BY_TYPE`] is judged by the reader's report instead.
     const UNEVALUATED: &[&str] = &[
         "BR-12", "BR-13", "BR-14", "BR-15", "BR-22", "BR-24", "BR-26", "BR-31", "BR-32", "BR-36",
         "BR-37", "BR-41", "BR-43", "BR-45", "BR-46", "BR-CL-03", "BR-CO-05", "BR-CO-06",
@@ -185,6 +193,50 @@ fn unevaluated() -> BTreeSet<String> {
         .collect()
 }
 
+/// The rules the model's types retire, and the term each requires. No state of
+/// a built invoice can make them fire; a *document* can lack the term, and the
+/// reader must then say so (`Kind::Missing`) — which is what these cases check.
+/// `BR-CL-03` (currency codes) is the reader's `@currencyID` check: an amount
+/// in another currency than BT-5 is `Malformed`, and an invalid BT-5 is
+/// `BR-CL-04`'s.
+const BY_TYPE: &[(&str, &str)] = &[
+    ("BR-12", "BT-106"),
+    ("BR-13", "BT-109"),
+    ("BR-14", "BT-112"),
+    ("BR-15", "BT-115"),
+    ("BR-22", "BT-129"),
+    ("BR-24", "BT-131"),
+    ("BR-26", "BT-146"),
+    ("BR-31", "BT-92"),
+    ("BR-32", "BT-95"),
+    ("BR-36", "BT-99"),
+    ("BR-37", "BT-102"),
+    ("BR-41", "BT-136"),
+    ("BR-43", "BT-141"),
+    ("BR-45", "BT-116"),
+    ("BR-46", "BT-117"),
+    ("BR-CL-03", "currency"),
+];
+
+/// Whether the reader's report answers for a type-retired rule: an entry that
+/// the term is missing or unreadable, or for `BR-CL-03` a foreign currency (or
+/// `BR-CL-04` on an invalid BT-5).
+fn reader_reports(read: &en16931_formats::Read, term: &str) -> bool {
+    if term == "currency" {
+        return read.entries.iter().any(|e| {
+            e.kind == Kind::Malformed
+                && (e.message.contains("not in the invoice currency")
+                    || e.message.contains("not an ISO 4217 currency code"))
+        }) || validate(&read.invoice).has("BR-CL-04");
+    }
+    read.entries.iter().any(|e| {
+        matches!(e.kind, Kind::Missing | Kind::Malformed)
+            && e.term
+                .as_deref()
+                .is_some_and(|t| t == term || t.ends_with(&format!("/{term}")))
+    })
+}
+
 /// The result of running one case.
 enum Outcome {
     /// Agreed; `true` when the fragment omitted `cbc:ChargeIndicator`.
@@ -193,6 +245,8 @@ enum Outcome {
     Diverged(&'static (&'static str, &'static str, &'static str)),
     Disagreed(String),
     SkippedUnevaluated,
+    /// A type-retired rule, judged by the reader's report: agreed or not.
+    ByType(Result<(), String>),
     SkippedSyntaxRule,
     SkippedMalformed(String),
     SkippedUnreadable(String),
@@ -253,6 +307,29 @@ fn run(case: &Case, unevaluated: &BTreeSet<String>) -> Outcome {
         }
         return Outcome::SkippedUnreadable(format!("{} is not a registered rule", case.rule));
     };
+    if let Some((_, term)) = BY_TYPE.iter().find(|(r, _)| *r == canonical) {
+        let read = match read(&case.xml) {
+            Ok(r) => r,
+            Err(e) => return Outcome::SkippedUnreadable(format!("read: {e}")),
+        };
+        let reported = reader_reports(&read, term);
+        return Outcome::ByType(if reported == case.must_fire {
+            Ok(())
+        } else {
+            Err(format!(
+                "{} [{}] the suite says it must {}; the reader {} {term}\n      {}",
+                case.file,
+                case.rule,
+                if case.must_fire { "fire" } else { "not fire" },
+                if reported {
+                    "reported"
+                } else {
+                    "did not report"
+                },
+                case.description
+            ))
+        });
+    }
     if unevaluated.contains(&canonical) {
         return Outcome::SkippedUnevaluated;
     }
@@ -311,6 +388,8 @@ fn cen_conformance_suite() {
     let mut agreed = 0usize;
     let mut absent_indicator = 0usize;
     let mut skipped_unevaluated = 0usize;
+    let mut by_type_agreed = 0usize;
+    let mut by_type_disagreed: Vec<String> = Vec::new();
     let mut skipped_syntax = 0usize;
     // Keyed by (file, rule): several entries share one reason.
     let mut diverged: BTreeMap<(&str, &str), usize> = BTreeMap::new();
@@ -327,6 +406,8 @@ fn cen_conformance_suite() {
                 per_rule.entry(case.rule.clone()).or_default().0 += 1;
             }
             Outcome::SkippedUnevaluated => skipped_unevaluated += 1,
+            Outcome::ByType(Ok(())) => by_type_agreed += 1,
+            Outcome::ByType(Err(why)) => by_type_disagreed.push(why),
             Outcome::SkippedSyntaxRule => skipped_syntax += 1,
             Outcome::Diverged((file, rule, _)) => *diverged.entry((file, rule)).or_default() += 1,
             Outcome::SkippedMalformed(what) => malformed.push(format!("{} — {what}", case.file)),
@@ -379,10 +460,11 @@ fn cen_conformance_suite() {
     );
     summary.extend([
         line(
-            "skipped, unevaluated",
-            skipped_unevaluated,
-            "(type-retired or undecidable)",
+            "type-retired, by the reader",
+            by_type_agreed,
+            "(the term reported missing exactly when the suite expects the rule)",
         ),
+        line("skipped, unevaluated", skipped_unevaluated, "(undecidable)"),
         line(
             "skipped, syntax rules",
             skipped_syntax,
@@ -407,6 +489,9 @@ fn cen_conformance_suite() {
     ]);
     let summary = summary.join("\n");
     eprintln!("{summary}");
+    for d in disagreed.iter().chain(&by_type_disagreed) {
+        eprintln!("  DISAGREES: {d}");
+    }
     if !malformed.is_empty() {
         eprintln!("  malformed:");
         for m in &malformed {
@@ -437,6 +522,19 @@ fn cen_conformance_suite() {
         "{} of {run_count} CEN conformance assertions disagree with this crate:\n  {}",
         disagreed.len(),
         disagreed.join("\n  ")
+    );
+    // The type-retired rules: every case judged by the reader's report, none
+    // skipped, and every one agreeing.
+    assert!(
+        by_type_disagreed.is_empty(),
+        "{} CEN case(s) for type-retired rules disagree with the reader's report:\n  {}",
+        by_type_disagreed.len(),
+        by_type_disagreed.join("\n  ")
+    );
+    assert_eq!(
+        by_type_agreed, CEN_BY_TYPE_ASSERTIONS,
+        "{by_type_agreed} CEN cases for type-retired rules were judged by the reader, and \
+         {CEN_BY_TYPE_ASSERTIONS} are at the pinned release"
     );
     assert!(
         unreadable.is_empty(),
@@ -486,8 +584,6 @@ fn the_reader_maps_everything_the_suite_uses() {
     // A document the reader refuses outright is `cen_conformance_suite`'s to report.
     /// `(file, path)`: a mapped element the model has no place for in this document.
     const NO_TERM_IN_THIS_DOCUMENT: &[(&str, &str)] = &[
-        // A VAT total in a currency that is neither BT-5 nor BT-6 (no BT-5 here).
-        ("BR-CL-03.xml", "Invoice/TaxTotal/TaxAmount"),
         // A second VAT total in the invoice currency; BT-110 is the first.
         ("BR-CO-15.xml", "CreditNote/TaxTotal/TaxAmount"),
         ("BR-CO-15.xml", "Invoice/TaxTotal/TaxAmount"),
@@ -515,7 +611,22 @@ fn the_reader_maps_everything_the_suite_uses() {
         "the excused (file, path) pairs and the table differ"
     );
     /// UBL elements with no EN 16931 business term behind them.
-    const NO_BUSINESS_TERM: &[&str] = &[];
+    ///
+    /// A `cbc:DocumentTypeCode` other than 130: on BG-24 the binding maps no
+    /// code (`BR-CL-07`'s cases use 100 to show a reference that is not
+    /// BT-18), and on a line it is not BT-128 (`PEPPOL-EN16931-R101`). The
+    /// reader says it, as `Unmapped`, rather than dropping it.
+    ///
+    /// A `cac:PartyTaxScheme` with no scheme identifier: CEN binds BT-31 and
+    /// BT-32 by the scheme (`= 'VAT'`, `!= 'VAT'`), so it is neither. A tax
+    /// representative's registration under another scheme than VAT: BG-11
+    /// holds only BT-63.
+    const NO_BUSINESS_TERM: &[&str] = &[
+        "AdditionalDocumentReference/DocumentTypeCode",
+        "InvoiceLine/DocumentReference/DocumentTypeCode",
+        "Party/PartyTaxScheme/TaxScheme",
+        "TaxRepresentativeParty/PartyTaxScheme",
+    ];
     let unexpected: Vec<_> = unmapped
         .into_iter()
         .filter(|u| !NO_BUSINESS_TERM.contains(&u.as_str()))

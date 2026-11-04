@@ -909,7 +909,8 @@ fn ubl_reports_a_tax_total_in_a_third_currency() {
         .filter(|e| e.value.as_deref() == Some("12.34"))
         .collect();
     assert_eq!(third.len(), 1, "{:?}", back.entries);
-    assert_eq!(third[0].kind, Kind::Unmapped);
+    // A value present that the model cannot hold: fatal, not information.
+    assert_eq!(third[0].kind, Kind::Malformed);
     assert_eq!(third[0].path, "Invoice/TaxTotal/TaxAmount");
     assert!(third[0].message.contains("USD"), "{}", third[0].message);
     assert_eq!(back.invoice.totals.vat_total, inv.totals.vat_total);

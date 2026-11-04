@@ -13,6 +13,7 @@ fn every_kind_renders_one_way() {
     let cases = [
         (Kind::Unmapped, "unmapped     Invoice/Foo — not mapped"),
         (Kind::Malformed, "malformed    Invoice/Foo — not mapped"),
+        (Kind::Missing, "missing      Invoice/Foo — not mapped"),
         (Kind::Duplicate, "duplicate    Invoice/Foo — not mapped"),
         (Kind::Repeated, "repeated     Invoice/Foo — not mapped"),
         (Kind::Schema, "schema       Invoice/Foo — not mapped"),
@@ -34,7 +35,8 @@ fn every_kind_renders_one_way() {
     assert_eq!(
         levels,
         [
-            Info, Fatal, Fatal, Warning, Fatal, Fatal, Warning, Fatal, Warning, Warning, Info
+            Info, Fatal, Fatal, Fatal, Warning, Fatal, Fatal, Warning, Fatal, Warning, Warning,
+            Info
         ]
     );
 }
@@ -100,6 +102,12 @@ fn the_readers_hints_are_the_ones_the_spec_names() {
         [
             "malformed    SpecifiedTradeAllowanceCharge/ChargeIndicator/Indicator = \"yes\" — \
              not an xs:boolean [hint: the value must be `true` or `false`]",
+            // The fixture's charge has no VAT category, and read as an
+            // allowance it lacks BT-95.
+            "missing      CrossIndustryInvoice/SupplyChainTradeTransaction/\
+             ApplicableHeaderTradeSettlement/SpecifiedTradeAllowanceCharge/CategoryTradeTax \
+             (BG-20[1]/BT-95) — the VAT category code is absent; BR-32 requires it, and the \
+             model holds a placeholder",
             "unmapped     ApplicableHeaderTradeSettlement/SpecifiedLogisticsServiceCharge — a \
              logistics service charge, which the core does not count [CII-SR-396] [hint: declare \
              the extension in BT-24 (`#conformant#`), or send the charge as a document-level \

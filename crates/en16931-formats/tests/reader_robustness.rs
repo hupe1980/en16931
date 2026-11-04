@@ -4,6 +4,9 @@
 //!
 //! Mutating a valid document, rather than generating random bytes, reaches the
 //! code after parsing: field mapping, conversions, `Unmapped` / `Malformed` entries.
+//!
+//! This suite proves survival and reach. That the readers *say* what they
+//! refuse, element by element, is `reader_absence`'s sweep.
 
 #![cfg(any(feature = "ubl", feature = "cii"))]
 
@@ -352,12 +355,14 @@ fn every_converter_meets_every_adversarial_value() {
          reaching the converters"
     );
 
-    // And the reader reports it: unholdable values are `Kind::Malformed`,
-    // unknown elements `Kind::Unmapped`, never silently dropped.
+    // A reach measure, not the reporting check: with every value replaced at
+    // once a document records many entries, and one value dropped in silence
+    // hides among them. `reader_absence`'s per-element sweep is the check that
+    // the readers record what they refuse.
     assert!(
         noticed * 2 >= readable,
         "only {noticed} of {readable} readable documents recorded an \
-         `Unmapped` or `Malformed` entry — values are being dropped silently"
+         `Unmapped` or `Malformed` entry — the sweep no longer reaches the converters"
     );
 }
 

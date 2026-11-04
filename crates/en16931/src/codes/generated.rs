@@ -3,14 +3,14 @@
 //! **Do not edit.** Regenerate with `cargo xtask codegen` after
 //! `cargo xtask fetch`, and review the diff.
 //!
-//! Artefact revision: `validation-1.3.16`. Peppol tables: Peppol BIS Billing 3.0.21.
+//! Artefact revision: `validation-1.3.17`. Peppol tables: Peppol BIS Billing 3.0.21.
 //!
 //! Every table is re-verified against the artefacts by
 //! `tests/codelists.rs` whenever the reference corpus is present.
 
 /// BT-3 on an invoice — UNTDID 1001, restricted. Note this is *not* the same list as `CREDIT_NOTE_TYPE_CODES`.
 ///
-/// Source: `BR-CL-01`, CEN validation artefacts `validation-1.3.16`. 50 values.
+/// Source: `BR-CL-01`, CEN validation artefacts `validation-1.3.17`. 50 values.
 /// Sorted, so [`lookup`](super::contains) can binary-search it.
 pub static INVOICE_TYPE_CODES: &[&str] = &[
     "102", "130", "202", "203", "204", "211", "218", "219", "295", "325", "326", "331", "380",
@@ -21,7 +21,7 @@ pub static INVOICE_TYPE_CODES: &[&str] = &[
 
 /// BT-3 on a credit note — UNTDID 1001, restricted. Overlaps the invoice list in exactly one code, `81`.
 ///
-/// Source: `BR-CL-01`, CEN validation artefacts `validation-1.3.16`. 13 values.
+/// Source: `BR-CL-01`, CEN validation artefacts `validation-1.3.17`. 13 values.
 /// Sorted, so [`lookup`](super::contains) can binary-search it.
 pub static CREDIT_NOTE_TYPE_CODES: &[&str] = &[
     "261", "262", "296", "308", "381", "396", "420", "458", "502", "503", "532", "81", "83",
@@ -29,7 +29,7 @@ pub static CREDIT_NOTE_TYPE_CODES: &[&str] = &[
 
 /// BT-5 / BT-6 — ISO 4217 alphabetic. Includes `XXX` ("no currency involved"), which this crate rejects separately.
 ///
-/// Source: `BR-CL-04`, CEN validation artefacts `validation-1.3.16`. 178 values.
+/// Source: `BR-CL-04`, CEN validation artefacts `validation-1.3.17`. 178 values.
 /// Sorted, so [`lookup`](super::contains) can binary-search it.
 pub static CURRENCY_CODES: &[&str] = &[
     "AED", "AFN", "ALL", "AMD", "AOA", "ARS", "AUD", "AWG", "AZN", "BAM", "BBD", "BDT", "BHD",
@@ -42,7 +42,7 @@ pub static CURRENCY_CODES: &[&str] = &[
     "MOP", "MRU", "MUR", "MVR", "MWK", "MXN", "MXV", "MYR", "MZN", "NAD", "NGN", "NIO", "NOK",
     "NPR", "NZD", "OMR", "PAB", "PEN", "PGK", "PHP", "PKR", "PLN", "PYG", "QAR", "RON", "RSD",
     "RUB", "RWF", "SAR", "SBD", "SCR", "SDG", "SEK", "SGD", "SHP", "SLE", "SOS", "SRD", "SSP",
-    "STD", "SVC", "SYP", "SZL", "THB", "TJS", "TMT", "TND", "TOP", "TRY", "TTD", "TWD", "TZS",
+    "STN", "SVC", "SYP", "SZL", "THB", "TJS", "TMT", "TND", "TOP", "TRY", "TTD", "TWD", "TZS",
     "UAH", "UGX", "USD", "USN", "UYI", "UYU", "UYW", "UZS", "VED", "VES", "VND", "VUV", "WST",
     "XAF", "XAG", "XAU", "XBA", "XBB", "XBC", "XBD", "XCD", "XCG", "XDR", "XOF", "XPD", "XPF",
     "XPT", "XSU", "XTS", "XUA", "XXX", "YER", "ZAR", "ZMW", "ZWG",
@@ -50,13 +50,13 @@ pub static CURRENCY_CODES: &[&str] = &[
 
 /// BT-8 — a restriction of UNTDID 2005.
 ///
-/// Source: `BR-CL-06`, CEN validation artefacts `validation-1.3.16`. 3 values.
+/// Source: `BR-CL-06`, CEN validation artefacts `validation-1.3.17`. 3 values.
 /// Sorted, so [`lookup`](super::contains) can binary-search it.
 pub static VAT_POINT_DATE_CODES: &[&str] = &["3", "35", "432"];
 
 /// BT-128 scheme — a restriction of UNTDID 1153.
 ///
-/// Source: `BR-CL-07`, CEN validation artefacts `validation-1.3.16`. 818 values.
+/// Source: `BR-CL-07`, CEN validation artefacts `validation-1.3.17`. 818 values.
 /// Sorted, so [`lookup`](super::contains) can binary-search it.
 pub static REFERENCE_QUALIFIERS: &[&str] = &[
     "AAA", "AAB", "AAC", "AAD", "AAE", "AAF", "AAG", "AAH", "AAI", "AAJ", "AAK", "AAL", "AAM",
@@ -124,7 +124,7 @@ pub static REFERENCE_QUALIFIERS: &[&str] = &[
 
 /// Identifier scheme identifiers — ISO 6523 ICD. See `BR-CL-10`'s contextual `SEPA` extension, which is *not* in this table.
 ///
-/// Source: `BR-CL-10`, CEN validation artefacts `validation-1.3.16`. 243 values.
+/// Source: `BR-CL-10`, CEN validation artefacts `validation-1.3.17`. 246 values.
 /// Sorted, so [`lookup`](super::contains) can binary-search it.
 pub static ICD_SCHEMES: &[&str] = &[
     "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013",
@@ -147,12 +147,12 @@ pub static ICD_SCHEMES: &[&str] = &[
     "0210", "0211", "0212", "0213", "0214", "0215", "0216", "0217", "0218", "0219", "0220", "0221",
     "0222", "0223", "0224", "0225", "0226", "0227", "0228", "0229", "0230", "0231", "0232", "0233",
     "0234", "0235", "0236", "0237", "0238", "0239", "0240", "0241", "0242", "0243", "0244", "0245",
-    "0246", "0247", "0248",
+    "0246", "0247", "0248", "0249", "0250", "0251",
 ];
 
 /// BT-158 scheme — UNTDID 7143.
 ///
-/// Source: `BR-CL-13`, CEN validation artefacts `validation-1.3.16`. 185 values.
+/// Source: `BR-CL-13`, CEN validation artefacts `validation-1.3.17`. 185 values.
 /// Sorted, so [`lookup`](super::contains) can binary-search it.
 pub static ITEM_CLASSIFICATION_SCHEMES: &[&str] = &[
     "AA", "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK", "AL", "AM", "AN", "AO", "AP",
@@ -172,7 +172,7 @@ pub static ITEM_CLASSIFICATION_SCHEMES: &[&str] = &[
 
 /// BT-40 / BT-55 / BT-69 / BT-80 — ISO 3166-1 alpha-2.
 ///
-/// Source: `BR-CL-14`, CEN validation artefacts `validation-1.3.16`. 251 values.
+/// Source: `BR-CL-14`, CEN validation artefacts `validation-1.3.17`. 251 values.
 /// Sorted, so [`lookup`](super::contains) can binary-search it.
 pub static COUNTRY_CODES: &[&str] = &[
     "1A", "AD", "AE", "AF", "AG", "AI", "AL", "AM", "AO", "AQ", "AR", "AS", "AT", "AU", "AW", "AX",
@@ -195,7 +195,7 @@ pub static COUNTRY_CODES: &[&str] = &[
 
 /// BT-81 — UNTDID 4461.
 ///
-/// Source: `BR-CL-16`, CEN validation artefacts `validation-1.3.16`. 84 values.
+/// Source: `BR-CL-16`, CEN validation artefacts `validation-1.3.17`. 84 values.
 /// Sorted, so [`lookup`](super::contains) can binary-search it.
 pub static PAYMENT_MEANS_CODES: &[&str] = &[
     "1", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "2", "20", "21", "22", "23",
@@ -208,13 +208,13 @@ pub static PAYMENT_MEANS_CODES: &[&str] = &[
 
 /// BT-118 / BT-151 / BT-95 / BT-102 — UNCL 5305. Ten codes; see [`crate::codes::VatCategory`].
 ///
-/// Source: `BR-CL-17`, CEN validation artefacts `validation-1.3.16`. 10 values.
+/// Source: `BR-CL-17`, CEN validation artefacts `validation-1.3.17`. 10 values.
 /// Sorted, so [`lookup`](super::contains) can binary-search it.
 pub static VAT_CATEGORY_CODES: &[&str] = &["AE", "B", "E", "G", "K", "L", "M", "O", "S", "Z"];
 
 /// BT-98 / BT-140 — UNCL 5189.
 ///
-/// Source: `BR-CL-19`, CEN validation artefacts `validation-1.3.16`. 19 values.
+/// Source: `BR-CL-19`, CEN validation artefacts `validation-1.3.17`. 19 values.
 /// Sorted, so [`lookup`](super::contains) can binary-search it.
 pub static ALLOWANCE_REASON_CODES: &[&str] = &[
     "100", "102", "103", "104", "105", "41", "42", "60", "62", "63", "64", "65", "66", "67", "68",
@@ -223,7 +223,7 @@ pub static ALLOWANCE_REASON_CODES: &[&str] = &[
 
 /// BT-105 / BT-145 — UNCL 7161.
 ///
-/// Source: `BR-CL-20`, CEN validation artefacts `validation-1.3.16`. 178 values.
+/// Source: `BR-CL-20`, CEN validation artefacts `validation-1.3.17`. 178 values.
 /// Sorted, so [`lookup`](super::contains) can binary-search it.
 pub static CHARGE_REASON_CODES: &[&str] = &[
     "AA", "AAA", "AAC", "AAD", "AAE", "AAF", "AAH", "AAI", "AAS", "AAT", "AAV", "AAY", "AAZ",
@@ -243,9 +243,27 @@ pub static CHARGE_REASON_CODES: &[&str] = &[
 
 /// BT-121 — the CEF VATEX code list.
 ///
-/// Source: `BR-CL-22`, CEN validation artefacts `validation-1.3.16`. 88 values.
+/// Source: `BR-CL-22`, CEN validation artefacts `validation-1.3.17`. 106 values.
 /// Sorted, so [`lookup`](super::contains) can binary-search it.
 pub static VATEX_CODES: &[&str] = &[
+    "VATEX-ES-IGIC11",
+    "VATEX-ES-IGIC12",
+    "VATEX-ES-IGIC13",
+    "VATEX-ES-IGIC1TR",
+    "VATEX-ES-IGIC25",
+    "VATEX-ES-IGIC47",
+    "VATEX-ES-IGIC90",
+    "VATEX-ES-IPSI7",
+    "VATEX-ES-IPSI8",
+    "VATEX-ES-IVA140BIS",
+    "VATEX-ES-IVA20",
+    "VATEX-ES-IVA21",
+    "VATEX-ES-IVA22",
+    "VATEX-ES-IVA23/24",
+    "VATEX-ES-IVA25",
+    "VATEX-ES-N1",
+    "VATEX-ES-N2",
+    "VATEX-ES-OTROS",
     "VATEX-EU-132",
     "VATEX-EU-132-1A",
     "VATEX-EU-132-1B",
@@ -338,7 +356,7 @@ pub static VATEX_CODES: &[&str] = &[
 
 /// BT-130 / BT-150 — UN/ECE Recommendation 20 with Rec 21 extensions.
 ///
-/// Source: `BR-CL-23`, CEN validation artefacts `validation-1.3.16`. 2162 values.
+/// Source: `BR-CL-23`, CEN validation artefacts `validation-1.3.17`. 2162 values.
 /// Sorted, so [`lookup`](super::contains) can binary-search it.
 pub static UNIT_CODES: &[&str] = &[
     "10", "11", "13", "14", "15", "1I", "20", "21", "22", "23", "24", "25", "27", "28", "2A", "2B",
@@ -508,18 +526,18 @@ pub static UNIT_CODES: &[&str] = &[
 
 /// BT-34 / BT-49 scheme — the CEF Electronic Address Scheme list.
 ///
-/// Source: `BR-CL-25`, CEN validation artefacts `validation-1.3.16`. 104 values.
+/// Source: `BR-CL-25`, CEN validation artefacts `validation-1.3.17`. 103 values.
 /// Sorted, so [`lookup`](super::contains) can binary-search it.
 pub static EAS_SCHEMES: &[&str] = &[
     "0002", "0007", "0009", "0037", "0060", "0088", "0096", "0097", "0106", "0130", "0135", "0142",
     "0147", "0151", "0154", "0158", "0170", "0177", "0183", "0184", "0188", "0190", "0191", "0192",
     "0193", "0194", "0195", "0196", "0198", "0199", "0200", "0201", "0202", "0203", "0204", "0205",
-    "0208", "0209", "0210", "0211", "0212", "0213", "0215", "0216", "0217", "0218", "0219", "0220",
-    "0221", "0225", "0230", "0235", "0240", "0242", "0244", "0245", "0246", "0248", "9910", "9913",
-    "9914", "9915", "9918", "9919", "9920", "9922", "9923", "9924", "9925", "9926", "9927", "9928",
-    "9929", "9930", "9931", "9932", "9933", "9934", "9935", "9936", "9937", "9938", "9939", "9940",
-    "9941", "9942", "9943", "9944", "9945", "9946", "9947", "9948", "9949", "9950", "9951", "9952",
-    "9953", "9957", "9959", "AN", "AQ", "AS", "AU", "EM",
+    "0208", "0209", "0210", "0211", "0212", "0213", "0215", "0216", "0217", "0218", "0221", "0225",
+    "0230", "0235", "0240", "0242", "0244", "0245", "0246", "0248", "9910", "9913", "9914", "9915",
+    "9918", "9919", "9920", "9922", "9923", "9924", "9925", "9926", "9927", "9928", "9929", "9930",
+    "9931", "9932", "9933", "9934", "9935", "9936", "9937", "9938", "9939", "9940", "9941", "9942",
+    "9943", "9944", "9945", "9946", "9947", "9948", "9949", "9950", "9951", "9952", "9953", "9957",
+    "9959", "9960", "AN", "AQ", "AS", "AU", "EM",
 ];
 
 /// BT-34 / BT-49 scheme under Peppol BIS 3.0 — a **strict subset** of [`EAS_SCHEMES`].
@@ -551,7 +569,7 @@ pub static PEPPOL_MIME_CODES: &[&str] = &[
 
 /// BT-21 — UNCL 4451. The **union** over CEN's UBL, CII and EDIFACT bindings, which froze different UNTDID directory revisions; see `xtask/`.
 ///
-/// Source: `BR-CL-08`, CEN validation artefacts `validation-1.3.16`. 401 values.
+/// Source: `BR-CL-08`, CEN validation artefacts `validation-1.3.17`. 401 values.
 /// Sorted, so [`lookup`](super::contains) can binary-search it.
 pub static NOTE_SUBJECT_CODES: &[&str] = &[
     "AAA", "AAB", "AAC", "AAD", "AAE", "AAF", "AAG", "AAI", "AAJ", "AAK", "AAL", "AAM", "AAN",

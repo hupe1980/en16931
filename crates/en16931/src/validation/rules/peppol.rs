@@ -874,6 +874,36 @@ mod tests {
         assert_eq!(fired(&P0112, &inv).len(), 1);
     }
 
+    /// 3.0.21-hotfix (RFC-607): 389 is German-only like 326, and 384 is also
+    /// allowed between two Slovak parties — by Peppol's `$supplierCountry`,
+    /// the VAT identifier's prefix before the address.
+    #[test]
+    fn p0112_follows_the_3_0_21_hotfix() {
+        let with = |code: &str, seller: &str, buyer: &str| {
+            let mut inv = Invoice {
+                type_code: Some(crate::invoice::Code::new(code)),
+                ..Default::default()
+            };
+            inv.seller.address.country = Some(crate::invoice::Code::new(seller));
+            inv.buyer.address.country = Some(crate::invoice::Code::new(buyer));
+            fired(&P0112, &inv).len()
+        };
+        assert_eq!(with("389", "DE", "DE"), 0);
+        assert_eq!(with("389", "DE", "FR"), 1);
+        assert_eq!(with("384", "SK", "SK"), 0);
+        assert_eq!(with("384", "SK", "DE"), 1);
+        assert_eq!(with("326", "SK", "SK"), 1);
+        // The VAT identifier's prefix outranks the address.
+        let mut inv = Invoice {
+            type_code: Some(crate::invoice::Code::new("384")),
+            ..Default::default()
+        };
+        inv.seller.vat_identifier = Some("SK2020000000".into());
+        inv.buyer.vat_identifier = Some("sk2020000001".into());
+        inv.seller.address.country = Some(crate::invoice::Code::new("AT"));
+        assert!(fired(&P0112, &inv).is_empty());
+    }
+
     /// `P0100` constrains BT-3 only on a Peppol billing process.
     #[test]
     fn the_type_code_list_applies_to_billing_processes_only() {
@@ -1147,15 +1177,42 @@ rule!(R055, "PEPPOL-EN16931-R055", terms: [bt::VAT_TOTAL, BtId(111)],
     }
 });
 
+/// Peppol's `$supplierCountry` / `$customerCountry`: the VAT identifier's
+/// prefix, then (supplier only) the tax representative's, then the address
+/// country, else `XX` — upper-cased and trimmed.
+fn peppol_country(vat: &[Option<&str>], address: Option<&crate::invoice::Code>) -> String {
+    vat.iter()
+        .flatten()
+        .map(|v| v.trim())
+        .find(|v| v.chars().count() >= 2)
+        .map(|v| v.chars().take(2).collect::<String>().to_ascii_uppercase())
+        .or_else(|| address.map(|c| c.as_str().trim().to_ascii_uppercase()))
+        .unwrap_or_else(|| "XX".to_owned())
+}
+
 rule!(P0112, "PEPPOL-EN16931-P0112", terms: [bt::TYPE_CODE],
-"Invoice type code 326 or 384 are only allowed when both buyer and seller are German organizations.",
+"Invoice type codes 326 and 389 are only allowed when both buyer and seller are German \
+ organizations. Invoice type code 384 is only allowed when both buyer and seller are German \
+ organizations or both are Slovak organizations.",
 |inv, f| {
-    if inv
-        .type_code
-        .as_ref()
-        .is_some_and(|c| matches!(c.as_str(), "326" | "384"))
-        && !both_german(inv)
-    {
+    let Some(code) = inv.type_code.as_ref().map(|c| c.as_str().trim()) else {
+        return;
+    };
+    if !matches!(code, "326" | "384" | "389") || both_german(inv) {
+        return;
+    }
+    let supplier = peppol_country(
+        &[
+            inv.seller.vat_identifier.as_deref(),
+            inv.tax_representative.as_ref().and_then(|t| t.vat_identifier.as_deref()),
+        ],
+        inv.seller.address.country.as_ref(),
+    );
+    let customer = peppol_country(
+        &[inv.buyer.vat_identifier.as_deref()],
+        inv.buyer.address.country.as_ref(),
+    );
+    if !(code == "384" && supplier == "SK" && customer == "SK") {
         f.at(Path::term(bt::TYPE_CODE));
     }
 });

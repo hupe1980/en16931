@@ -481,7 +481,10 @@ pub fn billing_invoice() -> Invoice {
 /// site is not part of a published crate).
 #[must_use]
 pub fn site_page(name: &str) -> Option<String> {
-    std::fs::read_to_string(docs::workspace_root().join("site/content/docs").join(name)).ok()
+    // A Windows checkout may carry CRLF; the pasted blocks are compared as LF.
+    std::fs::read_to_string(docs::workspace_root().join("site/content/docs").join(name))
+        .ok()
+        .map(|p| p.replace("\r\n", "\n"))
 }
 
 /// `page` quotes each figure where its pattern (one `<N>`) says, at least once

@@ -15,7 +15,7 @@ exclude = ["fuzz"]
 
 [workspace.package]
 # All three crates release in lockstep: bump here and in the two requirements below.
-version      = "0.8.0"
+version      = "0.9.0"
 edition      = "2024"
 # `let`-chains need 1.88. CI reads this value.
 rust-version = "1.88"
@@ -25,8 +25,8 @@ repository   = "https://github.com/hupe1980/en16931"
 
 [workspace.dependencies]
 # `version` as well as `path`, so `cargo publish` resolves them from crates.io.
-en16931         = { version = "0.8.0", path = "crates/en16931" }
-en16931-formats = { version = "0.8.0", path = "crates/en16931-formats" }
+en16931         = { version = "0.9.0", path = "crates/en16931" }
+en16931-formats = { version = "0.9.0", path = "crates/en16931-formats" }
 
 # Pinned once: two `rust_decimal` versions would mean two incompatible `Decimal` types.
 rust_decimal = { version = "1.43", default-features = false, features = ["std"] }

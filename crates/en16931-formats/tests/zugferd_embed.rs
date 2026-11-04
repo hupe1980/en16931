@@ -647,10 +647,10 @@ fn strip_invoice_xmp(text: &str) -> Option<String> {
 
 // ── veraPDF, in its official Docker image ─────────────────────────────────
 
-/// veraPDF's REST service (1.30.2), pinned by tag and digest; linux/amd64 only.
+/// veraPDF's REST service (1.30.3), pinned by tag and digest; linux/amd64 only.
 const VERAPDF_IMAGE: &str = "verapdf/rest";
 const VERAPDF_TAG: &str =
-    "v1.30.2@sha256:341359ac6af558f35f03c355a798fec57ba049dd04f0a503f300170e1696573b";
+    "v1.30.3@sha256:b0e4ce6032521f87999e92562dc226a62da1fd30f2325998d1d2f2ed6eeb5d50";
 
 /// The veraPDF container's memory limit (2 GiB) and the JVM heap inside it.
 const VERAPDF_MEMORY: i64 = 2 * 1024 * 1024 * 1024;

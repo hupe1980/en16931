@@ -303,8 +303,39 @@ struct Skew {
     diverging: fn(),
 }
 
-/// Empty: at the pinned releases every authority names CEN 1.3.16.
-const DECLARED_SKEWS: &[Skew] = &[];
+/// KoSIT's configuration and OpenPeppol's bundled CEN Schematron both build on
+/// CEN 1.3.16; this crate runs 1.3.17. Their CEN rules differ in the code lists
+/// [`cen_1_3_17_lists`] asserts, and in naming the IGIC / IPSI rules
+/// `BR-AF-*` / `BR-AG-*`.
+const DECLARED_SKEWS: &[Skew] = &[
+    Skew {
+        authority: "KoSIT",
+        names: "1.3.16",
+        diverging: cen_1_3_17_lists,
+    },
+    Skew {
+        authority: "OpenPeppol",
+        names: "1.3.16",
+        diverging: cen_1_3_17_lists,
+    },
+];
+
+/// The code values CEN 1.3.17 changed against 1.3.16 (#509, #510, #525, #527).
+fn cen_1_3_17_lists() {
+    use en16931::codes::{contains, generated as g};
+    // ISO 4217: São Tomé's dobra.
+    assert!(contains(g::CURRENCY_CODES, "STN") && !contains(g::CURRENCY_CODES, "STD"));
+    // ISO 6523 ICD: three new schemes.
+    for icd in ["0249", "0250", "0251"] {
+        assert!(contains(g::ICD_SCHEMES, icd), "{icd}");
+    }
+    // VATEX: the Spanish exemption reasons.
+    assert!(contains(g::VATEX_CODES, "VATEX-ES-IGIC11"));
+    assert!(contains(g::VATEX_CODES, "VATEX-ES-IPSI7"));
+    // CEF EAS: two withdrawn, one added.
+    assert!(!contains(g::EAS_SCHEMES, "0219") && !contains(g::EAS_SCHEMES, "0220"));
+    assert!(contains(g::EAS_SCHEMES, "9960"));
+}
 
 /// Every pinned authority builds on the CEN release this crate runs, or the
 /// skew is declared in [`DECLARED_SKEWS`] (and fails once it disappears).

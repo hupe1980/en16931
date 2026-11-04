@@ -34,7 +34,7 @@ exist*. The [CLI page](@/docs/cli.md) covers every subcommand.
 
 ```toml
 [dependencies]
-en16931 = "0.8"
+en16931 = "0.9"
 rust_decimal = "1"
 ```
 
@@ -45,7 +45,7 @@ a browser without leaving the client.
 Add the syntax layer only if a document has to cross a wire:
 
 ```toml
-en16931-formats = { version = "0.8", features = ["ubl", "cii"] }
+en16931-formats = { version = "0.9", features = ["ubl", "cii"] }
 ```
 
 ## A first invoice

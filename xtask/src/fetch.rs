@@ -32,12 +32,11 @@ use std::process::Command;
 
 /// The pinned CEN artefact tag. Must equal `en16931::ARTEFACT_VERSION` and the
 /// code generator's `ARTEFACT` stamp (asserted by `artefact_pin.rs`).
-pub const CEN_REF: &str = "validation-1.3.16";
+pub const CEN_REF: &str = "validation-1.3.17";
 
-/// OpenPeppol BIS Billing 3.0.21 (`PEPPOL-EN16931-*`, `PEPPOL-COMMON-*`, national
-/// rule sets), pinned by commit because 3.0.21 is untagged. Its
-/// `PEPPOL-EN16931-UBL.sch` is byte-identical to the one docs.peppol.eu publishes.
-pub const PEPPOL_REF: &str = "806866bd2bd91d7e9623b68f08164e8fbe9e67a0";
+/// OpenPeppol BIS Billing 3.0.21-hotfix (2026-10-28; `PEPPOL-EN16931-*`,
+/// `PEPPOL-COMMON-*`, national rule sets), the commit tag `3.0.21` now names.
+pub const PEPPOL_REF: &str = "5df0eff7c8efafd7c79c0dacce55082d175db759";
 
 /// The Peppol release [`PEPPOL_REF`] is.
 pub const PEPPOL_RELEASE: &str = "3.0.21";
@@ -50,14 +49,14 @@ pub const KOSIT_SCHEMATRON_REF: &str = "v2.6.0";
 pub const KOSIT_CONFIG_REF: &str = "v2026-08-31";
 
 /// The ZUGFeRD community corpus (Apache-2.0), pinned by commit: it has no tags.
-pub const ZUGFERD_CORPUS_REF: &str = "d891458e9822e34271a5438497bf924e89955979";
+pub const ZUGFERD_CORPUS_REF: &str = "82e886fb21369e3e83c1e97170a4ff406deceee7";
 
 /// veraPDF's REST image, the PDF/A-3b gate: the tag and digest the gate test and
 /// CI's pull name (asserted by a test).
-pub const VERAPDF_TAG: &str = "v1.30.2";
+pub const VERAPDF_TAG: &str = "v1.30.3";
 /// The digest of [`VERAPDF_TAG`].
 pub const VERAPDF_DIGEST: &str =
-    "sha256:341359ac6af558f35f03c355a798fec57ba049dd04f0a503f300170e1696573b";
+    "sha256:b0e4ce6032521f87999e92562dc226a62da1fd30f2325998d1d2f2ed6eeb5d50";
 
 /// SHA-256 of the OASIS UBL 2.1 distribution archive (the schemas written UBL is
 /// validated against). Only its `xsd/` tree is kept.
@@ -163,9 +162,9 @@ pub static REPOS: &[Repo] = &[
         reference: Ref::Commit {
             sha: PEPPOL_REF,
             release: Some(PEPPOL_RELEASE),
-            reason: "BIS Billing 3.0.21 was published on docs.peppol.eu and made \
-                     mandatory on 2026-08-17 without a tag",
-            until: "until OpenPeppol tags v3.0.21 or a later release",
+            reason: "OpenPeppol re-pointed tag 3.0.21 to its 3.0.21-hotfix \
+                     (2026-10-28); a tag that moved once is pinned by the commit it names",
+            until: "until OpenPeppol publishes a later release",
         },
         releases: &["", "v"],
         channel: Channel::PeppolQa {

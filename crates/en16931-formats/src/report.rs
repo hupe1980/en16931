@@ -23,7 +23,7 @@ use en16931::{Severity, ValidationReport};
 
 /// What an [`Entry`] is about.
 ///
-/// The first eight come from reading, the last three from writing. Each kind has
+/// The first nine come from reading, the last three from writing. Each kind has
 /// one [`level`](Kind::level).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -36,6 +36,11 @@ pub enum Kind {
     /// `yes` as a boolean, a code outside the binding's list. The term is left
     /// absent.
     Malformed,
+    /// A term the model requires that the document does not carry: the
+    /// element is absent or empty. The model's field cannot be absent, so it
+    /// holds a placeholder (its neutral value — zero, an empty code); this
+    /// entry says the placeholder is not the document's value.
+    Missing,
     /// A second or later occurrence of an element the syntax allows once. The
     /// first occurrence is read; this one is not.
     Duplicate,
@@ -79,6 +84,7 @@ impl Kind {
                 Severity::Warning
             }
             Self::Malformed
+            | Self::Missing
             | Self::Duplicate
             | Self::Schema
             | Self::Unreadable
@@ -92,6 +98,7 @@ impl Kind {
         match self {
             Self::Unmapped => "unmapped",
             Self::Malformed => "malformed",
+            Self::Missing => "missing",
             Self::Duplicate => "duplicate",
             Self::Repeated => "repeated",
             Self::Schema => "schema",
@@ -186,14 +193,17 @@ impl Entry {
     }
 
     /// Whether this entry means document content did not reach the other side
-    /// of a conversion: an element not mapped, a value not held, a duplicate
-    /// not read, a term the target cannot carry or may not carry.
+    /// of a conversion: an element not mapped, a value not held, a required
+    /// term the source lacks (its placeholder would be written as if it were
+    /// the document's), a duplicate not read, a term the target cannot carry
+    /// or may not carry.
     #[must_use]
     pub fn is_loss(&self) -> bool {
         matches!(
             self.kind,
             Kind::Unmapped
                 | Kind::Malformed
+                | Kind::Missing
                 | Kind::Duplicate
                 | Kind::Repeated
                 | Kind::Dropped
@@ -337,7 +347,7 @@ pub struct RuleSet {
     /// Its BT-24 identifier.
     pub specification_id: String,
     /// The authority releases its rules were verified against —
-    /// `CEN validation-1.3.16`.
+    /// `CEN validation-1.3.17`.
     pub artefacts: Vec<String>,
     /// Core rules the profile does not run: non-empty only for a totals-only
     /// profile (ZUGFeRD MINIMUM, BASIC WL), so "no fatal finding" is never read

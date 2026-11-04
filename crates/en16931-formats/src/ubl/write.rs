@@ -157,7 +157,15 @@ pub(crate) fn write(inv: &Invoice, waived: &'static [&'static str]) -> Written {
     } else if let Some(s) = &inv.sales_order_reference {
         // BT-14 without BT-13 still needs the wrapper; UBL makes cbc:ID
         // mandatory inside it, so an empty one is written rather than a
-        // dangling SalesOrderID.
+        // dangling SalesOrderID — and said.
+        x.note(
+            Entry::new(
+                Kind::Derived,
+                "cac:OrderReference/cbc:ID",
+                "absent while BT-14 is present, and UBL requires the element: written empty",
+            )
+            .term("BT-13"),
+        );
         x.group("cac:OrderReference", |x| {
             x.leaf("cbc:ID", &[], "");
             x.leaf("cbc:SalesOrderID", &[], s.as_str());
@@ -955,7 +963,24 @@ fn item(x: &mut Xml, i: &Item, vat: Option<&LineVat>) {
         if let Some(vat) = vat {
             tax_category(x, vat, "cac:ClassifiedTaxCategory");
         }
-        for a in &i.attributes {
+        for (j, a) in i.attributes.iter().enumerate() {
+            // UBL requires both; an absent one is written empty and said
+            // (`BR-54` already finds the attribute incomplete).
+            for (el, term, v) in [
+                ("cbc:Name", "BT-160", &a.name),
+                ("cbc:Value", "BT-161", &a.value),
+            ] {
+                if v.is_none() {
+                    x.note(
+                        Entry::new(
+                            Kind::Derived,
+                            format!("cac:Item/cac:AdditionalItemProperty/{el}"),
+                            "absent, and UBL requires the element: written empty",
+                        )
+                        .term(format!("BG-32[{}]/{term}", j + 1)),
+                    );
+                }
+            }
             x.group("cac:AdditionalItemProperty", |x| {
                 x.leaf("cbc:Name", &[], a.name.as_deref().unwrap_or_default());
                 x.leaf("cbc:Value", &[], a.value.as_deref().unwrap_or_default());

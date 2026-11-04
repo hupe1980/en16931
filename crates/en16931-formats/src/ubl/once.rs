@@ -8,10 +8,10 @@
 //! * 170 rows come from the schema: of the 240 `(parent, child)`
 //!   pairs the authorities' instances use, those whose child the OASIS UBL 2.1 schemas declare
 //!   `maxOccurs="1"` in the parent's type. Their rule cell is empty.
-//! * 69 rows come from CEN's `count(…) <= 1` syntax rules, with the
+//! * 83 rows come from CEN's `count(…) <= 1` syntax rules, with the
 //!   level CEN publishes for each — and, where KoSIT replaces a CEN rule whose
 //!   context is wrong, from KoSIT's replacement.
-//! * [`UNCHECKED`] lists the 6 such rules this table cannot express, and why.
+//! * [`UNCHECKED`] lists the 10 such rules this table cannot express, and why.
 //!
 //! A context beginning `/` anchors at the document element; `//` or a bare
 //! name matches at any depth; a context's last step may carry a predicate.
@@ -509,6 +509,18 @@ pub static ONCE: &[(&str, &str, &str, &str)] = &[
         "cac:PaymentMeans/cbc:PaymentDueDate",
     ),
     (
+        "UBL-SR-48",
+        "fatal",
+        "cac:CreditNoteLine",
+        "cac:Item/cac:ClassifiedTaxCategory",
+    ),
+    (
+        "UBL-SR-48",
+        "fatal",
+        "cac:InvoiceLine",
+        "cac:Item/cac:ClassifiedTaxCategory",
+    ),
+    (
         "UBL-SR-49",
         "fatal",
         "/cn:CreditNote",
@@ -531,6 +543,13 @@ pub static ONCE: &[(&str, &str, &str, &str)] = &[
         "fatal",
         "cac:InvoiceLine",
         "cac:Item/cbc:Description",
+    ),
+    ("UBL-SR-51", "fatal", "//cac:Address", "cac:AddressLine"),
+    (
+        "UBL-SR-51",
+        "fatal",
+        "//cac:PostalAddress",
+        "cac:AddressLine",
     ),
     (
         "UBL-SR-52",
@@ -579,14 +598,87 @@ pub static ONCE: &[(&str, &str, &str, &str)] = &[
         "fatal",
         "/ubl:Invoice",
         "cac:OriginatorDocumentReference/cbc:ID",
+    ),
+    (
+        "UBL-SR-57",
+        "fatal",
+        "/cn:CreditNote",
+        "cac:AccountingCustomerParty/cac:Party/cac:PartyLegalEntity",
+    ),
+    (
+        "UBL-SR-57",
+        "fatal",
+        "/cn:CreditNote",
+        "cac:AccountingSupplierParty/cac:Party/cac:PartyLegalEntity",
+    ),
+    (
+        "UBL-SR-57",
+        "fatal",
+        "/cn:CreditNote",
+        "cac:PayeeParty/cac:PartyLegalEntity",
+    ),
+    (
+        "UBL-SR-57",
+        "fatal",
+        "/cn:CreditNote",
+        "cac:TaxRepresentativeParty/cac:PartyLegalEntity",
+    ),
+    (
+        "UBL-SR-57",
+        "fatal",
+        "/ubl:Invoice",
+        "cac:AccountingCustomerParty/cac:Party/cac:PartyLegalEntity",
+    ),
+    (
+        "UBL-SR-57",
+        "fatal",
+        "/ubl:Invoice",
+        "cac:AccountingSupplierParty/cac:Party/cac:PartyLegalEntity",
+    ),
+    (
+        "UBL-SR-57",
+        "fatal",
+        "/ubl:Invoice",
+        "cac:PayeeParty/cac:PartyLegalEntity",
+    ),
+    (
+        "UBL-SR-57",
+        "fatal",
+        "/ubl:Invoice",
+        "cac:TaxRepresentativeParty/cac:PartyLegalEntity",
+    ),
+    (
+        "UBL-SR-58",
+        "fatal",
+        "cac:PaymentMeans",
+        "cac:PayeeFinancialAccount/cac:FinancialInstitutionBranch/cbc:ID",
+    ),
+    (
+        "UBL-SR-59",
+        "fatal",
+        "cac:PaymentMeans",
+        "cac:PayeeFinancialAccount/cbc:ID",
     ),
 ];
 
 /// `count(…) <= 1` syntax rules this table cannot express, with the reason.
 pub static UNCHECKED: &[(&str, &str)] = &[
+    (
+        "UBL-SR-19",
+        "a conjunction with a clause that is not `count(…) <= 1`",
+    ),
+    (
+        "UBL-SR-20",
+        "a conjunction with a clause that is not `count(…) <= 1`",
+    ),
+    (
+        "UBL-SR-21",
+        "a conjunction with a clause that is not `count(…) <= 1`",
+    ),
     ("UBL-SR-29", "an attribute predicate"),
     ("UBL-SR-30", "a conditional rule context"),
     ("UBL-SR-31", "a conditional rule context"),
+    ("UBL-SR-42", "a count this table cannot express"),
     (
         "UBL-SR-44",
         "a distinct-value count, which is not a count of occurrences",

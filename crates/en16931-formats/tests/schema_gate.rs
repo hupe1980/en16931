@@ -31,7 +31,7 @@ const UBL_INVOICE_XSD: &str = "oasis-ubl-2.1/xsd/maindoc/UBL-Invoice-2.1.xsd";
 const UBL_CREDIT_NOTE_XSD: &str = "oasis-ubl-2.1/xsd/maindoc/UBL-CreditNote-2.1.xsd";
 
 /// The number of documents gated per syntax at the pinned releases (CEN
-/// `validation-1.3.16`, KoSIT `v2.6.0` / `v2026-08-31`, Peppol 3.0.21). Raise only.
+/// `validation-1.3.17`, KoSIT `v2.6.0` / `v2026-08-31`, Peppol 3.0.21). Raise only.
 const CII_FLOOR: usize = 509;
 const UBL_FLOOR: usize = 509;
 

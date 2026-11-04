@@ -19,7 +19,7 @@ use crate::invoice::Invoice;
 ///
 /// [`matches`](Self::matches) is for user input and forgives only case and
 /// zero-padding (EN 16931-1 writes `BR-CO-3`, the artefacts `BR-CO-03`). No
-/// rule family is mapped to another (`BR-IG-*` is not `BR-AF-*`).
+/// rule family is mapped to another (`BR-AF-*`, CEN's spelling before 1.3.17, is not `BR-IG-*`).
 ///
 /// ```
 /// use en16931::validation::RuleId;
@@ -28,7 +28,7 @@ use crate::invoice::Invoice;
 /// assert!(r.matches("BR-CO-14"));
 /// assert!(r.matches("BR-CO-4") == false);
 /// assert!(RuleId::new("BR-CO-03").matches("BR-CO-3"));   // padding
-/// assert!(!RuleId::new("BR-AF-01").matches("BR-IG-1"));  // no family mapping
+/// assert!(!RuleId::new("BR-IG-01").matches("BR-AF-1"));  // no family mapping
 /// assert!(RuleId::new("BR-CO-14").matches("br-co-14"));  // case
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -860,8 +860,8 @@ mod tests {
         assert!(RuleId::new("BR-01").matches("BR-1"));
         assert!(RuleId::new("BR-S-01").matches("BR-S-1"));
         // No family is mapped to another.
-        assert!(!RuleId::new("BR-AF-01").matches("BR-IG-1"));
-        assert!(!RuleId::new("BR-AG-10").matches("BR-IP-10"));
+        assert!(!RuleId::new("BR-IG-01").matches("BR-AF-1"));
+        assert!(!RuleId::new("BR-IP-10").matches("BR-AG-10"));
         // …but distinct rules stay distinct.
         assert!(!RuleId::new("BR-CO-13").matches("BR-CO-14"));
         assert!(!RuleId::new("BR-CO-01").matches("BR-CO-10"));

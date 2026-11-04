@@ -13,8 +13,9 @@ timings are measured, not asserted.
 ## CEN's unit tests
 
 277 files and 1 131 assertions, each a minimal UBL fragment with an explicit
-expectation. 1 025 CEN unit-test assertions run; the rest test rules the types
-retire, undecidable rules or syntax rules:
+expectation. 1 025 CEN unit-test assertions run against the rules; 66 more test
+rules the model's types retire, and are judged by what the reader reports
+instead; the rest are syntax rules or values the model refuses:
 
 ```xml
 <test>
@@ -35,7 +36,8 @@ CEN conformance suite
      2 × a <cac:BillingReference/> with no child is an absent BG-3 here
      1 × a <cac:InvoicePeriod/> with no dates is an absent BG-14 here
      2 × two cac:TaxTotal elements cannot both be BT-110
-  skipped, unevaluated:    66  (type-retired or undecidable)
+  type-retired, by the reader:   66  (the term reported missing exactly when the suite expects the rule)
+  skipped, unevaluated:     0  (undecidable)
   skipped, syntax rules:   32  (UBL-*/CII-*, the formats crate's job)
   skipped, malformed:       8  (a value the model refuses)
   skipped, unreadable:      0
@@ -48,6 +50,12 @@ rule set — a test may state several (`BR-29` and `BR-30` must both stay silent
 CEN's files say nothing about 35 of the 227 core rules, most of them the
 `BR-DEC-*` decimal checks the model's amount types retire. CEN's fragments are
 minimal by design, so what *other* rules do on them is not an expectation.
+
+**Type-retired rules are checked through the reader.** Sixteen rules (`BR-12`
+… `BR-46`, `BR-CL-03`) require a term the model cannot lack, so no invoice built
+in code breaks them; a document can. CEN's 66 cases for them are judged by
+whether the reader reports the term `missing` (or a currency `malformed`), and
+all agree.
 
 **Zero disagreements.** Each divergence is declared by file and rule with a
 reason, and the list is asserted exactly: a divergence that starts agreeing
@@ -161,8 +169,25 @@ The dense sweep does the work. A complete invoice has around a hundred value
 nodes, so random targeting reaches any given converter a few per cent of the
 time; replacing every value guarantees each converter meets each input.
 
-Two numbers are asserted: how many mutations **reach** the reader, and whether
-the reader **recorded** what it refused, as `Unmapped` and `Malformed` entries.
+It asserts that the mutations **reach** the reader. That the reader *reports*
+what it refuses is checked one element at a time by `reader_absence`: every
+element of the complete invoice and credit note, in both syntaxes, gets an
+unholdable value, an invalid and a foreign `currencyID`, and is deleted. Each
+case must keep the value, invent none, or be reported:
+
+```text
+reader sweep
+  UBL invoice:            680
+  CII invoice:            650
+  UBL credit note:        675
+  CII credit note:        641
+  cases:                 2646  (value, currency and absence of every element)
+  excused:                 18  (each with its reason)
+  silent:                   0
+```
+
+Each exception names why it is no term (for example `ram:Name` beside BT-11);
+a stale one fails the suite.
 
 Coverage-guided fuzzing runs beside it in CI: 4 `cargo-fuzz` targets, 60
 seconds each on every change — any bytes through `read`; a PDF through
@@ -184,17 +209,17 @@ guess. A change that loses one file, or makes a refused one extract, fails namin
 
 | | Pinned at |
 |---|---|
-| `ConnectingEurope/eInvoicing-EN16931` | `validation-1.3.16` |
+| `ConnectingEurope/eInvoicing-EN16931` | `validation-1.3.17` |
 | `itplr-kosit/xrechnung-schematron` | `v2.6.0` — its changelog says *"compatible with XRechnung 3.0"* |
 | `itplr-kosit/validator-configuration-xrechnung` | `v2026-08-31` |
-| `OpenPEPPOL/peppol-bis-invoice-3` | BIS Billing 3.0.21, commit `806866bd2bd91d7e9623b68f08164e8fbe9e67a0` |
-| `ZUGFeRD/corpus` | commit `d891458e9822e34271a5438497bf924e89955979` (Apache-2.0) |
+| `OpenPEPPOL/peppol-bis-invoice-3` | BIS Billing 3.0.21-hotfix, commit `5df0eff7c8efafd7c79c0dacce55082d175db759` (tag `3.0.21`) |
+| `ZUGFeRD/corpus` | commit `82e886fb21369e3e83c1e97170a4ff406deceee7` (Apache-2.0) |
 | OASIS UBL 2.1 (`docs.oasis-open.org`) | archive SHA-256 `60b80d76394a8a2add90723ecb8e0e2e9d826775de9749df37a72d60703f86ed` — the schemas the UBL schema gate validates against |
 
 A release is an authority's normative publication, tagged or not: the tag where
-there is one, the commit otherwise — Peppol published 3.0.21 untagged, and the
-pinned commit's Schematron is byte-identical to the one docs.peppol.eu
-publishes. OASIS publishes UBL 2.1 as a download, so its pin is the archive's
+there is one, the commit otherwise. Peppol re-pointed its `3.0.21` tag to the
+3.0.21-hotfix, so its pin is the commit the tag names, and the weekly watch
+checks the tag still names it. OASIS publishes UBL 2.1 as a download, so its pin is the archive's
 SHA-256. Never a branch: **an authority's `master` is its next release**, and
 this project reports rules at the severities the authorities *publish*. The
 fetch fails unless a commit-pinned checkout is that commit. A

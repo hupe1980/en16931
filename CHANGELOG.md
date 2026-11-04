@@ -14,6 +14,62 @@ Before 1.0, a minor release may break; every break is listed here.
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-11-04
+
+The readers no longer invent values or drop them silently ([#14], [#15]), and
+every pin is at its authority's current release.
+
+### Breaking
+
+- `report::Kind::Missing` (fatal): a required term the document lacks. The
+  field holds a placeholder; the entry names the term (`BG-23[1]/BT-117`).
+- `receive` rejects, and `convert` refuses without `Loss::Allow`, documents
+  0.8.0 accepted on a guess: an absent required term, a number that does not
+  parse, an amount in another currency than BT-5 or outside ISO 4217, a CII
+  price-level charge, an unknown CII reference type code.
+- A tax total in a third currency is `Malformed`, not `Unmapped`.
+- `profile::Core::runs` is public. A term is required only when the declared
+  profile runs the rule requiring it (ZUGFeRD MINIMUM lacks BT-106 lawfully).
+- The IGIC and IPSI rules are `BR-IG-*` and `BR-IP-*`, as CEN names them since
+  `validation-1.3.17` and EN 16931-1 always did; `BR-AF-*` / `BR-AG-*` are gone.
+
+### Fixed
+
+- [#14]: an unparseable or out-of-range quantity read as 0; now `Malformed`.
+  Likewise unit prices, base quantity, percentages and VAT rates.
+- [#15]: an absent BT-117 read as 0.00, so `BR-46` never fired; now `Missing`.
+  Likewise every term the type-retired rules require, in both readers, and a
+  whole absent group.
+- A CII price-level charge was read as a BT-147 discount.
+- A UBL tax scheme written `vat` moved BT-31 into BT-32.
+- Non-base64 attachment content decoded into garbage.
+- Values with no term (a non-VAT tax scheme, a supporting document's type code)
+  were dropped without an entry; they are `Unmapped`.
+- The writers wrote required elements empty without a `Derived` entry.
+- `receive` reasons and `en16931 explain` name the business term.
+
+### Changed
+
+- Pins: CEN `validation-1.3.17` (code lists: ISO 4217 `STN` for `STD`, ICD
+  0249–0251, Spanish VATEX codes, EAS 9960 added and 0219 / 0220 withdrawn),
+  Peppol BIS 3.0.21-hotfix (`PEPPOL-EN16931-P0112`: 389 is German-only like
+  326; 384 is allowed between two Slovak parties too), veraPDF `v1.30.3`, the
+  ZUGFeRD corpus at `82e886f`. KoSIT and Peppol still build on CEN 1.3.16; the
+  skew is declared.
+- The single-occurrence tables read more of CEN's syntax rules: conjunctions,
+  `count(…) = 1` and guarded counts (UBL 83 rule rows, was 69; CII 49, was 40);
+  every counting rule they cannot express is listed with its reason. A second
+  `ram:Name` in one supporting document cites CEN's corrected `CII-SR-475`;
+  KoSIT raises `CII-SR-454` to fatal.
+- CEN's 66 cases for the type-retired rules are judged by the reader's report
+  instead of skipped; all agree. A per-element sweep (2 646 cases) checks that
+  the readers report what they refuse.
+- Reading costs 2–7 % more (measured), for checking every value and currency.
+- The stored JSON envelope stays `"0.8"`: the model did not change.
+
+[#14]: https://github.com/hupe1980/en16931/issues/14
+[#15]: https://github.com/hupe1980/en16931/issues/15
+
 ## [0.8.0] — 2026-10-11
 
 Everything under Removed is breaking.
@@ -1161,7 +1217,8 @@ directions, ZUGFeRD / Factur-X extraction, and the command.
 - `en16931-cli`: `validate`, `convert`, `diff`, `extract`, `inspect`, `explain`,
   `rules`, `profiles`, and CI-shaped exit codes.
 
-[Unreleased]: https://github.com/hupe1980/en16931/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/hupe1980/en16931/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/hupe1980/en16931/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/hupe1980/en16931/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/hupe1980/en16931/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/hupe1980/en16931/compare/v0.7.1...v0.7.2

@@ -153,7 +153,7 @@ jobs:
       # Docker is preinstalled on the runner; under `EN16931_REQUIRE_SPEC` the
       # gate fails rather than skips without it.
       - name: Pull the veraPDF image
-        run: docker pull --platform linux/amd64 verapdf/rest:v1.30.2@sha256:341359ac6af558f35f03c355a798fec57ba049dd04f0a503f300170e1696573b
+        run: docker pull --platform linux/amd64 verapdf/rest:v1.30.3@sha256:b0e4ce6032521f87999e92562dc226a62da1fd30f2325998d1d2f2ed6eeb5d50
       - name: Generated code is current
         run: cargo xtask check
       # `EN16931_REQUIRE_SPEC=1` turns "skip because the reference corpus is missing" into a

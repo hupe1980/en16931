@@ -167,10 +167,9 @@ fn lawful_repetitions_are_silent() {
     assert_eq!(checked, 3);
 }
 
-/// KoSIT's `BR-TMP-4` / `BR-TMP-5` cases: two `ram:Name` or two
-/// `ram:AttachmentBinaryObject` in one CII BG-24. CEN publishes the
-/// underlying `CII-SR-475` / `476` as warnings, so they are `Repeated` — read
-/// first-wins and reported, and the schema layer stays valid.
+/// KoSIT's `BR-TMP-4` instance: two `ram:Name` in one CII BG-24. CEN's
+/// `CII-SR-475` (corrected in 1.3.17 to count per BG-24) is a warning, so it
+/// is `Repeated` — read first-wins and reported, the schema layer valid.
 #[test]
 fn a_second_name_in_one_supporting_document_is_repeated() {
     let Some(root) = common::require("KoSIT BR-TMP-4 instance") else {
@@ -189,7 +188,7 @@ fn a_second_name_in_one_supporting_document_is_repeated() {
     assert!(
         repeated
             .iter()
-            .any(|e| e.rule.as_deref() == Some("BR-TMP-4")),
+            .any(|e| e.rule.as_deref() == Some("CII-SR-475")),
         "{:#?}",
         got.entries
     );
