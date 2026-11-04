@@ -209,6 +209,36 @@ fn bt_90_survives_the_crossing_in_both_directions() {
     }
 }
 
+/// BT-89 survives CII when the invoice has neither BT-20 nor BT-9.
+///
+/// CII carries the mandate reference inside `ram:SpecifiedTradePaymentTerms`,
+/// which the writer used to emit only for payment terms or a due date.
+#[test]
+fn bt_89_survives_cii_without_payment_terms_or_due_date() {
+    use en16931::invoice::{DirectDebit, PaymentInstructions, PaymentMeans};
+
+    let mut inv = common::maximal();
+    inv.payment_terms = None;
+    inv.due_date = None;
+    inv.payment = Some(PaymentInstructions {
+        means_code: Some(en16931::invoice::Code::new("59")),
+        means: Some(PaymentMeans::DirectDebit(DirectDebit {
+            mandate_reference: Some("MANDATE-1".to_owned()),
+            creditor_identifier: Some("DE98ZZZ09999999999".to_owned()),
+            debited_account: Some("DE89370400440532013000".to_owned()),
+        })),
+        ..Default::default()
+    });
+
+    let xml = write(&inv, Syntax::Cii).xml;
+    let back = read(&xml, Syntax::Cii).expect("readable");
+    let mandate = match back.payment.as_ref().and_then(|p| p.means.as_ref()) {
+        Some(PaymentMeans::DirectDebit(d)) => d.mandate_reference.clone(),
+        _ => None,
+    };
+    assert_eq!(mandate.as_deref(), Some("MANDATE-1"), "{xml}");
+}
+
 /// A CII credit note is detected from the whole UNTDID 1001 credit-note list
 /// (`396`, `532`, `83`, …), not from `381` alone: BT-3 is the only signal.
 #[test]

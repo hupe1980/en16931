@@ -14,6 +14,13 @@ Before 1.0, a minor release may break; every break is listed here.
 
 ## [Unreleased]
 
+### Fixed
+
+- The CII writer dropped BT-89, the mandate reference, when the invoice had
+  neither payment terms (BT-20) nor a due date (BT-9):
+  `ram:SpecifiedTradePaymentTerms`, which carries `ram:DirectDebitMandateID`,
+  was written only for those two. A mandate reference alone now writes it.
+
 ## [0.9.0] — 2026-11-04
 
 The readers no longer invent values or drop them silently ([#14], [#15]), and
