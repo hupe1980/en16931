@@ -16,6 +16,10 @@ Before 1.0, a minor release may break; every break is listed here.
 
 ### Fixed
 
+- The CII writer dropped BT-89, the mandate reference, when the invoice had
+  neither payment terms (BT-20) nor a due date (BT-9):
+  `ram:SpecifiedTradePaymentTerms`, which carries `ram:DirectDebitMandateID`,
+  was written only for those two. A mandate reference alone now writes it.
 - `PEPPOL-EN16931-R120` and `R040` no longer panic when expected minus stated
   amount overflows, and no longer skip a line or allowance whose expected
   amount exceeds the `Decimal` range: they report it, with a hint. When
