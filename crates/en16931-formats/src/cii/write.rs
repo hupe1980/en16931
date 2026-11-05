@@ -617,7 +617,12 @@ fn settlement(x: &mut Xml, inv: &Invoice, ccy: &str) {
                 });
             });
         }
-        if inv.payment_terms.is_some() || inv.due_date.is_some() {
+        // BT-89 lives in the payment terms too, so it alone is reason to write them.
+        let mandate = inv.payment.as_ref().and_then(|p| match &p.means {
+            Some(PaymentMeans::DirectDebit(dd)) => dd.mandate_reference.as_ref(),
+            _ => None,
+        });
+        if inv.payment_terms.is_some() || inv.due_date.is_some() || mandate.is_some() {
             x.group("ram:SpecifiedTradePaymentTerms", |x| {
                 if let Some(t) = &inv.payment_terms {
                     x.leaf("ram:Description", &[], t);
@@ -625,10 +630,7 @@ fn settlement(x: &mut Xml, inv: &Invoice, ccy: &str) {
                 if let Some(d) = inv.due_date {
                     date(x, "ram:DueDateDateTime", d);
                 }
-                if let Some(p) = &inv.payment
-                    && let Some(PaymentMeans::DirectDebit(dd)) = &p.means
-                    && let Some(m) = &dd.mandate_reference
-                {
+                if let Some(m) = mandate {
                     x.leaf("ram:DirectDebitMandateID", &[], m);
                 }
             });

@@ -24,6 +24,10 @@ Before 1.0, a minor release may break; every break is listed here.
 
 ### Fixed
 
+- The CII writer dropped BT-89, the mandate reference, when the invoice had
+  neither payment terms (BT-20) nor a due date (BT-9):
+  `ram:SpecifiedTradePaymentTerms`, which carries `ram:DirectDebitMandateID`,
+  was written only for those two. A mandate reference alone now writes it.
 - The UBL reader reported a `cac:SubInvoiceLine` without
   `cbc:InvoicedQuantity` / `cbc:CreditedQuantity`, its `unitCode` or
   `cac:Price` as `Missing`, so `receive` rejected a lawful XRechnung
