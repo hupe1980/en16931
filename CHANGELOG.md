@@ -16,6 +16,10 @@ Before 1.0, a minor release may break; every break is listed here.
 
 ### Fixed
 
+- The CII writer dropped BT-89, the mandate reference, when the invoice had
+  neither payment terms (BT-20) nor a due date (BT-9):
+  `ram:SpecifiedTradePaymentTerms`, which carries `ram:DirectDebitMandateID`,
+  was written only for those two. A mandate reference alone now writes it.
 - Both readers refuse `1e1` and `1_000` as quantities, prices and rates:
   `rust_decimal` reads them, `xs:decimal` does not. A value with more decimal
   places than a `Decimal` holds is `Malformed` instead of rounded.
