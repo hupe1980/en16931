@@ -934,7 +934,7 @@ pub struct DocumentTotals {
 /// BT-24, BT-1, BT-2, BT-3 and BT-5) or [`Invoice::default`] plus field
 /// assignment.
 ///
-/// Under the `serde` feature it serialises as `{"en16931": "0.8", "invoice":
+/// Under the `serde` feature it serialises as `{"en16931": "0.10", "invoice":
 /// {…}}` ([`JSON_VERSION`]); any other version is refused. List fields may be
 /// omitted.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -1026,10 +1026,10 @@ pub struct Invoice {
 // ── JSON envelope ─────────────────────────────────────────────────────────────
 
 /// The version of the JSON envelope an [`Invoice`] is stored in under the
-/// `serde` feature: `{"en16931": "0.8", "invoice": {…}}`.
+/// `serde` feature: `{"en16931": "0.10", "invoice": {…}}`.
 ///
 /// A reader refuses any other version.
-pub const JSON_VERSION: &str = "0.8";
+pub const JSON_VERSION: &str = "0.10";
 
 #[cfg(feature = "serde")]
 mod json {

@@ -880,6 +880,15 @@ fn line(
     });
 }
 
+/// A quantity leaf with its `unitCode`, or without one when the unit is absent
+/// or empty: an empty attribute reads back as a stated, empty unit.
+fn quantity_leaf(x: &mut Xml, name: &str, value: &str, unit: Option<&str>) {
+    match unit.filter(|u| !u.is_empty()) {
+        Some(u) => x.leaf(name, &[("unitCode", u)], value),
+        None => x.leaf(name, &[], value),
+    }
+}
+
 /// One `cac:SubInvoiceLine`, with its own children beneath it.
 fn sub_line(x: &mut Xml, s: &en16931::SubInvoiceLine, i: usize, credit: bool, ccy: &str) {
     x.group("cac:SubInvoiceLine", |x| {
@@ -897,13 +906,12 @@ fn sub_line(x: &mut Xml, s: &en16931::SubInvoiceLine, i: usize, credit: bool, cc
                 "cbc:InvoicedQuantity"
             };
             // BT-130 may be absent on a sub-line (`BR-23` holds on lines only).
-            let unit = s.line.unit_code.as_str();
-            let attributes: &[(&str, &str)] = if unit.is_empty() {
-                &[]
-            } else {
-                &[("unitCode", unit)]
-            };
-            x.leaf(qty_name, attributes, &s.line.quantity.to_string());
+            quantity_leaf(
+                x,
+                qty_name,
+                &s.line.quantity.to_string(),
+                Some(s.line.unit_code.as_str()),
+            );
         }
         x.leaf(
             "cbc:LineExtensionAmount",
@@ -1021,15 +1029,14 @@ fn price(x: &mut Xml, p: &PriceDetails, i: usize, ccy: &str) {
             &p.net_price.to_string(),
         );
         if let Some(q) = p.base_quantity {
-            // No `unitCode` when BT-150 is absent (it is optional): an empty
-            // one reads back as `Some("")` and trips `PEPPOL-EN16931-R130`.
-            let unit = p
-                .base_quantity_code
-                .as_ref()
-                .map(Code::as_str)
-                .filter(|u| !u.is_empty());
-            let attrs: Vec<(&str, &str)> = unit.map(|u| ("unitCode", u)).into_iter().collect();
-            x.leaf("cbc:BaseQuantity", &attrs, &q.to_string());
+            // BT-150 is optional; an empty `unitCode` would read back as
+            // `Some("")` and trip `PEPPOL-EN16931-R130`.
+            quantity_leaf(
+                x,
+                "cbc:BaseQuantity",
+                &q.to_string(),
+                p.base_quantity_code.as_ref().map(Code::as_str),
+            );
         }
         // BT-147 (`cbc:Amount`) and BT-148 (`cbc:BaseAmount`) share one
         // price-level allowance, written when either is present.

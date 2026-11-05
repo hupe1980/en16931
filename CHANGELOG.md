@@ -18,9 +18,10 @@ Before 1.0, a minor release may break; every break is listed here.
 
 - `en16931::SubInvoiceLine` has two new fields, `quantity_stated` and
   `price_stated`: `false` means the sub-line states no BT-129 or no BG-29, and
-  `line.quantity` or `line.price` holds a placeholder. Under `serde` both
-  default to `true`, so stored data reads as before; the JSON envelope stays
-  `"0.8"`.
+  `line.quantity` or `line.price` holds a placeholder.
+- `invoice::JSON_VERSION` is `"0.10"`: the model changed shape, and a reader
+  of `"0.8"` would drop the new fields and write a stated zero back. An
+  envelope of `"0.8"` is refused, as any other version.
 
 ### Fixed
 
@@ -37,6 +38,9 @@ Before 1.0, a minor release may break; every break is listed here.
   `cac:Price` without `cbc:PriceAmount`, is still `Malformed`: UBL's schema
   refuses both. The UBL writer omits what a sub-line does not state, an
   absent unit included.
+- A `cbc:CreditedQuantity` inside a `cac:SubInvoiceLine` is reported as
+  `Schema`: UBL's `InvoiceLineType` has `cbc:InvoicedQuantity` only, and a
+  credit note nests `cac:SubCreditNoteLine`.
 
 ## [0.9.0] — 2026-11-04
 

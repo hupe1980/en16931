@@ -1169,10 +1169,29 @@ impl Reader {
             if !sub {
                 self.missing(n, Term::new(&group, "BT-129"), "the invoiced quantity");
             } else if kid(n, quantity_el).is_some() {
-                self.empty_on_sub_line(n, quantity_el, Term::new(&group, "BT-129"));
+                self.refused_on_sub_line(
+                    n,
+                    quantity_el,
+                    Term::new(&group, "BT-129"),
+                    "present without a value; the UBL schema requires a decimal",
+                );
             }
             None
         };
+        // `cac:SubInvoiceLine` is UBL's `InvoiceLineType`, which has
+        // `cbc:InvoicedQuantity` only; a credit note nests
+        // `cac:SubCreditNoteLine`. The quantity is still read.
+        if sub && quantity_el == "CreditedQuantity" && kid(n, quantity_el).is_some() {
+            self.entries.push(
+                Entry::new(
+                    Kind::Schema,
+                    format!("{}/CreditedQuantity", crate::xml::path_of(n)),
+                    "a cac:SubInvoiceLine has cbc:InvoicedQuantity only; a credit note nests \
+                     cac:SubCreditNoteLine",
+                )
+                .term(Term::new(&group, "BT-129").to_string()),
+            );
+        }
         let quantity_stated = kid(n, quantity_el).is_some();
         let quantity = quantity.map_or(Quantity::ZERO, Quantity::new);
         let unit_code = if let Some(u) = kid(n, quantity_el)
@@ -1318,15 +1337,15 @@ impl Reader {
         (l, quantity_stated, price_stated)
     }
 
-    /// A sub-line's quantity element present but empty, or its `cac:Price`
-    /// without a `cbc:PriceAmount`: no rule requires the term there, but
-    /// UBL's schema refuses the element without a value (KoSIT answers 406).
-    fn empty_on_sub_line(&mut self, at: Node<'_, '_>, element: &str, term: Term<'_>) {
+    /// What UBL's schema refuses in a sub-line although no rule requires the
+    /// term there: a quantity element without a value, a `cac:Price` without
+    /// `cbc:PriceAmount` (KoSIT answers 406).
+    fn refused_on_sub_line(&mut self, at: Node<'_, '_>, element: &str, term: Term<'_>, why: &str) {
         self.entries.push(
             Entry::new(
                 Kind::Malformed,
                 format!("{}/{element}", crate::xml::path_of(at)),
-                format!("{element} is present without a value; the UBL schema requires a decimal"),
+                why.to_owned(),
             )
             .term(term.to_string()),
         );
@@ -1361,7 +1380,12 @@ impl Reader {
     fn price(&mut self, n: Node<'_, '_>, group: &str, sub: bool) -> PriceDetails {
         if text(n, "PriceAmount").is_none() {
             if sub {
-                self.empty_on_sub_line(n, "PriceAmount", Term::new(group, "BT-146"));
+                let why = if kid(n, "PriceAmount").is_some() {
+                    "present without a value; the UBL schema requires a decimal"
+                } else {
+                    "missing; the UBL schema requires it in cac:Price"
+                };
+                self.refused_on_sub_line(n, "PriceAmount", Term::new(group, "BT-146"), why);
             } else {
                 self.missing(n, Term::new(group, "BT-146"), "the item net price");
             }

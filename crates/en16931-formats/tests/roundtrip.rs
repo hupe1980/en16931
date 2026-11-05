@@ -886,22 +886,13 @@ fn a_grouping_sub_line_round_trips_without_quantity_or_price() {
     assert!(child.price_stated, "the child states BG-29");
 }
 
-/// A childless `cac:SubInvoiceLine` states its quantity as
-/// `cbc:CreditedQuantity` when it hangs under a `cac:CreditNoteLine` — `line`
-/// reads either tag, so `quantity_stated` must too, not only
-/// `cbc:InvoicedQuantity`.
-///
-/// Hand-built XML rather than a round trip through [`write`]: the generated
-/// `cac:CreditNoteLine` sequence table (`ubl::order::ORDER`) has no slot for
-/// `cac:SubInvoiceLine` at all (a `cac:CreditNoteLine` legally nests
-/// `cac:SubCreditNoteLine`, a distinct element this crate's writer does not
-/// emit and its reader does not read), so today's writer drops the group
-/// outright before this flag ever matters on a credit note. That gap is
-/// pre-existing and separate from `quantity_stated`; this test only pins the
-/// flag's own logic against the element name `line` already reads.
+/// A `cac:SubInvoiceLine` is UBL's `InvoiceLineType`, which has
+/// `cbc:InvoicedQuantity` only: a `cbc:CreditedQuantity` in it is refused by
+/// the schema (a credit note nests `cac:SubCreditNoteLine`), so the reader
+/// reports it rather than reading it as if it were allowed.
 #[cfg(feature = "ubl")]
 #[test]
-fn a_credit_notes_childless_sub_line_keeps_its_credited_quantity_stated() {
+fn a_credited_quantity_in_a_sub_invoice_line_is_reported() {
     use en16931_formats::Syntax;
 
     let xml = r#"<CreditNote xmlns="urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2"
@@ -948,27 +939,20 @@ fn a_credit_notes_childless_sub_line_keeps_its_credited_quantity_stated() {
     </CreditNote>"#;
 
     let back = read(xml, Syntax::Ubl);
-    assert!(
-        !back
-            .entries
-            .iter()
-            .any(|e| e.level() == en16931::Severity::Fatal),
-        "a childless sub-line with both terms has no fatal entry: {:?}",
+    let schema: Vec<_> = back
+        .entries
+        .iter()
+        .filter(|e| e.kind == Kind::Schema)
+        .map(|e| (e.path.as_str(), e.term.as_deref()))
+        .collect();
+    assert_eq!(
+        schema,
+        [(
+            "CreditNote/CreditNoteLine/SubInvoiceLine/CreditedQuantity",
+            Some("BG-DEX-01[1]/BT-129")
+        )],
+        "{:?}",
         back.entries
-    );
-    let [sub] = back.invoice.extensions.sub_lines(0) else {
-        panic!(
-            "one sub-line, got {:?}",
-            back.invoice.extensions.sub_lines(0)
-        );
-    };
-    assert!(
-        sub.quantity_stated,
-        "cbc:CreditedQuantity was present, so the flag must read true, not false"
-    );
-    assert!(
-        sub.price_stated,
-        "cac:Price/cbc:PriceAmount was present too"
     );
 }
 
