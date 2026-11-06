@@ -156,9 +156,8 @@ fn written(syntax: Syntax) -> (Vec<Doc>, usize) {
     sub.extensions.sub_invoice_lines = vec![(
         0,
         vec![en16931::SubInvoiceLine {
-            line: child,
             vat: Some(sub.lines[0].vat.clone()),
-            children: vec![],
+            ..en16931::SubInvoiceLine::from(child)
         }],
     )];
     push("fixture: sub invoice lines".into(), &sub);

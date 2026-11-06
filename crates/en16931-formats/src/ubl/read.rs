@@ -1139,10 +1139,19 @@ impl Reader {
 
     /// One line; `index` is its 1-based position among its siblings, passed
     /// in rather than counted, which would make a document quadratic.
+    ///
+    /// `BR-22`, `BR-23` and `BR-26` hold on `cac:InvoiceLine |
+    /// cac:CreditNoteLine` only (`eInvoicing-EN16931/ubl/schematron/
+    /// preprocessed/EN16931-UBL-validation-preprocessed.sch`), so a
+    /// `cac:SubInvoiceLine`, grouping or childless, may leave BT-129, BT-130
+    /// and BG-29 out; the KoSIT validator accepts it. Present but empty is
+    /// still refused: UBL's schema requires a value wherever the element is.
+    /// A value that is refused is held as a placeholder, as on a line.
     fn line(&mut self, n: Node<'_, '_>, index: usize) -> InvoiceLine {
         // A sub-line is BG-DEX-01; its index is among its siblings, and its
         // path says which line it hangs beneath.
-        let group = if name(n) == "SubInvoiceLine" {
+        let sub = name(n) == "SubInvoiceLine";
+        let group = if sub {
             format!("BG-DEX-01[{index}]")
         } else {
             format!("BG-25[{index}]")
@@ -1162,11 +1171,34 @@ impl Reader {
         });
         let quantity = if text(n, quantity_el).is_some() {
             self.decimal(n, quantity_el, Term::new(&group, "BT-129"))
-                .map_or(Quantity::ZERO, Quantity::new)
         } else {
-            self.missing(n, Term::new(&group, "BT-129"), "the invoiced quantity");
-            Quantity::ZERO
+            if !sub {
+                self.missing(n, Term::new(&group, "BT-129"), "the invoiced quantity");
+            } else if kid(n, quantity_el).is_some() {
+                self.refused_on_sub_line(
+                    n,
+                    quantity_el,
+                    Term::new(&group, "BT-129"),
+                    "present without a value; the UBL schema requires a decimal",
+                );
+            }
+            None
         };
+        // `cac:SubInvoiceLine` is UBL's `InvoiceLineType`, which has
+        // `cbc:InvoicedQuantity` only; a credit note nests
+        // `cac:SubCreditNoteLine`. The quantity is still read.
+        if sub && quantity_el == "CreditedQuantity" && kid(n, quantity_el).is_some() {
+            self.entries.push(
+                Entry::new(
+                    Kind::Schema,
+                    format!("{}/CreditedQuantity", crate::xml::path_of(n)),
+                    "a cac:SubInvoiceLine has cbc:InvoicedQuantity only; a credit note nests \
+                     cac:SubCreditNoteLine",
+                )
+                .term(Term::new(&group, "BT-129").to_string()),
+            );
+        }
+        let quantity = quantity.map_or(Quantity::ZERO, Quantity::new);
         let unit_code = if let Some(u) = kid(n, quantity_el)
             .and_then(|q| q.attribute("unitCode"))
             .map(str::trim)
@@ -1174,11 +1206,13 @@ impl Reader {
         {
             Code::new(u)
         } else {
-            self.missing(
-                n,
-                Term::new(&group, "BT-130"),
-                "the invoiced quantity unit of measure code",
-            );
+            if !sub {
+                self.missing(
+                    n,
+                    Term::new(&group, "BT-130"),
+                    "the invoiced quantity unit of measure code",
+                );
+            }
             Code::default()
         };
         let net_amount = self.required_amount(
@@ -1187,7 +1221,7 @@ impl Reader {
             Term::new(&group, "BT-131"),
             "the invoice line net amount",
         );
-        if kid(n, "Price").is_none() {
+        if !sub && kid(n, "Price").is_none() {
             self.missing(n, Term::new(&group, "BT-146"), "the item net price");
         }
         // A sub-line's BG-DEX-06 is optional in the model (`BR-DEX-03` checks
@@ -1284,7 +1318,7 @@ impl Reader {
                         l.allowances.push(a);
                     }
                 }
-                "Price" => l.price = self.price(c, &group),
+                "Price" => l.price = self.price(c, &group, sub),
                 "Item" => {
                     let (item, vat) = self.item(c, &group);
                     l.item = item;
@@ -1304,13 +1338,31 @@ impl Reader {
         l
     }
 
-    /// `cac:SubInvoiceLine` children, recursively — BG-DEX-01.
+    /// What UBL's schema refuses in a sub-line although no rule requires the
+    /// term there: a quantity element without a value, a `cac:Price` without
+    /// `cbc:PriceAmount` (KoSIT answers 406).
+    fn refused_on_sub_line(&mut self, at: Node<'_, '_>, element: &str, term: Term<'_>, why: &str) {
+        self.entries.push(
+            Entry::new(
+                Kind::Malformed,
+                format!("{}/{element}", crate::xml::path_of(at)),
+                why.to_owned(),
+            )
+            .term(term.to_string()),
+        );
+    }
+
+    /// `cac:SubInvoiceLine` children, recursively — BG-DEX-01. Its quantity
+    /// and price are `None` when the sub-line has no such element.
     fn sub_lines(&mut self, n: Node<'_, '_>) -> Vec<en16931::SubInvoiceLine> {
         kids(n)
             .filter(|c| name(*c) == "SubInvoiceLine")
             .enumerate()
             .map(|(i, c)| {
-                let line = self.line(c, i + 1);
+                let stated_quantity = kid(c, "InvoicedQuantity")
+                    .or_else(|| kid(c, "CreditedQuantity"))
+                    .is_some();
+                let stated_price = kid(c, "Price").is_some();
                 // BG-DEX-06: `BR-DEX-03` requires exactly one, so two map to
                 // `None` and the rule fires.
                 let categories = kid(c, "Item").map_or(0, |i| {
@@ -1318,18 +1370,35 @@ impl Reader {
                         .filter(|x| name(*x) == "ClassifiedTaxCategory")
                         .count()
                 });
-                en16931::SubInvoiceLine {
-                    vat: (categories == 1).then(|| line.vat.clone()),
-                    line,
-                    children: self.sub_lines(c),
-                }
+                let mut sub = en16931::SubInvoiceLine::from(self.line(c, i + 1));
+                sub.quantity =
+                    sub.quantity
+                        .filter(|_| stated_quantity)
+                        .map(|q| en16931::SubLineQuantity {
+                            unit_code: q.unit_code.filter(|u| !u.as_str().is_empty()),
+                            ..q
+                        });
+                sub.price = sub.price.filter(|_| stated_price);
+                sub.vat = sub.vat.filter(|_| categories == 1);
+                sub.children = self.sub_lines(c);
+                sub
             })
             .collect()
     }
 
-    fn price(&mut self, n: Node<'_, '_>, group: &str) -> PriceDetails {
+    /// The price of a line, or of a sub-line when `sub` (see [`Self::line`]).
+    fn price(&mut self, n: Node<'_, '_>, group: &str, sub: bool) -> PriceDetails {
         if text(n, "PriceAmount").is_none() {
-            self.missing(n, Term::new(group, "BT-146"), "the item net price");
+            if sub {
+                let why = if kid(n, "PriceAmount").is_some() {
+                    "present without a value; the UBL schema requires a decimal"
+                } else {
+                    "missing; the UBL schema requires it in cac:Price"
+                };
+                self.refused_on_sub_line(n, "PriceAmount", Term::new(group, "BT-146"), why);
+            } else {
+                self.missing(n, Term::new(group, "BT-146"), "the item net price");
+            }
         }
         let mut p = PriceDetails {
             net_price: self

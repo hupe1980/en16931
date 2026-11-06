@@ -66,7 +66,9 @@ pub use codes::VatCategory;
 pub use date::Date;
 pub use edition::Edition;
 pub use error::{AmountError, ParseAmountError, ParseDateError};
-pub use extensions::{AdvancePayment, Extensions, SubInvoiceLine, ThirdPartyPayment};
+pub use extensions::{
+    AdvancePayment, Extensions, SubInvoiceLine, SubLineQuantity, ThirdPartyPayment,
+};
 pub use identifier::{DocumentReference, Identifier};
 pub use invoice::{DocumentKind, Invoice, InvoiceLine, InvoiceNote};
 pub use numeric::{Percentage, Quantity};
