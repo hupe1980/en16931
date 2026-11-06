@@ -65,7 +65,7 @@ pub use bt::{BtId, Group, Path};
 pub use codes::VatCategory;
 pub use date::Date;
 pub use edition::Edition;
-pub use error::{AmountError, ParseAmountError, ParseDateError};
+pub use error::{AmountError, ParseAmountError, ParseDateError, ParseDecimalError};
 pub use extensions::{
     AdvancePayment, Extensions, SubInvoiceLine, SubLineQuantity, ThirdPartyPayment,
 };

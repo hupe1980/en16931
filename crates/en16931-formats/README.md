@@ -14,8 +14,8 @@ business rule. This crate re-implements none of the 334.
 
 ```toml
 [dependencies]
-en16931 = "0.9"
-en16931-formats = { version = "0.9", features = ["ubl", "cii"] }
+en16931 = "0.10"
+en16931-formats = { version = "0.10", features = ["ubl", "cii"] }
 ```
 
 | Feature | Default | Graph | What |
@@ -86,8 +86,8 @@ let proof: Validated<XRechnung> = Validated::new(invoice)?;
 let out = en16931_formats::write(&proof, Syntax::Ubl);   // BT-24 stamped from the proof
 ```
 
-The element order comes from tables generated from the authorities' artefacts
-(CII from CEN's D16B schema, UBL from the published instances), and every
+The element order comes from tables generated from the schemas (CEN's D16B
+subset for CII, OASIS UBL 2.1 for UBL), and every
 element the writers emit is checked against the prohibitions extracted from
 CEN's syntax rules.
 

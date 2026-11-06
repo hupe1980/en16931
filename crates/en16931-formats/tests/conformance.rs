@@ -63,7 +63,7 @@ struct Case {
 /// the reader's report rather than skipped.
 const CEN_BY_TYPE_ASSERTIONS: usize = 66;
 
-const CEN_ASSERTIONS: usize = 1_025;
+const CEN_ASSERTIONS: usize = 1_027;
 /// See [`CEN_ASSERTIONS`]. 381 mutations run of 471 runnable.
 const KOSIT_MUTATIONS: usize = 381;
 /// See [`CEN_ASSERTIONS`].

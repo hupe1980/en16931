@@ -60,29 +60,13 @@ impl InvoiceAmount {
         if t.is_empty() {
             return Err(ParseAmountError::Empty);
         }
-        let (neg, digits) = match t.as_bytes()[0] {
-            b'-' => (true, &t[1..]),
-            b'+' => (false, &t[1..]),
-            _ => (false, t),
-        };
-        if digits.is_empty() {
+        // The spelling every number shares ([`crate::numeric::parse_decimal`]):
+        // `.5` and `5.` are amounts, `1e3` and `1_000` are not.
+        let Some((neg, int_part, frac_part)) = crate::numeric::xs_decimal_parts(t) else {
             return Err(ParseAmountError::Malformed {
                 input: s.to_owned(),
             });
-        }
-        let (int_part, frac_part) = match digits.split_once('.') {
-            Some((i, f)) => (i, f),
-            None => (digits, ""),
         };
-        // An empty integer part (".5") is rejected.
-        if int_part.is_empty()
-            || !int_part.bytes().all(|b| b.is_ascii_digit())
-            || !frac_part.bytes().all(|b| b.is_ascii_digit())
-        {
-            return Err(ParseAmountError::Malformed {
-                input: s.to_owned(),
-            });
-        }
         if frac_part.len() > SCALE as usize {
             return Err(ParseAmountError::TooManyDecimals {
                 input: s.to_owned(),
@@ -332,10 +316,29 @@ mod tests {
 
     #[test]
     fn rejects_malformed_input() {
-        for bad in ["", "   ", "abc", "1.2.3", "1,50", ".5", "-", "1e3", "1 000"] {
+        for bad in ["", "   ", "abc", "1.2.3", "1,50", ".", "-", "1e3", "1 000"] {
             assert!(
                 InvoiceAmount::parse(bad).is_err(),
                 "{bad:?} should not parse"
+            );
+        }
+    }
+
+    /// Every `xs:decimal` spelling within two decimals: CEN's own BR-CO-12
+    /// and BR-CO-17 fixtures write `.00`.
+    #[test]
+    fn every_xs_decimal_spelling_is_an_amount() {
+        for (text, minor) in [
+            (".5", 50),
+            ("-.5", -50),
+            ("5.", 500),
+            ("+5", 500),
+            (".00", 0),
+        ] {
+            assert_eq!(
+                InvoiceAmount::parse(text).map(InvoiceAmount::to_minor_units),
+                Ok(minor),
+                "{text:?}"
             );
         }
     }

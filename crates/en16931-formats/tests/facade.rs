@@ -177,7 +177,7 @@ fn a_lossy_conversion_is_refused_unless_allowed() {
     match convert(&ubl, Syntax::Cii, Loss::Refuse) {
         Err(ConvertError::Lossy { lost }) => {
             assert_eq!(lost.len(), 1, "{lost:#?}");
-            assert_eq!(lost[0].term.as_deref(), Some("BG-3[1]"));
+            assert_eq!(lost[0].term.as_deref(), Some("BG-3[0]"));
             assert_eq!(lost[0].value.as_deref(), Some("INV-2"));
         }
         other => panic!("{other:?}"),

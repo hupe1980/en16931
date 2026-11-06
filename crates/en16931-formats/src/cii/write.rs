@@ -681,7 +681,7 @@ fn settlement(x: &mut Xml, inv: &Invoice, ccy: &str) {
                         "CII allows one ram:InvoiceReferencedDocument, so only the first \
                          preceding invoice is written",
                     )
-                    .term(format!("BG-3[{}]", i + 1))
+                    .term(format!("BG-3[{i}]"))
                     .value(r.reference.as_str())
                     .hint("UBL carries them all"),
                 );
@@ -825,7 +825,7 @@ fn line(x: &mut Xml, l: &InvoiceLine, i: usize, ccy: &str) {
                                 format!("ram:SpecifiedTradeProduct/ram:ApplicableProductCharacteristic/{el}"),
                                 "absent, and D16B requires the element: written empty",
                             )
-                            .term(format!("BG-32[{}]/{term}", j + 1)),
+                            .term(format!("BG-32[{j}]/{term}")),
                         );
                     }
                 }
@@ -910,7 +910,7 @@ fn line(x: &mut Xml, l: &InvoiceLine, i: usize, ccy: &str) {
                 }
             });
             if let Some(p) = &l.period {
-                period(x, "ram:BillingSpecifiedPeriod", p, "BG-26");
+                period(x, "ram:BillingSpecifiedPeriod", p, &format!("BG-25[{i}]/BG-26"));
             }
             for (a, is_charge) in l
                 .allowances
