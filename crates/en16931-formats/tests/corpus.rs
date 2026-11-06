@@ -200,10 +200,17 @@ syntaxes! {
         ("xrechnung-schematron/test/instances/ubl-inv/ubl-inv-peppol-en16931-r054-2.xml", "Invoice/TaxTotal/TaxAmount"),
     ]),
     // The debtor's bank: EN 16931 has no term for the payer's BIC.
-    // `PayeePartyCreditorFinancialAccount`: the KoSIT instances named above.
+    // `PayeePartyCreditorFinancialAccount` and `PayerPartyDebtorFinancialAccount`:
+    // the KoSIT instances named above; the first kind read wins, as in UBL.
+    //
+    // `CreditorReferenceID` and `DirectDebitMandateID`: CEN's example 5 carries
+    // BT-90 and BT-89 beside its credit transfer (BT-81 `58`), read first.
     "cii" => (cii, Cii, 100, &[
         "SpecifiedTradeSettlementPaymentMeans/PayerSpecifiedDebtorFinancialInstitution",
         "SpecifiedTradeSettlementPaymentMeans/PayeePartyCreditorFinancialAccount",
+        "SpecifiedTradeSettlementPaymentMeans/PayerPartyDebtorFinancialAccount",
+        "ApplicableHeaderTradeSettlement/CreditorReferenceID",
+        "SpecifiedTradePaymentTerms/DirectDebitMandateID",
     ], &[]),
 }
 
