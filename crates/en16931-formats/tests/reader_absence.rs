@@ -91,7 +91,7 @@ fn issue_14_a_quantity_that_is_not_a_number_is_malformed() {
             assert_eq!(malformed[0].value.as_deref(), Some(bad));
             assert_eq!(
                 malformed[0].term.as_deref(),
-                Some("BG-25[1]/BT-129"),
+                Some("BG-25[0]/BT-129"),
                 "the most specific term path"
             );
             let r = receive(broken.as_bytes(), &Policy::default());
@@ -188,7 +188,7 @@ fn issue_15_an_absent_vat_category_tax_amount_is_missing() {
     let got = read(without.as_bytes()).unwrap();
     let missing = on_term(&got.entries, Kind::Missing, "BT-117");
     assert_eq!(missing.len(), 1, "{:#?}", got.entries);
-    assert_eq!(missing[0].term.as_deref(), Some("BG-23[1]/BT-117"));
+    assert_eq!(missing[0].term.as_deref(), Some("BG-23[0]/BT-117"));
     let r = receive(without.as_bytes(), &Policy::default());
     assert_eq!(r.recommendation, Recommendation::Reject);
     assert!(
@@ -233,7 +233,7 @@ fn a_line_without_a_quantity_is_missing_both_terms() {
             .collect();
         assert_eq!(
             terms,
-            ["BG-25[1]/BT-129", "BG-25[1]/BT-130"],
+            ["BG-25[0]/BT-129", "BG-25[0]/BT-130"],
             "{syntax}: {:#?}",
             got.entries
         );

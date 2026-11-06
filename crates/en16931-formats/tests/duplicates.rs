@@ -232,20 +232,24 @@ fn the_legacy_tax_point_date_spelling_is_read_and_reported() {
     );
 }
 
-/// SC-005: every schema row of the generated set, duplicated in place in a
-/// published document that carries it, is reported once and changes nothing
-/// in the model. The covered and not-covered counts are the measurement.
+/// SC-005: every schema row of the generated set, duplicated in a published
+/// document, is reported once and changes nothing in the model.
+///
+/// A row whose child the document carries once is doubled in place. A row no
+/// published document carries (the table holds every child the schema allows)
+/// is probed by writing the child into a parent the corpus has, once and then
+/// twice: the table matches local names, so an empty element is enough.
 #[test]
 fn the_sweep_covers_the_generated_set() {
     for (syntax, rows, expected) in [
-        (Syntax::Ubl, en16931_formats::ubl::once::ONCE, (170, 0)),
-        (Syntax::Cii, en16931_formats::cii::once::ONCE, (137, 0)),
+        (Syntax::Ubl, en16931_formats::ubl::once::ONCE, (170, 435)),
+        (Syntax::Cii, en16931_formats::cii::once::ONCE, (137, 408)),
     ] {
         let docs = common::authority_documents(syntax, "duplicate sweep");
         if docs.is_empty() {
             return;
         }
-        let (mut covered, mut uncovered) = (0usize, Vec::new());
+        let (mut in_place, mut probed) = (0usize, 0usize);
         for (_, _, parent, child) in rows.iter().filter(|r| r.0.is_empty()) {
             let found = docs.iter().find_map(|(_, text)| {
                 let doc = roxmltree::Document::parse(text).ok()?;
@@ -267,9 +271,16 @@ fn the_sweep_covers_the_generated_set() {
                     base,
                 ))
             });
-            let Some((doubled, base)) = found else {
-                uncovered.push(format!("{parent}/{child}"));
-                continue;
+            let (doubled, base) = match found {
+                Some(pair) => {
+                    in_place += 1;
+                    pair
+                }
+                None => {
+                    probed += 1;
+                    probe(&docs, parent, child)
+                        .unwrap_or_else(|| panic!("{syntax}: no document has <{parent}>"))
+                }
             };
             let got = read(doubled.as_bytes()).expect("still readable");
             // One more than the document already carries.
@@ -285,18 +296,31 @@ fn the_sweep_covers_the_generated_set() {
                 dups[0]
             );
             assert_eq!(got.invoice, base.invoice, "{syntax}: {parent}/{child}");
-            covered += 1;
         }
-        println!(
-            "{syntax}: {covered} covered, {} not: {uncovered:?}",
-            uncovered.len()
-        );
-        assert_eq!(
-            (covered, uncovered.len()),
-            expected,
-            "{syntax}: {uncovered:?}"
-        );
+        println!("{syntax}: {in_place} doubled in place, {probed} probed");
+        assert_eq!((in_place, probed), expected, "{syntax}");
     }
+}
+
+/// `child` written into the first non-empty `<parent>` of a published
+/// document twice, with the same document carrying it once as the baseline.
+fn probe(
+    docs: &[(std::path::PathBuf, String)],
+    parent: &str,
+    child: &str,
+) -> Option<(String, en16931_formats::Read)> {
+    docs.iter().find_map(|(_, text)| {
+        let doc = roxmltree::Document::parse(text).ok()?;
+        let node = doc
+            .descendants()
+            .find(|n| n.tag_name().name() == parent && n.has_children())?;
+        let r = node.range();
+        let close = r.start + text[r.clone()].rfind("</")?;
+        let one = format!("<p:{child} xmlns:p=\"urn:probe\"/>");
+        let with = |n: usize| format!("{}{}{}", &text[..close], one.repeat(n), &text[close..]);
+        let base = read(with(1).as_bytes()).ok()?;
+        Some((with(2), base))
+    })
 }
 
 /// CII repeats BT-8 per breakdown group and CEN's `CII-SR-462` requires the

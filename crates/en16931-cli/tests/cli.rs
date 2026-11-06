@@ -1316,7 +1316,7 @@ fn a_value_the_reader_cannot_read_or_a_missing_term_is_rejected_by_name() {
         .assert()
         .code(1)
         .stdout(contains("missing"))
-        .stdout(contains("BG-23[1]/BT-117"));
+        .stdout(contains("BG-23[0]/BT-117"));
 }
 
 /// `explain` says how a rule the types retire is held, rather than letting it

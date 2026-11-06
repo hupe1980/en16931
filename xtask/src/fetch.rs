@@ -62,8 +62,9 @@ pub const VERAPDF_DIGEST: &str =
 /// validated against). Only its `xsd/` tree is kept.
 pub const UBL_SHA256: &str = "60b80d76394a8a2add90723ecb8e0e2e9d826775de9749df37a72d60703f86ed";
 
-/// The sources whose published instances the element-order tables are derived
-/// from. Must equal the corpus suites' `AUTHORITY_SOURCES` (asserted by a test).
+/// The sources whose published instances choose the parents of the order and
+/// single-occurrence tables (the schemas give their children). Must equal the
+/// corpus suites' `AUTHORITY_SOURCES` (asserted by a test).
 pub const ORDER_SOURCES: &[&str] = &[
     "eInvoicing-EN16931",
     "peppol-bis-invoice-3",

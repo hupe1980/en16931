@@ -149,7 +149,7 @@ fn an_invoice_is_stored_in_a_versioned_envelope() {
     let inv = sample();
     let json: serde_json::Value = serde_json::to_value(&inv).expect("serialise");
     assert_eq!(json["en16931"], en16931::invoice::JSON_VERSION);
-    assert_eq!(en16931::invoice::JSON_VERSION, "0.8");
+    assert_eq!(en16931::invoice::JSON_VERSION, "0.10");
     assert!(json["invoice"].is_object(), "{json}");
     assert_eq!(json.as_object().map(serde_json::Map::len), Some(2));
 
@@ -157,7 +157,7 @@ fn an_invoice_is_stored_in_a_versioned_envelope() {
     other["en16931"] = "0.7".into();
     let err = serde_json::from_value::<Invoice>(other).expect_err("another version");
     let msg = err.to_string();
-    assert!(msg.contains("\"0.7\"") && msg.contains("\"0.8\""), "{msg}");
+    assert!(msg.contains("\"0.7\"") && msg.contains("\"0.10\""), "{msg}");
 
     // An unenveloped body is refused too.
     let bare = json["invoice"].clone();

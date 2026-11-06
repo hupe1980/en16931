@@ -13,7 +13,7 @@ timings are measured, not asserted.
 ## CEN's unit tests
 
 277 files and 1 131 assertions, each a minimal UBL fragment with an explicit
-expectation. 1 025 CEN unit-test assertions run against the rules; 66 more test
+expectation. 1 027 CEN unit-test assertions run against the rules; 66 more test
 rules the model's types retire, and are judged by what the reader reports
 instead; the rest are syntax rules or values the model refuses:
 
@@ -28,8 +28,8 @@ instead; the rest are syntax rules or values the model refuses:
 CEN conformance suite
   files:                  277
   assertions:            1131
-  run:                   1025
-  agreed:                1014  (98.9% of run)
+  run:                   1027
+  agreed:                1016  (98.9% of run)
   disagreed:                0
   diverged, declared:      11
      6 × an empty <cac:PostalAddress/> is an absent address here
@@ -39,7 +39,7 @@ CEN conformance suite
   type-retired, by the reader:   66  (the term reported missing exactly when the suite expects the rule)
   skipped, unevaluated:     0  (undecidable)
   skipped, syntax rules:   32  (UBL-*/CII-*, the formats crate's job)
-  skipped, malformed:       8  (a value the model refuses)
+  skipped, malformed:       6  (a value the model refuses)
   skipped, unreadable:      0
   run, no indicator:        8  (absent cbc:ChargeIndicator, read as an allowance)
   core rules with no CEN expectation: 35 of 227

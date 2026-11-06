@@ -77,7 +77,7 @@ fn non_empty(s: String) -> Option<String> {
 /// A UBL `xs:date`, whose optional time zone (`2026-07-31+02:00`) is dropped,
 /// not applied: EN 16931-1 §6.5.9 has no term for one, and the day is the day.
 fn xs_date(raw: &str) -> Option<Date> {
-    Date::parse(without_timezone(raw.trim())).ok()
+    without_timezone(raw.trim()).and_then(|day| Date::parse(day).ok())
 }
 
 /// `cbc:ChargeIndicator` as `xs:boolean`: `true`, `false`, `1` or `0`.
@@ -95,16 +95,39 @@ fn xs_boolean(raw: &str) -> Option<bool> {
 ///
 /// Anything else is returned untouched, so a malformed date still fails in
 /// [`Date::parse`].
-fn without_timezone(s: &str) -> &str {
+///
+/// `None` for an offset `xs:date` does not allow: hours above 14, minutes
+/// above 59, or 14 with minutes.
+fn without_timezone(s: &str) -> Option<&str> {
     let b = s.as_bytes();
     // A zone can only follow the ten characters of a date, so the `-` of an
     // offset is never the `-` inside one.
-    let zoned = match b.len() {
-        11 => b[10] == b'Z',
-        16 => matches!(b[10], b'+' | b'-') && b[13] == b':',
-        _ => false,
-    };
-    if zoned { &s[..10] } else { s }
+    match b.len() {
+        11 if b[10] == b'Z' => Some(&s[..10]),
+        16 if matches!(b[10], b'+' | b'-') && b[13] == b':' => {
+            let two = |at: usize| {
+                s.get(at..at + 2)
+                    .filter(|t| t.bytes().all(|c| c.is_ascii_digit()))
+                    .and_then(|t| t.parse::<u8>().ok())
+            };
+            match (two(11), two(14)) {
+                (Some(hours), Some(minutes)) if hours < 14 && minutes < 60 => Some(&s[..10]),
+                (Some(14), Some(0)) => Some(&s[..10]),
+                _ => None,
+            }
+        }
+        _ => Some(s),
+    }
+}
+
+/// The quantity element a line carries: `cbc:InvoicedQuantity`, else
+/// `cbc:CreditedQuantity` (BT-129).
+fn quantity_element(n: Node<'_, '_>) -> &'static str {
+    if kid(n, "InvoicedQuantity").is_some() {
+        "InvoicedQuantity"
+    } else {
+        "CreditedQuantity"
+    }
 }
 
 /// Whether an element is present with text the model cannot hold.
@@ -269,13 +292,10 @@ impl Reader {
 
     /// [`Self::missing`] at a path, for a group that is itself absent.
     fn missing_at(&mut self, path: String, term: Term<'_>, what: &str) {
-        if !crate::required::is_required(self.bt24.as_deref(), term.term()) {
+        let Some(why) = crate::required::requirement(self.bt24.as_deref(), &term.to_string())
+        else {
             return;
-        }
-        let why = crate::required::rule_for(term.term()).map_or_else(
-            || "the model requires it".to_owned(),
-            |r| format!("{r} requires it"),
-        );
+        };
         self.entries.push(
             Entry::new(
                 Kind::Missing,
@@ -344,10 +364,7 @@ impl Reader {
         want: &str,
         term: Term<'_>,
     ) -> Option<rust_decimal::Decimal> {
-        self.value(n, want, Some(term), |t| {
-            t.parse::<rust_decimal::Decimal>()
-                .map_err(|_| "not a decimal number the model can hold")
-        })
+        self.value(n, want, Some(term), crate::xml::xs_decimal)
     }
 
     fn date(&mut self, n: Node<'_, '_>, want: &str) -> Option<Date> {
@@ -410,7 +427,7 @@ impl Reader {
                 "BillingReference" => {
                     if let Some(r) = kid(c, "InvoiceDocumentReference") {
                         if text(r, "ID").is_none() {
-                            let term = format!("BG-3[{}]/BT-25", inv.preceding_invoices.len() + 1);
+                            let term = format!("BG-3[{}]/BT-25", inv.preceding_invoices.len());
                             self.missing(
                                 r,
                                 Term::new("", &term),
@@ -474,7 +491,7 @@ impl Reader {
                         inv.charges.len()
                     } else {
                         inv.allowances.len()
-                    } + 1;
+                    };
                     let ac = self.allowance(c, is_charge, index);
                     if is_charge {
                         inv.charges.push(ac);
@@ -504,9 +521,10 @@ impl Reader {
                     self.required_totals(root, Some(c), &mut inv);
                 }
                 "InvoiceLine" | "CreditNoteLine" => {
-                    let l = self.line(c, inv.lines.len() + 1);
+                    let group = format!("BG-25[{}]", inv.lines.len());
+                    let l = self.line(c, &group);
                     // BG-DEX-01 hangs beneath the line, keyed by its index.
-                    let subs = self.sub_lines(c);
+                    let subs = self.sub_lines(c, &group);
                     if !subs.is_empty() {
                         inv.extensions
                             .sub_invoice_lines
@@ -981,7 +999,7 @@ impl Reader {
             return;
         }
         for st in subtotals {
-            let group = format!("BG-23[{}]", inv.vat_breakdown.len() + 1);
+            let group = format!("BG-23[{}]", inv.vat_breakdown.len());
             if kid(st, "TaxCategory").is_none() {
                 self.missing(st, Term::new(&group, "BT-118"), "the VAT category code");
             }
@@ -1127,21 +1145,19 @@ impl Reader {
         }
     }
 
-    /// One line; `index` is its 1-based position among its siblings, passed
-    /// in rather than counted, which would make a document quadratic.
-    fn line(&mut self, n: Node<'_, '_>, index: usize) -> InvoiceLine {
-        // A sub-line is BG-DEX-01; its index is among its siblings, and its
-        // path says which line it hangs beneath.
-        let group = if name(n) == "SubInvoiceLine" {
-            format!("BG-DEX-01[{index}]")
-        } else {
-            format!("BG-25[{index}]")
-        };
-        let quantity_el = if kid(n, "InvoicedQuantity").is_some() {
-            "InvoicedQuantity"
-        } else {
-            "CreditedQuantity"
-        };
+    /// One line or sub-line; `group` is its term path, `BG-25[0]` or
+    /// `BG-25[0]/BG-DEX-01[1]`, passed in rather than counted, which would make
+    /// a document quadratic.
+    ///
+    /// Which absent term is reported is [`crate::required::requirement`]'s
+    /// call: no line rule holds beneath a sub-line, so a `cac:SubInvoiceLine`
+    /// may leave BT-129, BT-130 and BG-29 out (the KoSIT validator accepts it).
+    /// Present but empty is still refused there: UBL's schema requires a
+    /// value wherever the element is. A refused value is held as a placeholder.
+    fn line(&mut self, n: Node<'_, '_>, group: &str) -> InvoiceLine {
+        let sub = name(n) == "SubInvoiceLine";
+        let group = group.to_owned();
+        let quantity_el = quantity_element(n);
         let id = text(n, "ID").unwrap_or_else(|| {
             self.missing(
                 n,
@@ -1152,11 +1168,34 @@ impl Reader {
         });
         let quantity = if text(n, quantity_el).is_some() {
             self.decimal(n, quantity_el, Term::new(&group, "BT-129"))
-                .map_or(Quantity::ZERO, Quantity::new)
         } else {
-            self.missing(n, Term::new(&group, "BT-129"), "the invoiced quantity");
-            Quantity::ZERO
+            if sub && kid(n, quantity_el).is_some() {
+                self.refused_on_sub_line(
+                    n,
+                    quantity_el,
+                    Term::new(&group, "BT-129"),
+                    "present without a value; the UBL schema requires a decimal",
+                );
+            } else {
+                self.missing(n, Term::new(&group, "BT-129"), "the invoiced quantity");
+            }
+            None
         };
+        // `cac:SubInvoiceLine` is UBL's `InvoiceLineType`, which has
+        // `cbc:InvoicedQuantity` only; a credit note nests
+        // `cac:SubCreditNoteLine`. The quantity is still read.
+        if sub && quantity_el == "CreditedQuantity" && kid(n, quantity_el).is_some() {
+            self.entries.push(
+                Entry::new(
+                    Kind::Schema,
+                    format!("{}/CreditedQuantity", crate::xml::path_of(n)),
+                    "a cac:SubInvoiceLine has cbc:InvoicedQuantity only; a credit note nests \
+                     cac:SubCreditNoteLine",
+                )
+                .term(Term::new(&group, "BT-129").to_string()),
+            );
+        }
+        let quantity = quantity.map_or(Quantity::ZERO, Quantity::new);
         let unit_code = if let Some(u) = kid(n, quantity_el)
             .and_then(|q| q.attribute("unitCode"))
             .map(str::trim)
@@ -1181,11 +1220,10 @@ impl Reader {
             self.missing(n, Term::new(&group, "BT-146"), "the item net price");
         }
         // A sub-line's BG-DEX-06 is optional in the model (`BR-DEX-03` checks
-        // it); only a line's BT-151 is filled with a placeholder.
-        if name(n) != "SubInvoiceLine"
-            && kid(n, "Item")
-                .and_then(|i| kid(i, "ClassifiedTaxCategory"))
-                .is_none()
+        // it), so `requirement` reports BT-151 on a line only.
+        if kid(n, "Item")
+            .and_then(|i| kid(i, "ClassifiedTaxCategory"))
+            .is_none()
         {
             self.missing(
                 n,
@@ -1225,7 +1263,7 @@ impl Reader {
                         // (`PEPPOL-EN16931-R101`); another is said, not dropped.
                         let e = Entry::new(
                             Kind::Unmapped,
-                            "InvoiceLine/DocumentReference/DocumentTypeCode",
+                            format!("{}/DocumentReference/DocumentTypeCode", name(n)),
                             "a line-level document reference other than the invoiced object \
                              (BT-128, type code 130); not mapped",
                         )
@@ -1238,15 +1276,16 @@ impl Reader {
                     }
                 }
                 "AllowanceCharge" => {
-                    let is_charge = self.charge_indicator(c, "InvoiceLine/AllowanceCharge");
+                    let is_charge =
+                        self.charge_indicator(c, &format!("{}/AllowanceCharge", name(n)));
                     let (sub, [amount, base, pct]) = if is_charge {
                         (
-                            format!("{group}/BG-28[{}]", l.charges.len() + 1),
+                            format!("{group}/BG-28[{}]", l.charges.len()),
                             ["BT-141", "BT-142", "BT-143"],
                         )
                     } else {
                         (
-                            format!("{group}/BG-27[{}]", l.allowances.len() + 1),
+                            format!("{group}/BG-27[{}]", l.allowances.len()),
                             ["BT-136", "BT-137", "BT-138"],
                         )
                     };
@@ -1274,7 +1313,7 @@ impl Reader {
                         l.allowances.push(a);
                     }
                 }
-                "Price" => l.price = self.price(c, &group),
+                "Price" => l.price = self.price(c, &group, sub),
                 "Item" => {
                     let (item, vat) = self.item(c, &group);
                     l.item = item;
@@ -1288,19 +1327,51 @@ impl Reader {
                 | "AccountingCost"
                 | "TaxTotal"
                 | "SubInvoiceLine" => {}
-                _ => self.skip("InvoiceLine", c),
+                _ => self.skip(name(n), c),
             }
         }
         l
     }
 
-    /// `cac:SubInvoiceLine` children, recursively — BG-DEX-01.
-    fn sub_lines(&mut self, n: Node<'_, '_>) -> Vec<en16931::SubInvoiceLine> {
+    /// What UBL's schema refuses in a sub-line although no rule requires the
+    /// term there: a quantity element without a value, a `cac:Price` without
+    /// `cbc:PriceAmount` (KoSIT answers 406).
+    fn refused_on_sub_line(&mut self, at: Node<'_, '_>, element: &str, term: Term<'_>, why: &str) {
+        self.entries.push(
+            Entry::new(
+                Kind::Malformed,
+                format!("{}/{element}", crate::xml::path_of(at)),
+                why.to_owned(),
+            )
+            .term(term.to_string()),
+        );
+    }
+
+    /// `cac:SubInvoiceLine` children of the line or sub-line at `parent`,
+    /// recursively — BG-DEX-01. Its quantity and price are `None` when the
+    /// sub-line has no such element.
+    fn sub_lines(&mut self, n: Node<'_, '_>, parent: &str) -> Vec<en16931::SubInvoiceLine> {
         kids(n)
             .filter(|c| name(*c) == "SubInvoiceLine")
             .enumerate()
             .map(|(i, c)| {
-                let line = self.line(c, i + 1);
+                let group = format!("{parent}/BG-DEX-01[{i}]");
+                // `CreditNoteLineType` nests `cac:SubCreditNoteLine`, which no
+                // authority binds; CEN's `UBL-CR-646` names this element there
+                // too, so it is read, and the schema's refusal is said.
+                if name(n) == "CreditNoteLine" {
+                    self.entries.push(
+                        Entry::new(
+                            Kind::Schema,
+                            crate::xml::path_of(c),
+                            "a cac:CreditNoteLine nests cac:SubCreditNoteLine, not \
+                             cac:SubInvoiceLine",
+                        )
+                        .term(group.clone()),
+                    );
+                }
+                let stated_quantity = kid(c, quantity_element(c)).is_some();
+                let stated_price = kid(c, "Price").is_some();
                 // BG-DEX-06: `BR-DEX-03` requires exactly one, so two map to
                 // `None` and the rule fires.
                 let categories = kid(c, "Item").map_or(0, |i| {
@@ -1308,18 +1379,29 @@ impl Reader {
                         .filter(|x| name(*x) == "ClassifiedTaxCategory")
                         .count()
                 });
-                en16931::SubInvoiceLine {
-                    vat: (categories == 1).then(|| line.vat.clone()),
-                    line,
-                    children: self.sub_lines(c),
-                }
+                let mut sub = en16931::SubInvoiceLine::from(self.line(c, &group));
+                sub.quantity = sub.quantity.filter(|_| stated_quantity);
+                sub.price = sub.price.filter(|_| stated_price);
+                sub.vat = sub.vat.filter(|_| categories == 1);
+                sub.children = self.sub_lines(c, &group);
+                sub
             })
             .collect()
     }
 
-    fn price(&mut self, n: Node<'_, '_>, group: &str) -> PriceDetails {
+    /// The price of a line, or of a sub-line when `sub` (see [`Self::line`]).
+    fn price(&mut self, n: Node<'_, '_>, group: &str, sub: bool) -> PriceDetails {
         if text(n, "PriceAmount").is_none() {
-            self.missing(n, Term::new(group, "BT-146"), "the item net price");
+            if sub {
+                let why = if kid(n, "PriceAmount").is_some() {
+                    "present without a value; the UBL schema requires a decimal"
+                } else {
+                    "missing; the UBL schema requires it in cac:Price"
+                };
+                self.refused_on_sub_line(n, "PriceAmount", Term::new(group, "BT-146"), why);
+            } else {
+                self.missing(n, Term::new(group, "BT-146"), "the item net price");
+            }
         }
         let mut p = PriceDetails {
             net_price: self
@@ -1427,7 +1509,7 @@ impl Reader {
             }
             return;
         }
-        let group = format!("BG-24[{}]", inv.attachments.len() + 1);
+        let group = format!("BG-24[{}]", inv.attachments.len());
         // CEN's binding reads any other code as a supporting document and maps
         // no code there; it is said rather than dropped.
         if let Some(code) = text(n, "DocumentTypeCode") {
@@ -1563,6 +1645,9 @@ mod tests {
             "31/07/2026",          // not ISO at all
             "2026-07-31T00:00:00", // xs:dateTime, which cbc:IssueDate is not
             "2026-07-31+2:00",     // a zone, malformed
+            "2026-07-31+99:99",    // no such offset
+            "2026-07-31+14:30",    // beyond +14:00
+            "2026-07-31+ab:cd",
             "2026-07-31QQ",
             "",
         ] {

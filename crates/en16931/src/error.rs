@@ -36,6 +36,34 @@ pub enum ParseAmountError {
     },
 }
 
+/// A number is not an `xs:decimal` the model holds exactly: the spelling the
+/// UBL and CII schemas give every quantity, price, rate and amount.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum ParseDecimalError {
+    /// Not digits with at most one point and an optional sign: an exponent
+    /// (`1e3`), a separator (`1_000`, `1,5`), whitespace or no digit at all.
+    #[error("{input:?} is not an xs:decimal")]
+    Malformed {
+        /// The rejected input.
+        input: String,
+    },
+
+    /// Beyond the largest magnitude a decimal holds.
+    #[error("{input:?} is outside the range a decimal holds")]
+    OutOfRange {
+        /// The rejected input.
+        input: String,
+    },
+
+    /// More significant digits than a decimal holds; never rounded.
+    #[error("{input:?} has more digits than a decimal holds exactly")]
+    TooPrecise {
+        /// The rejected input.
+        input: String,
+    },
+}
+
 /// Arithmetic or conversion on a monetary amount failed.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]

@@ -389,11 +389,7 @@ fn cases() -> Vec<Case> {
     })),
     // A sub-line group keyed to a line index the invoice does not have.
     case("EN-EXT-02", |i| {
-        let sub = en16931::SubInvoiceLine {
-            line: i.lines[0].clone(),
-            vat: Some(i.lines[0].vat.clone()),
-            children: vec![],
-        };
+        let sub = en16931::SubInvoiceLine::from(i.lines[0].clone());
         i.extensions.sub_invoice_lines.push((99, vec![sub]));
     }),
 
@@ -1077,11 +1073,7 @@ fn cases() -> Vec<Case> {
 fn sub_line(net: &str) -> en16931::SubInvoiceLine {
     let mut line = base().lines[0].clone();
     line.net_amount = amount(net);
-    en16931::SubInvoiceLine {
-        vat: Some(line.vat.clone()),
-        line,
-        children: vec![],
-    }
+    en16931::SubInvoiceLine::from(line)
 }
 
 /// One `BG-DEX-09` third-party payment of `amount`, fully populated.

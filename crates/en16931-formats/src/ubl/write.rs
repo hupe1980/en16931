@@ -15,7 +15,7 @@ use en16931::invoice::{
     Code, DocumentAllowanceCharge, Invoice, InvoiceLine, Item, LineAllowanceCharge, LineVat, Party,
     PaymentInstructions, PaymentMeans, Period, PostalAddress, PriceDetails, SupportingDocument,
 };
-use en16931::{DocumentKind, DocumentReference, Identifier, InvoiceAmount};
+use en16931::{DocumentKind, DocumentReference, Identifier, InvoiceAmount, Quantity};
 
 /// UBL 2.1 namespace URIs. Fixed by OASIS; not configurable.
 const NS_INVOICE: &str = "urn:oasis:names:specification:ubl:schema:xsd:Invoice-2";
@@ -812,6 +812,85 @@ fn line_allowance(x: &mut Xml, a: &LineAllowanceCharge, is_charge: bool, ccy: &s
     });
 }
 
+/// What a `cac:InvoiceLine` and a `cac:SubInvoiceLine` carry; both are UBL's
+/// `InvoiceLineType`, so one writer keeps them from drifting apart.
+struct LineTerms<'a> {
+    id: &'a str,
+    note: Option<&'a str>,
+    /// BT-129 with its unit, BT-130.
+    quantity: Option<(Quantity, Option<&'a str>)>,
+    net_amount: InvoiceAmount,
+    accounting_reference: Option<&'a str>,
+    period: Option<&'a Period>,
+    order_line_reference: Option<&'a DocumentReference>,
+    object_identifier: Option<&'a Identifier>,
+    allowances: &'a [LineAllowanceCharge],
+    charges: &'a [LineAllowanceCharge],
+    item: &'a Item,
+    vat: Option<&'a LineVat>,
+    price: Option<&'a PriceDetails>,
+}
+
+/// The elements of one line or sub-line, in `InvoiceLineType`'s order.
+/// `group` is its term path (`BG-25[0]`, `BG-25[0]/BG-DEX-01[1]`) and
+/// `period` its period group (BG-26, BG-DEX-05), for a note.
+fn line_terms(
+    x: &mut Xml,
+    t: &LineTerms<'_>,
+    qty_name: &str,
+    group: &str,
+    period_group: &str,
+    ccy: &str,
+) {
+    x.leaf("cbc:ID", &[], t.id);
+    if let Some(n) = t.note {
+        x.leaf("cbc:Note", &[], n);
+    }
+    if let Some((q, unit)) = t.quantity {
+        quantity_leaf(x, qty_name, &q.to_string(), unit);
+    }
+    x.leaf(
+        "cbc:LineExtensionAmount",
+        &[("currencyID", ccy)],
+        &amt(t.net_amount),
+    );
+    if let Some(a) = t.accounting_reference {
+        x.leaf("cbc:AccountingCost", &[], a);
+    }
+    if let Some(p) = t.period {
+        period(
+            x,
+            "cac:InvoicePeriod",
+            p,
+            None,
+            &format!("{group}/{period_group}"),
+        );
+    }
+    if let Some(o) = t.order_line_reference {
+        x.group("cac:OrderLineReference", |x| {
+            x.leaf("cbc:LineID", &[], o.as_str());
+        });
+    }
+    if let Some(o) = t.object_identifier {
+        x.group("cac:DocumentReference", |x| {
+            ident(x, "cbc:ID", o);
+            x.leaf("cbc:DocumentTypeCode", &[], "130");
+        });
+    }
+    for (a, c) in t
+        .allowances
+        .iter()
+        .map(|a| (a, false))
+        .chain(t.charges.iter().map(|c| (c, true)))
+    {
+        line_allowance(x, a, c, ccy);
+    }
+    item(x, t.item, t.vat);
+    if let Some(p) = t.price {
+        price(x, p, group, ccy);
+    }
+}
+
 fn line(
     x: &mut Xml,
     l: &InvoiceLine,
@@ -820,105 +899,84 @@ fn line(
     credit: bool,
     ccy: &str,
 ) {
-    let root = if credit {
-        "cac:CreditNoteLine"
+    let (root, qty_name) = if credit {
+        ("cac:CreditNoteLine", "cbc:CreditedQuantity")
     } else {
-        "cac:InvoiceLine"
+        ("cac:InvoiceLine", "cbc:InvoicedQuantity")
     };
-    let qty_name = if credit {
-        "cbc:CreditedQuantity"
-    } else {
-        "cbc:InvoicedQuantity"
+    let terms = LineTerms {
+        id: &l.id,
+        note: l.note.as_deref(),
+        quantity: Some((l.quantity, Some(l.unit_code.as_str()))),
+        net_amount: l.net_amount,
+        accounting_reference: l.accounting_reference.as_deref(),
+        period: l.period.as_ref(),
+        order_line_reference: l.order_line_reference.as_ref(),
+        object_identifier: l.object_identifier.as_ref(),
+        allowances: &l.allowances,
+        charges: &l.charges,
+        item: &l.item,
+        vat: Some(&l.vat),
+        price: Some(&l.price),
     };
+    let group = format!("BG-25[{i}]");
     x.group(root, |x| {
-        x.leaf("cbc:ID", &[], &l.id);
-        if let Some(n) = &l.note {
-            x.leaf("cbc:Note", &[], n);
-        }
-        x.leaf(
-            qty_name,
-            &[("unitCode", l.unit_code.as_str())],
-            &l.quantity.to_string(),
-        );
-        x.leaf(
-            "cbc:LineExtensionAmount",
-            &[("currencyID", ccy)],
-            &amt(l.net_amount),
-        );
-        if let Some(a) = &l.accounting_reference {
-            x.leaf("cbc:AccountingCost", &[], a);
-        }
-        if let Some(p) = &l.period {
-            period(x, "cac:InvoicePeriod", p, None, "BG-26");
-        }
-        if let Some(o) = &l.order_line_reference {
-            x.group("cac:OrderLineReference", |x| {
-                x.leaf("cbc:LineID", &[], o.as_str());
-            });
-        }
-        if let Some(o) = &l.object_identifier {
-            x.group("cac:DocumentReference", |x| {
-                ident(x, "cbc:ID", o);
-                x.leaf("cbc:DocumentTypeCode", &[], "130");
-            });
-        }
-        for (a, c) in l
-            .allowances
-            .iter()
-            .map(|a| (a, false))
-            .chain(l.charges.iter().map(|c| (c, true)))
-        {
-            line_allowance(x, a, c, ccy);
-        }
-        item(x, &l.item, Some(&l.vat));
-        price(x, &l.price, i, ccy);
+        line_terms(x, &terms, qty_name, &group, "BG-26", ccy);
         // BG-DEX-01, recursively. `UBL-CR-646` forbids `cac:SubInvoiceLine` in
-        // core EN 16931, so it is dropped and reported unless waived.
-        for s in subs {
-            sub_line(x, s, i, credit, ccy);
+        // core EN 16931, so it is dropped and reported unless waived. A credit
+        // note's line nests `cac:SubCreditNoteLine`, which no authority binds.
+        if credit && !subs.is_empty() {
+            x.note(
+                Entry::new(
+                    Kind::Dropped,
+                    "cac:CreditNoteLine/cac:SubCreditNoteLine",
+                    "a UBL credit note has no binding for sub invoice lines: the schema \
+                     nests cac:SubCreditNoteLine, and neither CEN nor KoSIT binds it",
+                )
+                .term(format!("{group}/BG-DEX-01")),
+            );
+            return;
+        }
+        for (j, s) in subs.iter().enumerate() {
+            sub_line(x, s, &format!("{group}/BG-DEX-01[{j}]"), ccy);
         }
     });
 }
 
-/// One `cac:SubInvoiceLine`, with its own children beneath it.
-fn sub_line(x: &mut Xml, s: &en16931::SubInvoiceLine, i: usize, credit: bool, ccy: &str) {
+/// A quantity leaf with its `unitCode`, or without one when the unit is absent
+/// or empty: an empty attribute reads back as a stated, empty unit.
+fn quantity_leaf(x: &mut Xml, name: &str, value: &str, unit: Option<&str>) {
+    match unit.filter(|u| !u.is_empty()) {
+        Some(u) => x.leaf(name, &[("unitCode", u)], value),
+        None => x.leaf(name, &[], value),
+    }
+}
+
+/// One `cac:SubInvoiceLine` of an invoice's line, with its own children
+/// beneath it.
+fn sub_line(x: &mut Xml, s: &en16931::SubInvoiceLine, group: &str, ccy: &str) {
+    let terms = LineTerms {
+        id: &s.id,
+        note: s.note.as_deref(),
+        quantity: s
+            .quantity
+            .as_ref()
+            .map(|q| (q.value, q.unit_code.as_ref().map(Code::as_str))),
+        net_amount: s.net_amount,
+        accounting_reference: s.accounting_reference.as_deref(),
+        period: s.period.as_ref(),
+        order_line_reference: s.order_line_reference.as_ref(),
+        object_identifier: s.object_identifier.as_ref(),
+        allowances: &s.allowances,
+        charges: &s.charges,
+        item: &s.item,
+        vat: s.vat.as_ref(),
+        price: s.price.as_ref(),
+    };
     x.group("cac:SubInvoiceLine", |x| {
-        x.leaf("cbc:ID", &[], &s.line.id);
-        if let Some(n) = &s.line.note {
-            x.leaf("cbc:Note", &[], n);
-        }
-        let qty_name = if credit {
-            "cbc:CreditedQuantity"
-        } else {
-            "cbc:InvoicedQuantity"
-        };
-        x.leaf(
-            qty_name,
-            &[("unitCode", s.line.unit_code.as_str())],
-            &s.line.quantity.to_string(),
-        );
-        x.leaf(
-            "cbc:LineExtensionAmount",
-            &[("currencyID", ccy)],
-            &amt(s.line.net_amount),
-        );
-        // BG-DEX-06 is the sub-line's own category, never the line's; `None`
-        // when the source carried none or two (`BR-DEX-03`).
-        if s.vat.is_none() && s.line.vat != LineVat::default() {
-            x.note(
-                Entry::new(
-                    Kind::Dropped,
-                    "cac:SubInvoiceLine/cac:Item/cac:ClassifiedTaxCategory",
-                    "the sub invoice line has no single VAT category of its own \
-                     (BR-DEX-03 reports it on the model)",
-                )
-                .term(format!("BG-DEX-01[{i}]/BG-DEX-06")),
-            );
-        }
-        item(x, &s.line.item, s.vat.as_ref());
-        price(x, &s.line.price, i, ccy);
-        for child in &s.children {
-            sub_line(x, child, i, credit, ccy);
+        line_terms(x, &terms, "cbc:InvoicedQuantity", group, "BG-DEX-05", ccy);
+        for (j, child) in s.children.iter().enumerate() {
+            sub_line(x, child, &format!("{group}/BG-DEX-01[{j}]"), ccy);
         }
     });
 }
@@ -977,7 +1035,7 @@ fn item(x: &mut Xml, i: &Item, vat: Option<&LineVat>) {
                             format!("cac:Item/cac:AdditionalItemProperty/{el}"),
                             "absent, and UBL requires the element: written empty",
                         )
-                        .term(format!("BG-32[{}]/{term}", j + 1)),
+                        .term(format!("BG-32[{j}]/{term}")),
                     );
                 }
             }
@@ -989,7 +1047,7 @@ fn item(x: &mut Xml, i: &Item, vat: Option<&LineVat>) {
     });
 }
 
-fn price(x: &mut Xml, p: &PriceDetails, i: usize, ccy: &str) {
+fn price(x: &mut Xml, p: &PriceDetails, group: &str, ccy: &str) {
     // `cbc:Amount` is mandatory in `cac:AllowanceCharge`, so BT-148 without
     // BT-147 is written with a zero discount, reported as derived.
     if p.price_discount.is_none() && p.gross_price.is_some() {
@@ -1000,7 +1058,7 @@ fn price(x: &mut Xml, p: &PriceDetails, i: usize, ccy: &str) {
                 "absent while BT-148 is present, and UBL requires the element: written as \
                  0.00, so it reads back as a stated zero discount",
             )
-            .term(format!("BG-25[{i}]/BT-147"))
+            .term(format!("{group}/BT-147"))
             .value("0.00"),
         );
     }
@@ -1011,15 +1069,14 @@ fn price(x: &mut Xml, p: &PriceDetails, i: usize, ccy: &str) {
             &p.net_price.to_string(),
         );
         if let Some(q) = p.base_quantity {
-            // No `unitCode` when BT-150 is absent (it is optional): an empty
-            // one reads back as `Some("")` and trips `PEPPOL-EN16931-R130`.
-            let unit = p
-                .base_quantity_code
-                .as_ref()
-                .map(Code::as_str)
-                .filter(|u| !u.is_empty());
-            let attrs: Vec<(&str, &str)> = unit.map(|u| ("unitCode", u)).into_iter().collect();
-            x.leaf("cbc:BaseQuantity", &attrs, &q.to_string());
+            // BT-150 is optional; an empty `unitCode` would read back as
+            // `Some("")` and trip `PEPPOL-EN16931-R130`.
+            quantity_leaf(
+                x,
+                "cbc:BaseQuantity",
+                &q.to_string(),
+                p.base_quantity_code.as_ref().map(Code::as_str),
+            );
         }
         // BT-147 (`cbc:Amount`) and BT-148 (`cbc:BaseAmount`) share one
         // price-level allowance, written when either is present.

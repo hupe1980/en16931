@@ -305,8 +305,8 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
 
-      # Nothing is set aside: no `.cargo/audit.toml` exists, and a yanked
-      # crate fails the job as well as an advisory does.
+      # `.cargo/audit.toml` sets aside only what `deny.toml` does, each with its
+      # reason there; a yanked crate fails the job as well as an advisory does.
       - name: Run audit
         run: cargo audit --deny warnings
 

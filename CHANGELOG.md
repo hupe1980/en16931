@@ -16,18 +16,6 @@ Before 1.0, a minor release may break; every break is listed here.
 
 ### Fixed
 
-- The CII writer dropped BT-89, the mandate reference, when the invoice had
-  neither payment terms (BT-20) nor a due date (BT-9):
-  `ram:SpecifiedTradePaymentTerms`, which carries `ram:DirectDebitMandateID`,
-  was written only for those two. A mandate reference alone now writes it.
-- The CII reader keeps the first card, debited account or creditor account it
-  reads, as the UBL reader does, and reports every later one as `Unmapped`.
-  A mandate reference (BT-89) or creditor identifier (BT-90) joins a direct
-  debit and is reported beside a card or a credit transfer. The reader used to
-  replace the first one silently: a card followed by a debited account read
-  as a direct debit, a mandate beside a credit transfer turned it into a
-  direct debit, and a creditor account followed by a card in the same element
-  read as a card.
 - `PEPPOL-EN16931-R120` and `R040` no longer panic when expected minus stated
   amount overflows, and no longer skip a line or allowance whose expected
   amount exceeds the `Decimal` range: they report it, with a hint. When
@@ -46,6 +34,54 @@ Before 1.0, a minor release may break; every break is listed here.
   R040 compares a hundredfold instead of dividing by 100, and XPath's
   `round` no longer rounds `x + 0.5` first. Only R120's division by the base
   quantity rounds at 28 places, as XPath's decimal division does.
+
+## [0.10.0] — 2026-11-06
+
+The bindings place and check every element the schemas allow, not only what
+published documents happen to carry. Sub invoice lines follow XRechnung's own
+model ([#17]), CII payment means and BT-89 survive ([#18], [#19]), and every
+number is read by one `xs:decimal` rule ([#20]). Contributed by Andreas Isaak.
+
+### Breaking
+
+- `en16931::SubInvoiceLine` has its own fields (XRechnung 3.0.2, section 16)
+  instead of an embedded `InvoiceLine`: `sub.line.net_amount` is
+  `sub.net_amount`. Its quantity (`SubLineQuantity`, unit optional) and price
+  are `Option`s; `vat` is its only VAT information.
+- `invoice::JSON_VERSION` is `"0.10"`; a `"0.8"` envelope is refused.
+- Report entries count occurrences from zero, as `bt::Path` and every finding
+  do: the first line is `BG-25[0]`. A sub-line's term starts with its line's
+  (`BG-25[0]/BG-DEX-01[1]/BT-129`).
+- `Percentage` and `Quantity` parse with `numeric::parse_decimal`: `FromStr::Err`
+  is the new `ParseDecimalError` (malformed, out of range, too precise), and
+  `1_000` or `1e3` is refused.
+- Beneath a sub-line no line rule applies: an absent BT-129, BT-130, BT-146 or
+  BT-151 is not reported, and an absent BT-126, BT-131, BT-136 or BT-141 is
+  `Missing` because UBL's schema requires it, not BR-21 … BR-43.
+
+### Fixed
+
+- The UBL and CII element-order and single-occurrence tables are read from the
+  schemas: each parent the corpus shows gets its type's whole sequence. The
+  writers dropped elements no published document carries (a sub-line's note,
+  BT-128, BT-132, BT-133, period, allowances, charges), a duplicate of one was
+  read without a report, and UBL put `cbc:DocumentTypeCode` after
+  `cac:Attachment` in a document reference.
+- The UBL reader rejected a lawful XRechnung Extension sub-line without
+  quantity, unit or price (BR-22, BR-23 and BR-26 hold on lines only).
+- A credit note's sub-lines: a `cac:SubInvoiceLine` under `cac:CreditNoteLine`
+  is reported as `Schema`, as is a `cbc:CreditedQuantity` in a sub-line; the
+  writer drops credit-note sub-lines with a note naming BG-DEX-01, since no
+  authority binds them.
+- The CII writer dropped BT-89 when the invoice had neither BT-20 nor BT-9.
+- The CII reader keeps the first card, debited or creditor account it reads,
+  as UBL does, and reports later ones; it used to replace the first silently.
+  A BIC (BT-86) with no credit transfer to hold it is reported too.
+- `InvoiceAmount::parse` accepts every `xs:decimal` spelling (`.5`, `5.`): CEN's
+  BR-CO-12 and BR-CO-17 fixtures write `.00`, and now run (1 027 assertions).
+- Both readers refuse `1e1`, `1_000` and digits a decimal cannot hold, and
+  keep a percentage's stated digits; CII rounded a rate below 10^-26 to zero.
+- The UBL reader reports a date with an impossible time zone (`+99:99`).
 
 ## [0.9.0] — 2026-11-04
 
@@ -102,6 +138,10 @@ every pin is at its authority's current release.
 
 [#14]: https://github.com/hupe1980/en16931/issues/14
 [#15]: https://github.com/hupe1980/en16931/issues/15
+[#17]: https://github.com/hupe1980/en16931/pull/17
+[#18]: https://github.com/hupe1980/en16931/pull/18
+[#19]: https://github.com/hupe1980/en16931/pull/19
+[#20]: https://github.com/hupe1980/en16931/pull/20
 
 ## [0.8.0] — 2026-10-11
 
@@ -1250,7 +1290,8 @@ directions, ZUGFeRD / Factur-X extraction, and the command.
 - `en16931-cli`: `validate`, `convert`, `diff`, `extract`, `inspect`, `explain`,
   `rules`, `profiles`, and CI-shaped exit codes.
 
-[Unreleased]: https://github.com/hupe1980/en16931/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/hupe1980/en16931/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/hupe1980/en16931/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/hupe1980/en16931/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/hupe1980/en16931/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/hupe1980/en16931/compare/v0.7.2...v0.7.3

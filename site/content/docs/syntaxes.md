@@ -73,7 +73,7 @@ known, a hint:
 `Unmapped`, `Malformed` and `Missing` are not errors on their own, and none is silent.
 
 **A reader never invents a value.** A required term the document lacks gets a
-placeholder and a `Missing` entry (`BG-23[1]/BT-117`), so `receive` rejects it;
+placeholder and a `Missing` entry (`BG-23[0]/BT-117`), so `receive` rejects it;
 a number that does not parse is `Malformed`, never zero. What is required
 follows the declared profile: ZUGFeRD MINIMUM lawfully has no BT-106.
 
@@ -220,23 +220,23 @@ Six tables are **generated from the authorities' artefacts**, never transcribed:
 
 | Table | Source | Size |
 |---|---|---|
-| UBL element order | **325** published UBL instances | 36 parents |
-| CII element order | CEN's D16B subset schema, over the parents and children of **175** published CII instances | 38 parents |
+| UBL element order | the OASIS UBL 2.1 schemas, over the parents of **325** published UBL instances | 56 parents |
+| CII element order | CEN's D16B subset schema, over the parents of **175** published CII instances | 64 parents |
 | UBL prohibitions | preprocessed `EN16931-UBL-validation` | 1 548 paths + 21 attributes |
 | CII prohibitions | preprocessed `EN16931-CII-validation` | 447 paths |
-| UBL single occurrence | the OASIS UBL 2.1 schemas and CEN's `count(…) <= 1` rules | 253 rows |
-| CII single occurrence | CEN's D16B subset schema and CEN's `count(…) <= 1` rules | 186 rows |
+| UBL single occurrence | the OASIS UBL 2.1 schemas and CEN's `count(…) <= 1` rules | 688 rows |
+| CII single occurrence | CEN's D16B subset schema and CEN's `count(…) <= 1` rules | 594 rows |
 
 Both syntaxes' content models are XSD `sequence`s, so a document with exactly the
 right elements **in the wrong order** is invalid — and no Schematron rule says
-so, because ordering is the schema's job. CII's order is read from the D16B
-schema CEN validates against, which the reference corpus carries. UBL's is
-derived by topologically sorting the pairwise precedences observed across the
-corpus, taking the majority direction where instances disagree (much of that
-corpus is deliberately invalid). Derivation reports no unresolved conflicts,
-and the generator exits non-zero if it ever does. Every document the test
-suites write is then validated with `xmllint`: CII against the D16B schema, UBL
-against the OASIS UBL 2.1 schemas.
+so, because ordering is the schema's job. Both orders, and both
+single-occurrence sets, are read from the schemas the validators use: each
+parent the corpus shows gets its type's whole sequence, so an element no
+published instance carries still has its place and its duplicate is still
+reported. The generator exits non-zero if an instance carries a child its
+parent's schema does not allow. Every document the test suites write is then
+validated with `xmllint`: CII against the D16B schema, UBL against the OASIS
+UBL 2.1 schemas.
 
 The writers hand-sequence nothing: they emit in whatever order reads best, and
 the serialiser sorts by the table — which also handles UBL's two document

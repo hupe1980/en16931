@@ -440,9 +440,9 @@ mod tests {
             )
         };
         let sub = |net: &str, children: Vec<SubInvoiceLine>| SubInvoiceLine {
-            line: line(net),
             vat: None,
             children,
+            ..SubInvoiceLine::from(line(net))
         };
         let mut inv = Invoice {
             lines: vec![line("100.00")],
@@ -1002,8 +1002,7 @@ pub mod extension {
         path: Path,
         f: &mut Findings<'_>,
     ) {
-        let sum =
-            crate::validation::rules::arith::exact_sum(children.iter().map(|c| c.line.net_amount));
+        let sum = crate::validation::rules::arith::exact_sum(children.iter().map(|c| c.net_amount));
         if sum != stated.into_decimal() {
             f.arithmetic(path, sum, stated);
         }
@@ -1013,7 +1012,7 @@ pub mod extension {
         if node.children.is_empty() {
             return;
         }
-        check_sum(node.line.net_amount, &node.children, path, f);
+        check_sum(node.net_amount, &node.children, path, f);
         for c in &node.children {
             check_subtree(c, path, f);
         }

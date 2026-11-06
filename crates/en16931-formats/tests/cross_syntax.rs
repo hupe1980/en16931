@@ -326,6 +326,221 @@ fn cii_reports_a_second_kind_of_payment_means_instead_of_replacing_the_first() {
         paths,
         ["SpecifiedTradeSettlementPaymentMeans/ApplicableTradeSettlementFinancialCard"]
     );
+
+    // A card, then an account and its bank: the bank goes with the account.
+    assert!(
+        transfer.contains("<ram:BICID>"),
+        "the fixture carries BT-86"
+    );
+    let card_then_account = transfer.replacen(
+        "<ram:PayeePartyCreditorFinancialAccount>",
+        &format!("{CARD}<ram:PayeePartyCreditorFinancialAccount>"),
+        1,
+    );
+    let (means, paths) = not_held(&card_then_account);
+    assert!(matches!(means, Some(PaymentMeans::Card(_))), "{means:?}");
+    assert_eq!(
+        paths,
+        [
+            "SpecifiedTradeSettlementPaymentMeans/PayeePartyCreditorFinancialAccount",
+            "SpecifiedTradeSettlementPaymentMeans/PayeeSpecifiedCreditorFinancialInstitution",
+        ]
+    );
+}
+
+/// `xml` with the text of the first `<tag>` after each of `anchors` in turn
+/// replaced by `value`.
+fn with_text(xml: &str, anchors: &[&str], tag: &str, value: &str) -> String {
+    let from = anchors.iter().fold(0, |at, anchor| {
+        at + xml[at..].find(anchor).expect("anchor present")
+    });
+    let start = from
+        + xml[from..]
+            .find(&format!("<{tag}"))
+            .expect("element present");
+    let content = start + xml[start..].find('>').expect("end of tag") + 1;
+    let end = content + xml[content..].find('<').expect("end of content");
+    format!("{}{value}{}", &xml[..content], &xml[end..])
+}
+
+/// A quantity, price or percentage that is not an `xs:decimal` (also `1e1` or
+/// `1_000`, which `rust_decimal` reads), is beyond `Decimal`'s range or has
+/// more digits than it holds, is reported once in both syntaxes; the model
+/// holds the placeholder the entry says it holds, never a rounded value.
+#[test]
+fn a_number_that_is_not_one_is_reported() {
+    use en16931_formats::report::Kind;
+
+    const NET: &str = "<ram:NetPriceProductTradePrice>";
+    const GROSS: &str = "<ram:GrossPriceProductTradePrice>";
+    const LINE_SETTLEMENT: &str = "<ram:SpecifiedLineTradeSettlement>";
+    const HEADER: &str = "<ram:ApplicableHeaderTradeSettlement>";
+    const LINE: &str = "<cac:InvoiceLine>";
+    let cases: [(Syntax, &[&str], &str); 17] = [
+        (Syntax::Cii, &[], "ram:BilledQuantity"),
+        (Syntax::Cii, &[NET], "ram:ChargeAmount"),
+        (Syntax::Cii, &[NET], "ram:BasisQuantity"),
+        (Syntax::Cii, &[GROSS], "ram:ChargeAmount"),
+        (Syntax::Cii, &[GROSS], "ram:ActualAmount"),
+        (
+            Syntax::Cii,
+            &[LINE_SETTLEMENT, "<ram:ApplicableTradeTax>"],
+            "ram:RateApplicablePercent",
+        ),
+        (
+            Syntax::Cii,
+            &[LINE_SETTLEMENT, "<ram:SpecifiedTradeAllowanceCharge>"],
+            "ram:CalculationPercent",
+        ),
+        (
+            Syntax::Cii,
+            &[HEADER, "<ram:ApplicableTradeTax>"],
+            "ram:RateApplicablePercent",
+        ),
+        (
+            Syntax::Cii,
+            &[HEADER, "<ram:SpecifiedTradeAllowanceCharge>"],
+            "ram:CalculationPercent",
+        ),
+        (Syntax::Ubl, &[LINE], "cbc:InvoicedQuantity"),
+        (Syntax::Ubl, &[LINE, "<cac:Price>"], "cbc:PriceAmount"),
+        (Syntax::Ubl, &[LINE, "<cac:Price>"], "cbc:BaseQuantity"),
+        (
+            Syntax::Ubl,
+            &[LINE, "<cac:Price>", "<cac:AllowanceCharge>"],
+            "cbc:Amount",
+        ),
+        (
+            Syntax::Ubl,
+            &[LINE, "<cac:Price>", "<cac:AllowanceCharge>"],
+            "cbc:BaseAmount",
+        ),
+        (
+            Syntax::Ubl,
+            &[LINE, "<cac:AllowanceCharge>"],
+            "cbc:MultiplierFactorNumeric",
+        ),
+        (
+            Syntax::Ubl,
+            &[LINE, "<cac:ClassifiedTaxCategory>"],
+            "cbc:Percent",
+        ),
+        (
+            Syntax::Ubl,
+            &["<cac:AllowanceCharge>"],
+            "cbc:MultiplierFactorNumeric",
+        ),
+    ];
+    let ubl = write(&common::maximal(), Syntax::Ubl).xml;
+    let cii = write(&common::maximal(), Syntax::Cii).xml;
+    for value in [
+        "abc",
+        "79228162514264337593543950336",
+        "1e1",
+        "1_000",
+        "0.00000000000000000000000000001",
+    ] {
+        for (syntax, anchors, tag) in cases {
+            let xml = if syntax == Syntax::Ubl { &ubl } else { &cii };
+            let probe = with_text(xml, anchors, tag, value);
+            let got = en16931_formats::read(probe.as_bytes()).expect("readable");
+            // CII's net BT-149 that is not read differs from the gross
+            // price's, which is its own entry; the probed value is reported
+            // exactly once.
+            let values: Vec<Option<&str>> = got
+                .entries_of(Kind::Malformed)
+                .map(|e| e.value.as_deref())
+                .collect();
+            assert_eq!(
+                values.iter().filter(|v| **v == Some(value)).count(),
+                1,
+                "{syntax:?} {tag} = {value} after {anchors:?}: {values:?}"
+            );
+        }
+    }
+}
+
+/// A CII percentage is read as written, not rounded through a fraction: UBL
+/// reads the same digits.
+#[test]
+fn cii_reads_a_percentage_with_all_its_digits() {
+    let tiny = "0.0000000000000000000000000001";
+    let xml = with_text(
+        &write(&common::maximal(), Syntax::Cii).xml,
+        &[
+            "<ram:ApplicableHeaderTradeSettlement>",
+            "<ram:ApplicableTradeTax>",
+        ],
+        "ram:RateApplicablePercent",
+        tiny,
+    );
+    let got = en16931_formats::read(xml.as_bytes()).expect("readable");
+    assert_eq!(
+        got.invoice.vat_breakdown[0]
+            .rate
+            .map(en16931::Percentage::into_decimal),
+        Some(rust_decimal::Decimal::from_str_exact(tiny).expect("decimal"))
+    );
+}
+
+/// A UBL date with a time zone is an `xs:date` only with a valid offset: BT-2,
+/// read on its own path, and BT-9, read as every other date is.
+#[test]
+fn a_ubl_date_with_an_invalid_time_zone_is_reported() {
+    use en16931_formats::report::Kind;
+
+    let xml = write(&common::maximal(), Syntax::Ubl).xml;
+    for tag in ["IssueDate", "DueDate"] {
+        for (zone, malformed) in [
+            ("Z", false),
+            ("+14:00", false),
+            ("-05:30", false),
+            ("+99:99", true),
+            ("+ab:cd", true),
+            ("+14:30", true),
+        ] {
+            let open = format!("<cbc:{tag}>");
+            let start = xml.find(&open).expect(tag) + open.len();
+            let end = start + "2026-01-15".len();
+            let probe = format!("{}{zone}{}", &xml[..end], &xml[end..]);
+            let got = en16931_formats::read(probe.as_bytes()).expect("readable");
+            let reported = got
+                .entries_of(Kind::Malformed)
+                .any(|e| e.path.ends_with(tag));
+            assert_eq!(
+                reported,
+                malformed,
+                "{tag}: {}",
+                &probe[start..end + zone.len()]
+            );
+        }
+    }
+}
+
+/// Both readers hold a rate as the document states it, digits included.
+#[test]
+fn a_rate_reads_the_same_in_both_syntaxes() {
+    let stated = "19.00";
+    let cii = with_text(
+        &write(&common::maximal(), Syntax::Cii).xml,
+        &[
+            "<ram:ApplicableHeaderTradeSettlement>",
+            "<ram:ApplicableTradeTax>",
+        ],
+        "ram:RateApplicablePercent",
+        stated,
+    );
+    let ubl = with_text(
+        &write(&common::maximal(), Syntax::Ubl).xml,
+        &["<cac:TaxTotal>", "<cac:TaxSubtotal>", "<cac:TaxCategory>"],
+        "cbc:Percent",
+        stated,
+    );
+    for xml in [cii, ubl] {
+        let got = en16931_formats::read(xml.as_bytes()).expect("readable");
+        let rate = got.invoice.vat_breakdown[0].rate.expect("BT-119");
+        assert_eq!(rate.into_decimal().to_string(), stated);
+    }
 }
 
 /// A CII credit note is detected from the whole UNTDID 1001 credit-note list

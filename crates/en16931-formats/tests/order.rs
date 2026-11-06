@@ -1,8 +1,9 @@
 #![cfg(any(feature = "ubl", feature = "cii"))]
 
-//! The writer emits elements in UBL's schema order. A wrong order is
-//! schema-invalid and no Schematron rule reports it. The expected order is
-//! [`en16931_formats::ubl::order`], derived from published instances.
+//! The writers emit elements in schema order. A wrong order is schema-invalid
+//! and no Schematron rule reports it. The expected order is the generated
+//! table ([`en16931_formats::ubl::order`], [`en16931_formats::cii::order`]),
+//! each parent's whole `xsd:sequence`.
 
 #![cfg(feature = "ubl")]
 
@@ -51,7 +52,7 @@ macro_rules! syntaxes {
                     for k in &kids {
                         let Some(i) = expected.iter().position(|e| e == k) else {
                             panic!(
-                                "<{parent}> has child <{k}>, which no authority instance carries"
+                                "<{parent}> has child <{k}>, which its schema type does not declare"
                             );
                         };
                         if let Some((j, prev)) = last {
@@ -97,4 +98,27 @@ macro_rules! syntaxes {
 syntaxes! {
     "ubl" => ubl, Ubl,
     "cii" => cii, Cii,
+}
+
+/// `DocumentReferenceType` orders `cbc:DocumentTypeCode` before
+/// `cbc:DocumentType`, both before `cac:Attachment`; a majority vote over the
+/// published instances would put the code after the attachment.
+#[cfg(feature = "ubl")]
+#[test]
+fn a_document_reference_follows_its_schema_type() {
+    use en16931_formats::ubl::order::index_of;
+    let at = |c: &str| index_of("AdditionalDocumentReference", c).expect(c);
+    assert!(at("ID") < at("DocumentTypeCode"));
+    assert!(at("DocumentTypeCode") < at("DocumentType"));
+    assert!(at("DocumentType") < at("Attachment"));
+}
+
+/// A `cac:SubInvoiceLine` is `InvoiceLineType`: the same sequence as a line,
+/// not the few children published sub-lines happen to carry.
+#[cfg(feature = "ubl")]
+#[test]
+fn a_sub_line_has_a_lines_sequence() {
+    use en16931_formats::ubl::order::children_of;
+    assert_eq!(children_of("SubInvoiceLine"), children_of("InvoiceLine"));
+    assert!(children_of("SubInvoiceLine").is_some_and(|s| s.contains(&"InvoicePeriod")));
 }

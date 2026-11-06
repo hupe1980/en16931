@@ -10,7 +10,7 @@
 //! | Table | Crate | Source |
 //! |---|---|---|
 //! | [`codes`] | `en16931` | the code lists of CEN's and Peppol's Schematron |
-//! | [`order`] | `en16931-formats` | element order: the D16B schema for CII, the published instances for UBL |
+//! | [`order`] | `en16931-formats` | element order: each observed parent's sequence in the D16B and UBL 2.1 schemas |
 //! | [`prohibitions`] | `en16931-formats` | CEN's context-relative "shall not be used" syntax rules |
 //! | [`once`] | `en16931-formats` | the single-occurrence elements: the schemas and CEN's `count(…) <= 1` rules |
 //!

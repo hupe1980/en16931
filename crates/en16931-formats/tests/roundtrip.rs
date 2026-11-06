@@ -800,6 +800,373 @@ fn a_logistics_service_charge_is_a_charge_only_under_an_extension() {
     );
 }
 
+/// A grouping `cac:SubInvoiceLine` (one with its own child) round-trips
+/// without `cbc:InvoicedQuantity` or `cac:Price`: the writer omits them when
+/// `en16931::SubInvoiceLine::quantity` / `price` are `None`, and the reader
+/// puts both back absent, not as a stated zero. Every other term the child
+/// carries, from its note to its allowances, comes back as written.
+#[cfg(feature = "ubl")]
+#[test]
+fn a_grouping_sub_line_round_trips_without_quantity_or_price() {
+    use en16931_formats::Syntax;
+
+    let mut inv = common::maximal();
+    // A declared profile with no extension groups drops `cac:SubInvoiceLine`
+    // outright (`UBL-CR-646`); the Extension is the one that carries it.
+    inv.specification_id = Some(
+        en16931::profiles::XRECHNUNG_EXTENSION
+            .specification_id
+            .to_owned(),
+    );
+
+    let mut child = en16931::SubInvoiceLine::from(inv.lines[0].clone());
+    child.id = "1.1.".to_owned();
+    let group = en16931::SubInvoiceLine {
+        id: "1.".to_owned(),
+        quantity: None,
+        price: None,
+        children: vec![child.clone()],
+        ..child
+    };
+    inv.extensions.sub_invoice_lines = vec![(0, vec![group])];
+
+    let written = write(&inv, Syntax::Ubl);
+    assert!(
+        !written
+            .entries
+            .iter()
+            .any(|e| e.rule.as_deref() == Some("UBL-CR-646")),
+        "the Extension must carry the group: {:?}",
+        written.entries
+    );
+    let group_start = written
+        .xml
+        .find("<cbc:ID>1.</cbc:ID>")
+        .expect("group written");
+    let child_start = written.xml[group_start..]
+        .find("<cac:SubInvoiceLine>")
+        .expect("the child follows the group")
+        + group_start;
+    let group_xml = &written.xml[group_start..child_start];
+    assert!(
+        !group_xml.contains("InvoicedQuantity") && !group_xml.contains("<cac:Price>"),
+        "the group must not write BT-129 or BG-29:\n{group_xml}"
+    );
+
+    let back = read(&written.xml, Syntax::Ubl);
+    assert!(
+        !back
+            .entries
+            .iter()
+            .any(|e| e.level() == en16931::Severity::Fatal),
+        "{:?}",
+        back.entries
+    );
+    assert_eq!(
+        back.invoice.extensions.sub_invoice_lines,
+        inv.extensions.sub_invoice_lines
+    );
+}
+
+/// A sub-line carrying every term BG-DEX-01 defines (XRechnung 3.0.2, section
+/// 16) is written in full and reads back unchanged: note, BT-128, BT-132,
+/// BT-133, its period, allowances and charges included.
+#[cfg(feature = "ubl")]
+#[test]
+fn a_fully_filled_sub_line_round_trips() {
+    use en16931_formats::Syntax;
+
+    let mut inv = common::maximal();
+    inv.specification_id = Some(
+        en16931::profiles::XRECHNUNG_EXTENSION
+            .specification_id
+            .to_owned(),
+    );
+    let sub = en16931::SubInvoiceLine::from(inv.lines[0].clone());
+    assert!(
+        sub.note.is_some()
+            && sub.object_identifier.is_some()
+            && sub.order_line_reference.is_some()
+            && sub.accounting_reference.is_some()
+            && sub.period.is_some()
+            && !sub.allowances.is_empty()
+            && !sub.charges.is_empty()
+            && sub.quantity.is_some()
+            && sub.price.is_some()
+            && sub.vat.is_some(),
+        "the fixture fills every term: {sub:?}"
+    );
+    inv.extensions.sub_invoice_lines = vec![(0, vec![sub])];
+
+    let written = write(&inv, Syntax::Ubl);
+    let dropped: Vec<_> = written
+        .entries
+        .iter()
+        .filter(|e| e.path.contains("SubInvoiceLine"))
+        .collect();
+    assert!(dropped.is_empty(), "{dropped:?}");
+    let back = read(&written.xml, Syntax::Ubl);
+    assert_eq!(
+        back.invoice.extensions.sub_invoice_lines, inv.extensions.sub_invoice_lines,
+        "{}",
+        written.xml
+    );
+}
+
+/// A second `cbc:AccountingCost` in a sub-line is reported once and not read,
+/// as it is in a line: the single-occurrence table holds every once-only child
+/// of `InvoiceLineType`, not only those published sub-lines carry.
+#[cfg(feature = "ubl")]
+#[test]
+fn a_duplicate_in_a_sub_line_is_reported() {
+    use en16931_formats::Syntax;
+    use en16931_formats::report::Kind;
+
+    let mut inv = common::maximal();
+    inv.specification_id = Some(
+        en16931::profiles::XRECHNUNG_EXTENSION
+            .specification_id
+            .to_owned(),
+    );
+    let sub = en16931::SubInvoiceLine::from(inv.lines[0].clone());
+    let cost = sub
+        .accounting_reference
+        .clone()
+        .expect("the fixture sets BT-133");
+    inv.extensions.sub_invoice_lines = vec![(0, vec![sub])];
+    let xml = write(&inv, Syntax::Ubl).xml;
+    let start = xml.find("<cac:SubInvoiceLine>").expect("sub-line written");
+    let leaf = format!("<cbc:AccountingCost>{cost}</cbc:AccountingCost>");
+    let at = start + xml[start..].find(&leaf).expect("BT-133 written") + leaf.len();
+    let doubled = format!(
+        "{}<cbc:AccountingCost>DUP</cbc:AccountingCost>{}",
+        &xml[..at],
+        &xml[at..]
+    );
+
+    let back = read(&doubled, Syntax::Ubl);
+    let dups: Vec<_> = back
+        .entries
+        .iter()
+        .filter(|e| e.kind == Kind::Duplicate)
+        .map(|e| e.path.as_str())
+        .collect();
+    assert_eq!(dups, ["Invoice/InvoiceLine/SubInvoiceLine/AccountingCost"]);
+    assert_eq!(
+        back.invoice.extensions.sub_invoice_lines,
+        inv.extensions.sub_invoice_lines
+    );
+}
+
+/// A report entry counts occurrences as a model path does, from zero: the
+/// second line's absent quantity is the term `bt::Path` names for line 1.
+#[cfg(feature = "ubl")]
+#[test]
+fn an_entry_names_a_line_as_a_finding_does() {
+    use en16931::bt::{BtId, Group, Path};
+    use en16931_formats::Syntax;
+    use en16931_formats::report::Kind;
+
+    let xml = write(&common::maximal(), Syntax::Ubl).xml;
+    let second = xml
+        .match_indices("<cac:InvoiceLine>")
+        .nth(1)
+        .expect("two lines")
+        .0;
+    let q = second + xml[second..].find("<cbc:InvoicedQuantity").expect("BT-129");
+    let end = q
+        + xml[q..].find("</cbc:InvoicedQuantity>").expect("closed")
+        + "</cbc:InvoicedQuantity>".len();
+    let back = read(&format!("{}{}", &xml[..q], &xml[end..]), Syntax::Ubl);
+    let missing: Vec<_> = back
+        .entries
+        .iter()
+        .filter(|e| e.kind == Kind::Missing)
+        .filter_map(|e| e.term.clone())
+        .collect();
+    // The unit (BT-130) goes with its quantity element.
+    assert_eq!(
+        missing,
+        [129, 130].map(|bt| Path::at_term(Group::Line, 1, BtId(bt)).to_string())
+    );
+}
+
+/// Beneath a sub-line no line rule holds: an absent `cbc:LineExtensionAmount`
+/// is required by UBL's schema, and an absent `cbc:PriceAmount` in a
+/// `cac:Price` is missing, not empty.
+#[cfg(feature = "ubl")]
+#[test]
+fn a_sub_lines_absences_cite_the_schema() {
+    use en16931_formats::Syntax;
+
+    let mut inv = common::maximal();
+    inv.specification_id = Some(
+        en16931::profiles::XRECHNUNG_EXTENSION
+            .specification_id
+            .to_owned(),
+    );
+    inv.extensions.sub_invoice_lines =
+        vec![(0, vec![en16931::SubInvoiceLine::from(inv.lines[0].clone())])];
+    let xml = write(&inv, Syntax::Ubl).xml;
+    let start = xml.find("<cac:SubInvoiceLine>").expect("sub-line written");
+    let (head, sub) = xml.split_at(start);
+    let cut = |s: &str, open: &str, close: &str| {
+        let a = s.find(open).expect(open);
+        let b = a + s[a..].find(close).expect(close) + close.len();
+        format!("{}{}", &s[..a], &s[b..])
+    };
+    let sub = cut(
+        sub,
+        "<cbc:LineExtensionAmount",
+        "</cbc:LineExtensionAmount>",
+    );
+    let sub = cut(&sub, "<cbc:PriceAmount", "</cbc:PriceAmount>");
+    let back = read(&format!("{head}{sub}"), Syntax::Ubl);
+    let said = |term: &str| {
+        back.entries
+            .iter()
+            .find(|e| e.term.as_deref() == Some(term))
+            .map(|e| e.message.clone())
+            .unwrap_or_else(|| panic!("no entry for {term}: {:?}", back.entries))
+    };
+    assert!(
+        said("BG-25[0]/BG-DEX-01[0]/BT-131").contains("the UBL schema requires it"),
+        "{}",
+        said("BG-25[0]/BG-DEX-01[0]/BT-131")
+    );
+    assert!(said("BG-25[0]/BG-DEX-01[0]/BT-146").starts_with("missing"));
+}
+
+/// A `cac:SubCreditNoteLine` is reported as unmapped and never read as
+/// BG-DEX-01: no authority binds it.
+#[cfg(feature = "ubl")]
+#[test]
+fn a_sub_credit_note_line_is_reported_not_read() {
+    use en16931_formats::Syntax;
+
+    let xml = write(&common::maximal_credit_note(), Syntax::Ubl).xml;
+    let at = xml.find("</cac:CreditNoteLine>").expect("a line");
+    let probe = format!(
+        "{}<cac:SubCreditNoteLine><cbc:ID>1.1</cbc:ID></cac:SubCreditNoteLine>{}",
+        &xml[..at],
+        &xml[at..]
+    );
+    let back = read(&probe, Syntax::Ubl);
+    assert!(back.invoice.extensions.sub_invoice_lines.is_empty());
+    assert!(
+        back.entries
+            .iter()
+            .any(|e| e.path.ends_with("CreditNoteLine/SubCreditNoteLine")),
+        "{:?}",
+        back.entries
+    );
+}
+
+/// A credit note's line nests `cac:SubCreditNoteLine`, which no authority
+/// binds: its sub-lines are not written, and one note per line says so.
+#[cfg(feature = "ubl")]
+#[test]
+fn a_credit_notes_sub_lines_are_dropped_with_their_term() {
+    use en16931_formats::Syntax;
+    use en16931_formats::report::Kind;
+
+    let mut inv = common::maximal_credit_note();
+    inv.specification_id = Some(
+        en16931::profiles::XRECHNUNG_EXTENSION
+            .specification_id
+            .to_owned(),
+    );
+    let sub = en16931::SubInvoiceLine::from(inv.lines[0].clone());
+    inv.extensions.sub_invoice_lines = vec![(0, vec![sub])];
+    let written = write(&inv, Syntax::Ubl);
+    assert!(!written.xml.contains("SubInvoiceLine"), "{}", written.xml);
+    let notes: Vec<_> = written
+        .entries
+        .iter()
+        .filter(|e| e.kind == Kind::Dropped && e.path.contains("Sub"))
+        .map(|e| e.term.as_deref())
+        .collect();
+    assert_eq!(notes, [Some("BG-25[0]/BG-DEX-01")]);
+}
+
+/// A `cac:SubInvoiceLine` is UBL's `InvoiceLineType`, which has
+/// `cbc:InvoicedQuantity` only: a `cbc:CreditedQuantity` in it is refused by
+/// the schema (a credit note nests `cac:SubCreditNoteLine`), so the reader
+/// reports it rather than reading it as if it were allowed.
+#[cfg(feature = "ubl")]
+#[test]
+fn a_credited_quantity_in_a_sub_invoice_line_is_reported() {
+    use en16931_formats::Syntax;
+
+    let xml = r#"<CreditNote xmlns="urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2"
+        xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+        xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+      <cac:LegalMonetaryTotal>
+        <cbc:LineExtensionAmount currencyID="EUR">300.00</cbc:LineExtensionAmount>
+        <cbc:TaxExclusiveAmount currencyID="EUR">300.00</cbc:TaxExclusiveAmount>
+        <cbc:TaxInclusiveAmount currencyID="EUR">357.00</cbc:TaxInclusiveAmount>
+        <cbc:PayableAmount currencyID="EUR">357.00</cbc:PayableAmount>
+      </cac:LegalMonetaryTotal>
+      <cac:CreditNoteLine>
+        <cbc:ID>1</cbc:ID>
+        <cbc:CreditedQuantity unitCode="C62">3</cbc:CreditedQuantity>
+        <cbc:LineExtensionAmount currencyID="EUR">300.00</cbc:LineExtensionAmount>
+        <cac:Item>
+          <cbc:Name>Widget</cbc:Name>
+          <cac:ClassifiedTaxCategory>
+            <cbc:ID>S</cbc:ID>
+            <cbc:Percent>19</cbc:Percent>
+            <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>
+          </cac:ClassifiedTaxCategory>
+        </cac:Item>
+        <cac:Price>
+          <cbc:PriceAmount currencyID="EUR">100.00</cbc:PriceAmount>
+        </cac:Price>
+        <cac:SubInvoiceLine>
+          <cbc:ID>1.</cbc:ID>
+          <cbc:CreditedQuantity unitCode="C62">3</cbc:CreditedQuantity>
+          <cbc:LineExtensionAmount currencyID="EUR">300.00</cbc:LineExtensionAmount>
+          <cac:Item>
+            <cbc:Name>Widget</cbc:Name>
+            <cac:ClassifiedTaxCategory>
+              <cbc:ID>S</cbc:ID>
+              <cbc:Percent>19</cbc:Percent>
+              <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>
+            </cac:ClassifiedTaxCategory>
+          </cac:Item>
+          <cac:Price>
+            <cbc:PriceAmount currencyID="EUR">100.00</cbc:PriceAmount>
+          </cac:Price>
+        </cac:SubInvoiceLine>
+      </cac:CreditNoteLine>
+    </CreditNote>"#;
+
+    let back = read(xml, Syntax::Ubl);
+    let schema: Vec<_> = back
+        .entries
+        .iter()
+        .filter(|e| e.kind == Kind::Schema)
+        .map(|e| (e.path.as_str(), e.term.as_deref()))
+        .collect();
+    assert_eq!(
+        schema,
+        // Two schema facts: the element under a credit note's line, and its
+        // quantity element.
+        [
+            (
+                "CreditNote/CreditNoteLine/SubInvoiceLine",
+                Some("BG-25[0]/BG-DEX-01[0]")
+            ),
+            (
+                "CreditNote/CreditNoteLine/SubInvoiceLine/CreditedQuantity",
+                Some("BG-25[0]/BG-DEX-01[0]/BT-129")
+            ),
+        ],
+        "{:?}",
+        back.entries
+    );
+}
+
 // ── Write, read back: the invoice is unchanged or something says why ───────────
 
 /// The extreme amounts, such as `InvoiceAmount::MIN`, survive both syntaxes.

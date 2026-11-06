@@ -7,7 +7,14 @@ all-features = true   # the widest graph this workspace can produce
 
 [advisories]
 version = 2
-ignore  = []
+ignore  = [
+    # `astral-tokio-tar` is unmaintained. Only `testcontainers` (a dev-dependency
+    # of en16931-formats, for the veraPDF check in tests/zugferd_embed.rs) pulls
+    # it in; nothing that ships depends on it, and 0.28.0 is the latest
+    # testcontainers. Mirrored in .cargo/audit.toml. Drop both once a release
+    # moves off it.
+    { id = "RUSTSEC-2026-0440", reason = "unmaintained, dev-only via testcontainers 0.28" },
+]
 
 # ── Licence policy ───────────────────────────────────────────────────────────
 #
