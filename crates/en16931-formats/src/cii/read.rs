@@ -940,19 +940,36 @@ impl Reader {
         }
         // The mandate and creditor identifier arrive from two different
         // aggregates and belong to one `DirectDebit`, so they are joined last.
+        // Beside a card or an account read first, they are reported.
         if creditor_id.is_some() || mandate.is_some() {
-            let existing = match payment.means.take() {
-                Some(PaymentMeans::DirectDebit(d)) => d,
-                other => {
-                    payment.means = other;
-                    DirectDebit::default()
+            match &mut payment.means {
+                Some(PaymentMeans::DirectDebit(d)) => {
+                    d.mandate_reference = mandate.or(d.mandate_reference.take());
+                    d.creditor_identifier = creditor_id.or(d.creditor_identifier.take());
                 }
-            };
-            payment.means = Some(PaymentMeans::DirectDebit(DirectDebit {
-                mandate_reference: mandate.or(existing.mandate_reference),
-                creditor_identifier: creditor_id.or(existing.creditor_identifier),
-                debited_account: existing.debited_account,
-            }));
+                slot @ None => {
+                    *slot = Some(PaymentMeans::DirectDebit(DirectDebit {
+                        mandate_reference: mandate,
+                        creditor_identifier: creditor_id,
+                        debited_account: None,
+                    }));
+                }
+                Some(_) => {
+                    if mandate.is_some() {
+                        self.not_held(
+                            "SpecifiedTradePaymentTerms/DirectDebitMandateID",
+                            "a mandate beside a card or an account; BG-16 holds one kind",
+                        );
+                    }
+                    if creditor_id.is_some() {
+                        self.not_held(
+                            "ApplicableHeaderTradeSettlement/CreditorReferenceID",
+                            "a creditor identifier beside a card or an account; BG-16 holds \
+                             one kind",
+                        );
+                    }
+                }
+            }
             have_payment = true;
         }
         if have_payment {
@@ -960,11 +977,26 @@ impl Reader {
         }
     }
 
+    /// `means` into `p` unless `p` already holds a kind of means; then reported.
+    fn first_means(
+        &mut self,
+        p: &mut PaymentInstructions,
+        means: PaymentMeans,
+        path: &str,
+        message: &str,
+    ) {
+        if p.means.is_none() {
+            p.means = Some(means);
+        } else {
+            self.not_held(path, message);
+        }
+    }
+
     fn payment_means(&mut self, p: &mut PaymentInstructions, n: Node<'_, '_>) {
         // Called once per `ram:SpecifiedTradeSettlementPaymentMeans`; several
         // are one BG-16 with several BG-17 accounts (0..1 per element), so
         // everything accumulates into `p`.
-        let mut transfers: Vec<CreditTransfer> = Vec::new();
+        let mut held = false;
         for c in kids(n) {
             match name(c) {
                 "TypeCode" => {
@@ -977,43 +1009,64 @@ impl Reader {
                         p.means_text = non_empty(own_text(c));
                     }
                 }
-                "ApplicableTradeSettlementFinancialCard" => {
-                    p.means = Some(PaymentMeans::Card(PaymentCard {
+                // The model holds one of BG-17/18/19: the first kind read
+                // wins and a later one is reported, as in the UBL reader.
+                "ApplicableTradeSettlementFinancialCard" => self.first_means(
+                    p,
+                    PaymentMeans::Card(PaymentCard {
                         primary_account_number: text(c, "ID"),
                         holder_name: text(c, "CardholderName"),
-                    }));
-                }
-                "PayerPartyDebtorFinancialAccount" => {
-                    p.means = Some(PaymentMeans::DirectDebit(DirectDebit {
+                    }),
+                    "SpecifiedTradeSettlementPaymentMeans/ApplicableTradeSettlementFinancialCard",
+                    "a card beside another payment means; BG-16 holds one kind",
+                ),
+                "PayerPartyDebtorFinancialAccount" => self.first_means(
+                    p,
+                    PaymentMeans::DirectDebit(DirectDebit {
                         debited_account: text(c, "IBANID").or_else(|| text(c, "ProprietaryID")),
                         ..DirectDebit::default()
-                    }));
+                    }),
+                    "SpecifiedTradeSettlementPaymentMeans/PayerPartyDebtorFinancialAccount",
+                    "a debited account beside another payment means; BG-16 holds one kind",
+                ),
+                "PayeePartyCreditorFinancialAccount" => {
+                    let t = CreditTransfer {
+                        account_identifier: text(c, "IBANID").or_else(|| text(c, "ProprietaryID")),
+                        account_name: text(c, "AccountName"),
+                        provider_identifier: None,
+                    };
+                    // An account joins the transfers read before it; beside a
+                    // card or mandate read first it is reported, as in UBL.
+                    held = match &mut p.means {
+                        Some(PaymentMeans::CreditTransfer(existing)) => {
+                            existing.push(t);
+                            true
+                        }
+                        slot @ None => {
+                            *slot = Some(PaymentMeans::CreditTransfer(vec![t]));
+                            true
+                        }
+                        Some(_) => {
+                            self.not_held(
+                                "SpecifiedTradeSettlementPaymentMeans/PayeePartyCreditorFinancialAccount",
+                                "an account beside a card or mandate; BG-16 holds one kind",
+                            );
+                            false
+                        }
+                    };
                 }
-                "PayeePartyCreditorFinancialAccount" => transfers.push(CreditTransfer {
-                    account_identifier: text(c, "IBANID").or_else(|| text(c, "ProprietaryID")),
-                    account_name: text(c, "AccountName"),
-                    provider_identifier: None,
-                }),
                 "PayeeSpecifiedCreditorFinancialInstitution" => {
                     // BT-86 arrives *after* the account it belongs to, as a
-                    // sibling rather than a child, so it is attached here.
-                    if let Some(t) = transfers.last_mut() {
+                    // sibling rather than a child, so it is attached here, to
+                    // that account only when it was held.
+                    if let (true, Some(PaymentMeans::CreditTransfer(transfers))) =
+                        (held, &mut p.means)
+                        && let Some(t) = transfers.last_mut()
+                    {
                         t.provider_identifier = text(c, "BICID");
                     }
                 }
                 other => self.push_path("SpecifiedTradeSettlementPaymentMeans", other),
-            }
-        }
-        if !transfers.is_empty() {
-            match &mut p.means {
-                Some(PaymentMeans::CreditTransfer(existing)) => existing.extend(transfers),
-                slot @ None => *slot = Some(PaymentMeans::CreditTransfer(transfers)),
-                // An account on top of a card or mandate cannot be
-                // represented; reported.
-                Some(_) => self.not_held(
-                    "SpecifiedTradeSettlementPaymentMeans/PayeePartyCreditorFinancialAccount",
-                    "an account beside a card or mandate; BG-16 holds one kind",
-                ),
             }
         }
     }
