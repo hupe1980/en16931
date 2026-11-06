@@ -59,6 +59,13 @@ Before 1.0, a minor release may break; every break is listed here.
 - A `cbc:CreditedQuantity` inside a `cac:SubInvoiceLine` is reported as
   `Schema`: UBL's `InvoiceLineType` has `cbc:InvoicedQuantity` only, and a
   credit note nests `cac:SubCreditNoteLine`.
+- Both readers refuse `1e1` and `1_000` as quantities, prices and rates:
+  `rust_decimal` reads them, `xs:decimal` does not. A value with more decimal
+  places than a `Decimal` holds is `Malformed` instead of rounded.
+- The CII reader keeps every digit of a percentage, as the UBL reader does; it
+  divided by 100 and multiplied back, which rounds a rate below 10^-26 to zero.
+- The UBL reader reports a date whose time zone is not an `xs:date` offset
+  (`+99:99`, `+14:30`) instead of dropping the zone.
 
 ## [0.9.0] — 2026-11-04
 

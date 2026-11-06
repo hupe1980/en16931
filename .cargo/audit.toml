@@ -1,0 +1,6 @@
+# cargo-audit configuration. Keep in step with `[advisories] ignore` in
+# deny.toml, which gives the reason for each entry.
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0440", # astral-tokio-tar unmaintained; dev-only via testcontainers 0.28
+]
