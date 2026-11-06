@@ -20,6 +20,14 @@ Before 1.0, a minor release may break; every break is listed here.
   neither payment terms (BT-20) nor a due date (BT-9):
   `ram:SpecifiedTradePaymentTerms`, which carries `ram:DirectDebitMandateID`,
   was written only for those two. A mandate reference alone now writes it.
+- The CII reader keeps the first card, debited account or creditor account it
+  reads, as the UBL reader does, and reports every later one as `Unmapped`.
+  A mandate reference (BT-89) or creditor identifier (BT-90) joins a direct
+  debit and is reported beside a card or a credit transfer. The reader used to
+  replace the first one silently: a card followed by a debited account read
+  as a direct debit, a mandate beside a credit transfer turned it into a
+  direct debit, and a creditor account followed by a card in the same element
+  read as a card.
 
 ## [0.9.0] — 2026-11-04
 
