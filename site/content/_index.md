@@ -8,7 +8,7 @@ lede = "Validate the invoice, not the document. Findings point at BT-151 on line
 stats = [
   { n = "334", k = "rules registered" },
   { n = "277", k = "rules exercised by a failing fixture" },
-  { n = "1 025", k = "CEN unit-test assertions run, none disagreeing" },
+  { n = "1 027", k = "CEN unit-test assertions run, none disagreeing" },
   { n = "500", k = "published documents read, written and crossed" },
 ]
 +++
@@ -49,7 +49,7 @@ with the remaining 277 exercised by their own failing fixtures.
 
 **Measured against the authorities.** Code lists, element order, prohibitions
 and severities are generated from or checked against CEN's, KoSIT's and
-OpenPeppol's artefacts at pinned releases. 1 025 CEN unit-test assertions run
+OpenPeppol's artefacts at pinned releases. 1 027 CEN unit-test assertions run
 with no disagreement (11 divergences declared), 381 KoSIT mutations agree, and
 59 published invoices validate. See [conformance](@/docs/conformance.md).
 

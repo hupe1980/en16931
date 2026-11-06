@@ -29,23 +29,38 @@ pub(crate) const REQUIRED_BY: &[(&str, &str)] = &[
     ("BT-151", "BR-CO-04"),
 ];
 
-/// The rule requiring the term a path like `BG-23[1]/BT-117` ends in.
-pub(crate) fn rule_for(term: &str) -> Option<&'static str> {
+/// The rule requiring the term a path like `BG-23[0]/BT-117` ends in.
+fn rule_for(term: &str) -> Option<&'static str> {
     let bt = term.rsplit('/').next().unwrap_or(term);
     REQUIRED_BY.iter().find(|(t, _)| *t == bt).map(|(_, r)| *r)
 }
 
-/// Whether a document declaring `bt24` must carry `term`: its rule runs under
-/// the declared profile. An unknown or absent declaration is held to the core,
-/// as `receive` holds it (every core rule runs).
-pub(crate) fn is_required(bt24: Option<&str>, term: &str) -> bool {
-    let Some(rule) = rule_for(term) else {
-        return true;
+/// Why a reader reports `term`, a path like `BG-23[0]/BT-117`, as
+/// [`Kind::Missing`](crate::report::Kind::Missing) when it is absent; `None`
+/// when nothing requires it there.
+///
+/// A rule requires its term only when the declared profile runs it; an
+/// unknown or absent declaration is held to the core, as `receive` holds it.
+/// Beneath a sub-line (`BG-DEX-01`) no line rule applies: CEN binds `BR-21` …
+/// `BR-26`, `BR-41`, `BR-43` and `BR-CO-04` to `cac:InvoiceLine |
+/// cac:CreditNoteLine` and its allowances. There UBL's schema still requires
+/// BT-126, BT-131 and an allowance's amount; BT-129, BT-130, BT-146 and
+/// BT-151 are optional in the model.
+pub(crate) fn requirement(bt24: Option<&str>, term: &str) -> Option<String> {
+    let rule = rule_for(term);
+    if term.contains("BG-DEX-01[") {
+        return rule
+            .filter(|r| matches!(*r, "BR-21" | "BR-24" | "BR-41" | "BR-43"))
+            .map(|_| "the UBL schema requires it".to_owned());
+    }
+    let Some(rule) = rule else {
+        return Some("the model requires it".to_owned());
     };
-    match en16931::profiles::classify(bt24) {
+    let runs = match en16931::profiles::classify(bt24) {
         Declaration::Known(p) => p.core.runs(rule),
         _ => true,
-    }
+    };
+    runs.then(|| format!("{rule} requires it"))
 }
 
 #[cfg(test)]
@@ -72,11 +87,30 @@ mod tests {
     #[test]
     fn minimum_lawfully_lacks_bt_106_and_the_core_does_not() {
         let minimum = Some(en16931::profiles::ZUGFERD_MINIMUM_ID);
-        assert!(!is_required(minimum, "BG-22/BT-106"));
-        assert!(is_required(None, "BG-22/BT-106"));
-        assert!(is_required(
-            Some("urn:cen.eu:en16931:2017"),
-            "BG-23[1]/BT-117"
-        ));
+        assert_eq!(requirement(minimum, "BG-22/BT-106"), None);
+        assert_eq!(
+            requirement(None, "BG-22/BT-106").as_deref(),
+            Some("BR-12 requires it")
+        );
+        assert!(requirement(Some("urn:cen.eu:en16931:2017"), "BG-23[0]/BT-117").is_some());
+    }
+
+    #[test]
+    fn no_line_rule_holds_beneath_a_sub_line() {
+        let sub = |t: &str| requirement(None, &format!("BG-25[0]/BG-DEX-01[1]/{t}"));
+        for optional in ["BT-129", "BT-130", "BT-146", "BT-151"] {
+            assert_eq!(sub(optional), None, "{optional}");
+        }
+        for schema in ["BT-126", "BT-131", "BG-27[0]/BT-136", "BG-28[0]/BT-141"] {
+            assert_eq!(
+                sub(schema).as_deref(),
+                Some("the UBL schema requires it"),
+                "{schema}"
+            );
+        }
+        assert_eq!(
+            requirement(None, "BG-25[0]/BT-129").as_deref(),
+            Some("BR-22 requires it")
+        );
     }
 }

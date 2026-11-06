@@ -3,9 +3,10 @@
 //!
 //! Two sources:
 //!
-//! * The schemas: for each `(parent, child)` pair the authorities' instances use,
-//!   the child's `maxOccurs` in the parent's type (CII: CEN's uncoupled D16B
-//!   subset schema; UBL: OASIS UBL 2.1). The row's rule cell is empty.
+//! * The schemas: for each parent element the authorities' instances show,
+//!   every child its type declares with `maxOccurs="1"` (CII: CEN's uncoupled
+//!   D16B subset schema; UBL: OASIS UBL 2.1), whether or not an instance
+//!   carries it. The row's rule cell is empty.
 //! * CEN's syntax rules from the preprocessed Schematron that count (e.g.
 //!   `UBL-SR-09`; see [`clauses`] for the shapes understood). A path is
 //!   a chain of child steps, optionally led by `//`, each with at most one
@@ -63,11 +64,12 @@ fn local(name: &str) -> &str {
     name.rsplit(':').next().unwrap_or(name)
 }
 
-/// Element name → the types it is declared with; type → child → allowed once.
+/// Element name → the types it is declared with; type → its children in
+/// sequence order, each with whether it is allowed once.
 #[derive(Default)]
 struct Model {
     element_types: BTreeMap<String, BTreeSet<String>>,
-    types: BTreeMap<String, BTreeMap<String, bool>>,
+    types: BTreeMap<String, Vec<(String, bool)>>,
 }
 
 impl Model {
@@ -104,7 +106,7 @@ impl Model {
     }
 
     fn complex_type(&mut self, ty: &str, node: roxmltree::Node<'_, '_>) {
-        let mut children: BTreeMap<String, bool> = BTreeMap::new();
+        let mut children: Vec<(String, bool)> = Vec::new();
         for d in node
             .descendants()
             .filter(|d| d.tag_name().namespace() == Some(XS) && d.tag_name().name() == "element")
@@ -132,10 +134,10 @@ impl Model {
                     .take_while(|a| a.id() != node.id())
                     .any(repeated);
             // The same name twice in one content model is a repetition.
-            children
-                .entry(child.to_owned())
-                .and_modify(|o| *o = false)
-                .or_insert(once);
+            match children.iter_mut().find(|(c, _)| c == child) {
+                Some((_, o)) => *o = false,
+                None => children.push((child.to_owned(), once)),
+            }
         }
         self.types.insert(ty.to_owned(), children);
     }
@@ -148,10 +150,54 @@ impl Model {
         };
         let verdicts: Vec<bool> = types
             .iter()
-            .filter_map(|t| self.types.get(t).and_then(|c| c.get(child)).copied())
+            .filter_map(|t| {
+                self.types
+                    .get(t)
+                    .and_then(|c| c.iter().find(|(n, _)| n == child))
+                    .map(|(_, o)| *o)
+            })
             .collect();
         !verdicts.is_empty() && verdicts.iter().all(|o| *o)
     }
+
+    /// Every child any of `parent`'s types declares.
+    fn children(&self, parent: &str) -> BTreeSet<&str> {
+        self.element_types
+            .get(parent)
+            .into_iter()
+            .flatten()
+            .filter_map(|t| self.types.get(t))
+            .flatten()
+            .map(|(c, _)| c.as_str())
+            .collect()
+    }
+}
+
+/// Element name → the child sequence of its type, for every element declared
+/// with a complex type that has children.
+///
+/// # Errors
+///
+/// A schema is unreadable, or one element name is declared with two types
+/// whose sequences differ.
+pub fn sequences(syntax: Syntax, spec: &Path) -> Result<BTreeMap<String, Vec<String>>, String> {
+    let model = Model::read(&schemas(syntax, spec)?)?;
+    let mut out = BTreeMap::new();
+    for (element, types) in &model.element_types {
+        let mut seqs = types
+            .iter()
+            .filter_map(|t| model.types.get(t))
+            .filter(|c| !c.is_empty())
+            .map(|c| c.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>());
+        let Some(first) = seqs.next() else { continue };
+        if seqs.any(|s| s != first) {
+            return Err(format!(
+                "<{element}> is declared with two types whose sequences differ"
+            ));
+        }
+        out.insert(element.clone(), first);
+    }
+    Ok(out)
 }
 
 /// Every `(parent, child)` pair the authorities' instances use.
@@ -510,15 +556,22 @@ pub fn derive(
 ) -> Result<Generated, String> {
     let model = Model::read(&schemas(syntax, spec)?)?;
     let mut rows: BTreeSet<Row> = BTreeSet::new();
-    let pairs = observed(syntax, files);
-    for (parent, child) in &pairs {
-        if model.once(parent, child) {
-            rows.insert((
-                String::new(),
-                "fatal".to_owned(),
-                parent.clone(),
-                child.clone(),
-            ));
+    // Every child the type declares, not only those an instance carries: a
+    // second occurrence the corpus never shows is still a second occurrence.
+    let parents: BTreeSet<String> = observed(syntax, files)
+        .into_iter()
+        .map(|(parent, _)| parent)
+        .collect();
+    for parent in &parents {
+        for child in model.children(parent) {
+            if model.once(parent, child) {
+                rows.insert((
+                    String::new(),
+                    "fatal".to_owned(),
+                    parent.clone(),
+                    child.to_owned(),
+                ));
+            }
         }
     }
     let schema_rows = rows.len();
@@ -542,7 +595,7 @@ pub fn derive(
         schema_rows,
         rule_count,
         &unchecked,
-        pairs.len(),
+        parents.len(),
         root,
     ))
 }
@@ -553,7 +606,7 @@ fn render(
     schema_rows: usize,
     rule_rows: usize,
     unchecked: &[(String, String)],
-    pairs: usize,
+    parents: usize,
     root: &Path,
 ) -> Generated {
     let (label, module, schema) = match syntax {
@@ -582,9 +635,9 @@ fn render(
             "//! A reader reads the **first** occurrence of each element below and reports\n\
              //! every further one; nothing of a second occurrence reaches the model.\n\
              //!\n\
-             //! * {schema_rows} rows come from the schema: of the {pairs} `(parent, child)`\n\
-             //!   pairs the authorities' instances use, those whose child {schema} declare\n\
-             //!   `maxOccurs=\"1\"` in the parent's type. Their rule cell is empty.\n\
+             //! * {schema_rows} rows come from the schema: for each of the {parents} parent\n\
+             //!   elements the authorities' instances show, every child {schema}\n\
+             //!   declare `maxOccurs=\"1\"` in its type. Their rule cell is empty.\n\
              //! * {rule_rows} rows come from CEN's `count(…) <= 1` syntax rules, with the\n\
              //!   level CEN publishes for each — and, where KoSIT replaces a CEN rule whose\n\
              //!   context is wrong, from KoSIT's replacement.\n\

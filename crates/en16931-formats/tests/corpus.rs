@@ -205,9 +205,13 @@ syntaxes! {
     //
     // `CreditorReferenceID` and `DirectDebitMandateID`: CEN's example 5 carries
     // BT-90 and BT-89 beside its credit transfer (BT-81 `58`), read first.
+    //
+    // `PayeeSpecifiedCreditorFinancialInstitution`: KoSIT's BR-DE-25 instance
+    // carries BT-86 beside a direct debit, where no credit transfer holds it.
     "cii" => (cii, Cii, 100, &[
         "SpecifiedTradeSettlementPaymentMeans/PayerSpecifiedDebtorFinancialInstitution",
         "SpecifiedTradeSettlementPaymentMeans/PayeePartyCreditorFinancialAccount",
+        "SpecifiedTradeSettlementPaymentMeans/PayeeSpecifiedCreditorFinancialInstitution",
         "SpecifiedTradeSettlementPaymentMeans/PayerPartyDebtorFinancialAccount",
         "ApplicableHeaderTradeSettlement/CreditorReferenceID",
         "SpecifiedTradePaymentTerms/DirectDebitMandateID",

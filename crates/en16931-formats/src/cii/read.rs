@@ -202,10 +202,8 @@ impl Reader {
 
     /// A percentage in `want` (`19` is 19 %), recording text that is not one.
     fn percent(&mut self, n: Node<'_, '_>, want: &str, term: Term<'_>) -> Option<Percentage> {
-        // Read as written, as the UBL reader does: dividing by 100 and
-        // multiplying back rounds a rate below 10^-26 to zero.
-        self.decimal(n, want, term)
-            .map(|d| Percentage::new(d.normalize()))
+        // As written, digits included, as the UBL reader reads it.
+        self.decimal(n, want, term).map(Percentage::new)
     }
 
     /// Record that `term`, which the model requires, is not in the group `at`.
@@ -257,13 +255,10 @@ impl Reader {
 
     /// [`Self::missing`] at a path, for a group that is itself absent.
     fn missing_at(&mut self, path: String, term: Term<'_>, what: &str) {
-        if !crate::required::is_required(self.bt24.as_deref(), term.term()) {
+        let Some(why) = crate::required::requirement(self.bt24.as_deref(), &term.to_string())
+        else {
             return;
-        }
-        let why = crate::required::rule_for(term.term()).map_or_else(
-            || "the model requires it".to_owned(),
-            |r| format!("{r} requires it"),
-        );
+        };
         self.entries.push(
             Entry::new(
                 Kind::Missing,
@@ -462,7 +457,7 @@ impl Reader {
         for c in kids(n) {
             match name(c) {
                 "IncludedSupplyChainTradeLineItem" => {
-                    let line = self.line(c, inv.lines.len() + 1);
+                    let line = self.line(c, inv.lines.len());
                     inv.lines.push(line);
                 }
                 "ApplicableHeaderTradeAgreement" => self.agreement(inv, c),
@@ -541,7 +536,7 @@ impl Reader {
                         }
                     },
                 )
-                .term(format!("BG-24[{}]", inv.attachments.len() + 1));
+                .term(format!("BG-24[{}]", inv.attachments.len()));
                 self.entries.push(match other {
                     Some(v) => e.value(v.to_owned()),
                     None => e,
@@ -553,7 +548,7 @@ impl Reader {
             let term = match text(n, "TypeCode").as_deref() {
                 Some("50") => "BT-17".to_owned(),
                 Some("130") => "BT-18".to_owned(),
-                _ => format!("BG-24[{}]/BT-122", inv.attachments.len() + 1),
+                _ => format!("BG-24[{}]/BT-122", inv.attachments.len()),
             };
             self.missing(
                 n,
@@ -787,7 +782,7 @@ impl Reader {
                             Some(_) => {}
                         }
                     }
-                    let g = format!("BG-23[{}]", inv.vat_breakdown.len() + 1);
+                    let g = format!("BG-23[{}]", inv.vat_breakdown.len());
                     inv.vat_breakdown.push(VatBreakdown {
                         taxable_amount: self.required_amount(
                             c,
@@ -820,12 +815,12 @@ impl Reader {
                     let is_charge = self.is_charge(c, "SpecifiedTradeAllowanceCharge");
                     let (g, [amount, base, pct, cat]) = if is_charge {
                         (
-                            format!("BG-21[{}]", inv.charges.len() + 1),
+                            format!("BG-21[{}]", inv.charges.len()),
                             ["BT-99", "BT-100", "BT-101", "BT-102"],
                         )
                     } else {
                         (
-                            format!("BG-20[{}]", inv.allowances.len() + 1),
+                            format!("BG-20[{}]", inv.allowances.len()),
                             ["BT-92", "BT-93", "BT-94", "BT-95"],
                         )
                     };
@@ -868,7 +863,7 @@ impl Reader {
                         s.contains("#conformant#") || s.contains(":conformant:")
                     }) =>
                 {
-                    let g = format!("BG-21[{}]", inv.charges.len() + 1);
+                    let g = format!("BG-21[{}]", inv.charges.len());
                     let vat = self.required_trade_tax(
                         c,
                         "AppliedTradeTax",
@@ -916,7 +911,7 @@ impl Reader {
                 }
                 "InvoiceReferencedDocument" => {
                     if text(c, "IssuerAssignedID").is_none() {
-                        let term = format!("BG-3[{}]/BT-25", inv.preceding_invoices.len() + 1);
+                        let term = format!("BG-3[{}]/BT-25", inv.preceding_invoices.len());
                         self.missing(c, Term::new("", &term), "the preceding invoice reference");
                     }
                     inv.preceding_invoices.push(PrecedingInvoice {
@@ -1064,6 +1059,11 @@ impl Reader {
                         && let Some(t) = transfers.last_mut()
                     {
                         t.provider_identifier = text(c, "BICID");
+                    } else if text(c, "BICID").is_some() {
+                        self.not_held(
+                            "SpecifiedTradeSettlementPaymentMeans/PayeeSpecifiedCreditorFinancialInstitution",
+                            "a payment service provider (BT-86) with no credit-transfer account held beside it; BG-16 holds one kind",
+                        );
                     }
                 }
                 other => self.push_path("SpecifiedTradeSettlementPaymentMeans", other),
@@ -1236,7 +1236,7 @@ impl Reader {
     // ---- lines ----------------------------------------------------------
 
     #[allow(clippy::too_many_lines)]
-    /// One line; `index` is its 1-based position, passed in rather than
+    /// One line; `index` is its zero-based position, passed in rather than
     /// counted, which would make a document quadratic.
     fn line(&mut self, n: Node<'_, '_>, index: usize) -> InvoiceLine {
         let mut l = InvoiceLine {
@@ -1445,12 +1445,12 @@ impl Reader {
                     );
                     let (sub, [amount, base, pct]) = if is_charge {
                         (
-                            format!("{group}/BG-28[{}]", l.charges.len() + 1),
+                            format!("{group}/BG-28[{}]", l.charges.len()),
                             ["BT-141", "BT-142", "BT-143"],
                         )
                     } else {
                         (
-                            format!("{group}/BG-27[{}]", l.allowances.len() + 1),
+                            format!("{group}/BG-27[{}]", l.allowances.len()),
                             ["BT-136", "BT-137", "BT-138"],
                         )
                     };

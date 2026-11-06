@@ -166,30 +166,20 @@ pub(crate) fn child_text(n: Node<'_, '_>, want: &str) -> Option<String> {
     kid(n, want).and_then(text)
 }
 
-/// `text` as a [`rust_decimal::Decimal`] when it is an `xs:decimal`: an
-/// optional sign, then digits with at most one point, at least one digit.
-/// `rust_decimal` alone also reads `1e3` and `1_000`, which the schemas
-/// refuse, and rounds a fraction beyond its 28 places without saying so.
+/// `text` as a [`rust_decimal::Decimal`] when it is an `xs:decimal` a decimal
+/// holds exactly ([`en16931::numeric::parse_decimal`]); the error is the
+/// entry's message.
 pub(crate) fn xs_decimal(text: &str) -> Result<rust_decimal::Decimal, String> {
-    let unsigned = text.strip_prefix(['+', '-']).unwrap_or(text);
-    let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
-    let digits = |part: &str| part.bytes().all(|b| b.is_ascii_digit());
-    if (whole.is_empty() && fraction.is_empty()) || !digits(whole) || !digits(fraction) {
-        return Err("not an xs:decimal".to_owned());
-    }
-    let parsed: rust_decimal::Decimal = text.parse().map_err(|e: rust_decimal::Error| {
-        format!("not a decimal number the model can hold: {e}")
-    })?;
-    let places = fraction.trim_end_matches('0').len();
-    if u32::try_from(places).map_or(true, |places| places > parsed.scale()) {
-        return Err(format!(
-            "{places} decimal places, more than a decimal holds beside its integer digits"
-        ));
-    }
-    Ok(parsed)
+    en16931::numeric::parse_decimal(text).map_err(|e| match e {
+        en16931::ParseDecimalError::Malformed { .. } => "not an xs:decimal".to_owned(),
+        en16931::ParseDecimalError::OutOfRange { .. } => {
+            "outside the range a decimal holds".to_owned()
+        }
+        _ => "more digits than a decimal holds exactly; not rounded".to_owned(),
+    })
 }
 
-/// A business-term path, `BG-23[1]` + `BT-117`, formatted only when an entry
+/// A business-term path, `BG-23[0]` + `BT-117`, formatted only when an entry
 /// is recorded (eager formatting at every field read cost ~10 % read time).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Term<'a> {
@@ -201,11 +191,6 @@ impl<'a> Term<'a> {
     /// `term` within `group`; an empty group is the term alone.
     pub(crate) const fn new(group: &'a str, term: &'a str) -> Self {
         Self { group, term }
-    }
-
-    /// The last part, `BT-117`.
-    pub(crate) const fn term(self) -> &'a str {
-        self.term
     }
 }
 

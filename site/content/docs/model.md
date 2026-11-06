@@ -22,7 +22,9 @@ money.
 
 **Rounding is never implicit.** An amount that does not fit two decimals is an
 error, not a rounding opportunity. Whoever produced the third decimal knows what
-should happen to it; the type does not.
+should happen to it; the type does not. Every number is read by one rule,
+`numeric::parse_decimal`: the `xs:decimal` spelling (`.5` yes, `1e3` and `1_000`
+no), exact or refused.
 
 **Types enforce representability; rules enforce validity.** An *invalid* invoice
 must still be representable — otherwise a parser cannot load one in order to

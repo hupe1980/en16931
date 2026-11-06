@@ -106,7 +106,7 @@ fn the_readers_hints_are_the_ones_the_spec_names() {
             // allowance it lacks BT-95.
             "missing      CrossIndustryInvoice/SupplyChainTradeTransaction/\
              ApplicableHeaderTradeSettlement/SpecifiedTradeAllowanceCharge/CategoryTradeTax \
-             (BG-20[1]/BT-95) — the VAT category code is absent; BR-32 requires it, and the \
+             (BG-20[0]/BT-95) — the VAT category code is absent; BR-32 requires it, and the \
              model holds a placeholder",
             "unmapped     ApplicableHeaderTradeSettlement/SpecifiedLogisticsServiceCharge — a \
              logistics service charge, which the core does not count [CII-SR-396] [hint: declare \

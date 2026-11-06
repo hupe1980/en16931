@@ -189,7 +189,10 @@ invoice addressed to the insured. Both live in `en16931::extensions`, not on
 consumer carry a field only one Extension populates. A sub-line has the terms
 XRechnung 3.0.2, section 16 gives it; it may state no quantity (BT-129) and no
 price (BG-29), because `BR-22` and `BR-26` hold on `cac:InvoiceLine` only, and
-`SubInvoiceLine::quantity` and `price` are then `None`.
+`SubInvoiceLine::quantity` and `price` are then `None`. A UBL credit note has no
+sub-lines: its line type nests `cac:SubCreditNoteLine`, which no authority binds,
+so the writer drops them with a note and the reader reports a
+`cac:SubInvoiceLine` there as a schema fact.
 
 Because it widens, §4.4.4's guarantee does not run: an Extension-valid invoice
 need **not** be core-valid, and there is deliberately no widening from it.

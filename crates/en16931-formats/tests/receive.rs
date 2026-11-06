@@ -811,7 +811,7 @@ fn an_empty_quantity_or_price_on_a_group_is_rejected() {
     assert_eq!(got.recommendation, Recommendation::Reject, "{reasons}");
     for term in ["BT-129", "BT-146"] {
         assert!(
-            reasons.contains(&format!("(BG-DEX-01[1]/{term})")),
+            reasons.contains(&format!("(BG-25[0]/BG-DEX-01[0]/{term})")),
             "the rejection names the sub-line's {term}: {reasons}"
         );
     }
@@ -891,7 +891,7 @@ fn an_empty_quantity_or_price_on_a_childless_sub_line_is_rejected() {
     assert_eq!(got.recommendation, Recommendation::Reject, "{reasons}");
     for term in ["BT-129", "BT-146"] {
         assert!(
-            reasons.contains(&format!("(BG-DEX-01[1]/{term})")),
+            reasons.contains(&format!("(BG-25[0]/BG-DEX-01[0]/{term})")),
             "the rejection names the sub-line's {term}: {reasons}"
         );
     }

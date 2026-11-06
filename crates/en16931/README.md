@@ -17,7 +17,7 @@ I/O, no `unsafe`; two dependencies, and it builds for `wasm32`.
 
 ```toml
 [dependencies]
-en16931 = "0.9"
+en16931 = "0.10"
 rust_decimal = "1"
 ```
 
@@ -144,7 +144,7 @@ assert_eq!(report.fatal().map(|f| f.rule.as_str()).collect::<Vec<_>>(), ["BR-DE-
 334 rules registered: 53 retired by the type system (no state can make them
 fire), 4 undecidable at the semantic layer, and every one of the other 277
 exercised by its own failing fixture. Against the authorities' own suites, at
-pinned releases: 1 025 CEN unit-test assertions run with no disagreement (11
+pinned releases: 1 027 CEN unit-test assertions run with no disagreement (11
 declared divergences), 381 KoSIT mutations agreed, 59 published example invoices
 valid. The [conformance page](https://hupe1980.github.io/en16931/docs/conformance/)
 has the details.

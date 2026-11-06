@@ -5,6 +5,62 @@ use core::str::FromStr;
 
 use rust_decimal::Decimal;
 
+use crate::error::ParseDecimalError;
+
+/// The parts of an `xs:decimal`, `(\+|-)?([0-9]+(\.[0-9]*)?|\.[0-9]+)`:
+/// whether it is negative, its integer digits and its fraction digits.
+/// `None` for anything else — `1e3`, `1_000`, ` 1`, `.`.
+pub(crate) fn xs_decimal_parts(s: &str) -> Option<(bool, &str, &str)> {
+    let (negative, unsigned) = match s.as_bytes().first() {
+        Some(b'-') => (true, &s[1..]),
+        Some(b'+') => (false, &s[1..]),
+        _ => (false, s),
+    };
+    let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
+    let digits = |part: &str| part.bytes().all(|b| b.is_ascii_digit());
+    ((!whole.is_empty() || !fraction.is_empty()) && digits(whole) && digits(fraction))
+        .then_some((negative, whole, fraction))
+}
+
+/// `s` as a [`Decimal`], when it is an `xs:decimal` a decimal holds exactly.
+///
+/// The one reading of a number in this workspace: [`Percentage`] and
+/// [`Quantity`] parse with it, [`crate::InvoiceAmount::parse`] shares its
+/// spelling, and the syntax readers call it. `Decimal`'s own parser also
+/// accepts `1e3` and `1_000` and rounds past its precision; this does neither.
+///
+/// ```
+/// use en16931::numeric::parse_decimal;
+/// use rust_decimal::dec;
+///
+/// assert_eq!(parse_decimal(".5"), Ok(dec!(0.5)));
+/// assert!(parse_decimal("1_000").is_err());
+/// assert!(parse_decimal("1.00000000000000000000000000001").is_err());
+/// ```
+///
+/// # Errors
+/// [`ParseDecimalError`]: malformed, out of range, or more digits than a
+/// decimal holds.
+pub fn parse_decimal(s: &str) -> Result<Decimal, ParseDecimalError> {
+    let Some((_, _, fraction)) = xs_decimal_parts(s) else {
+        return Err(ParseDecimalError::Malformed {
+            input: s.to_owned(),
+        });
+    };
+    let parsed: Decimal = s.parse().map_err(|_| ParseDecimalError::OutOfRange {
+        input: s.to_owned(),
+    })?;
+    // `Decimal` rounds what does not fit its 96 bits; a stated digit lost is
+    // a scale below the places the text carries.
+    let places = fraction.trim_end_matches('0').len();
+    if places > parsed.scale() as usize {
+        return Err(ParseDecimalError::TooPrecise {
+            input: s.to_owned(),
+        });
+    }
+    Ok(parsed)
+}
+
 /// A percentage — EN 16931-1 §6.5.5 `Percentage. Type`.
 ///
 /// Per cent, not a fraction: `Percentage::new(dec!(19))` is 19 %, not `0.19`
@@ -103,9 +159,10 @@ impl From<Decimal> for Percentage {
 }
 
 impl FromStr for Percentage {
-    type Err = rust_decimal::Error;
+    type Err = ParseDecimalError;
+    /// An `xs:decimal`, exactly ([`parse_decimal`]).
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Decimal::from_str_exact(s).map(Self)
+        parse_decimal(s).map(Self)
     }
 }
 
@@ -184,9 +241,10 @@ impl From<Decimal> for Quantity {
 }
 
 impl FromStr for Quantity {
-    type Err = rust_decimal::Error;
+    type Err = ParseDecimalError;
+    /// An `xs:decimal`, exactly ([`parse_decimal`]).
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Decimal::from_str_exact(s).map(Self)
+        parse_decimal(s).map(Self)
     }
 }
 
@@ -194,6 +252,80 @@ impl FromStr for Quantity {
 mod tests {
     use super::*;
     use rust_decimal::dec;
+
+    /// One spelling for every number: a percentage, a quantity, an amount and
+    /// `parse_decimal` accept and refuse the same text (amounts within their
+    /// two decimals).
+    #[test]
+    fn every_number_reads_by_one_rule() {
+        for (text, ok) in [
+            ("12", true),
+            ("+12", true),
+            ("-12", true),
+            (".5", true),
+            ("5.", true),
+            ("-.5", true),
+            ("0.50", true),
+            ("1e3", false),
+            ("1E3", false),
+            ("1_000", false),
+            ("1,5", false),
+            ("1 2", false),
+            ("1.2.3", false),
+            (".", false),
+            ("+", false),
+            ("-.", false),
+            ("", false),
+            ("0x10", false),
+            ("NaN", false),
+        ] {
+            assert_eq!(parse_decimal(text).is_ok(), ok, "parse_decimal({text:?})");
+            assert_eq!(
+                text.parse::<Percentage>().is_ok(),
+                ok,
+                "Percentage {text:?}"
+            );
+            assert_eq!(text.parse::<Quantity>().is_ok(), ok, "Quantity {text:?}");
+            assert_eq!(
+                crate::InvoiceAmount::parse(text).is_ok(),
+                ok,
+                "InvoiceAmount {text:?}"
+            );
+        }
+    }
+
+    /// Exact or refused, and the error says which.
+    #[test]
+    fn a_number_is_never_rounded() {
+        assert_eq!(
+            parse_decimal("0.0000000000000000000000000001"),
+            Ok(Decimal::from_i128_with_scale(1, 28))
+        );
+        assert_eq!(
+            parse_decimal("1.0000000000000000000000000000000"),
+            Ok(dec!(1))
+        );
+        assert!(matches!(
+            parse_decimal("1.00000000000000000000000000001"),
+            Err(ParseDecimalError::TooPrecise { .. })
+        ));
+        assert!(matches!(
+            parse_decimal("9.9999999999999999999999999999"),
+            Err(ParseDecimalError::TooPrecise { .. })
+        ));
+        assert!(matches!(
+            parse_decimal("79228162514264337593543950336"),
+            Err(ParseDecimalError::OutOfRange { .. })
+        ));
+        assert_eq!(
+            parse_decimal("79228162514264337593543950335"),
+            Ok(Decimal::MAX)
+        );
+        assert!(matches!(
+            parse_decimal("1_000"),
+            Err(ParseDecimalError::Malformed { .. })
+        ));
+    }
 
     #[test]
     fn percentage_is_per_cent_not_a_fraction() {

@@ -194,7 +194,8 @@ impl From<InvoiceLine> for SubInvoiceLine {
             object_identifier: line.object_identifier,
             quantity: Some(SubLineQuantity {
                 value: line.quantity,
-                unit_code: Some(line.unit_code),
+                // An empty code is no unit: a sub-line's BT-130 is optional.
+                unit_code: Some(line.unit_code).filter(|u| !u.as_str().is_empty()),
             }),
             net_amount: line.net_amount,
             order_line_reference: line.order_line_reference,
