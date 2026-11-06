@@ -918,13 +918,7 @@ fn an_unknown_suppression_does_not_shrink_the_count() {
 fn stranded_sub_invoice_lines_are_a_finding() {
     let mut inv = xrechnung_valid();
     inv.specification_id = Some(profiles::XRECHNUNG_EXTENSION.specification_id.to_owned());
-    let sub = en16931::SubInvoiceLine {
-        line: inv.lines[0].clone(),
-        vat: Some(inv.lines[0].vat.clone()),
-        quantity_stated: true,
-        price_stated: true,
-        children: vec![],
-    };
+    let sub = en16931::SubInvoiceLine::from(inv.lines[0].clone());
     inv.extensions
         .sub_invoice_lines
         .push((0, vec![sub.clone()]));
@@ -979,13 +973,7 @@ fn a_report_says_it_checked_what_the_profile_registers() {
     let mut with_extension = xrechnung_valid();
     with_extension.extensions.sub_invoice_lines = vec![(
         0,
-        vec![SubInvoiceLine {
-            line: with_extension.lines[0].clone(),
-            vat: Some(with_extension.lines[0].vat.clone()),
-            quantity_stated: true,
-            price_stated: true,
-            children: vec![],
-        }],
+        vec![SubInvoiceLine::from(with_extension.lines[0].clone())],
     )];
 
     for (label, inv) in [

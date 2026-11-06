@@ -194,11 +194,8 @@ fn cii_omits_sub_invoice_lines_and_says_which_rule_forbids_them() {
     invoice.extensions.sub_invoice_lines = vec![(
         0,
         vec![en16931::SubInvoiceLine {
-            line: child,
             vat: Some(invoice.lines[0].vat.clone()),
-            quantity_stated: true,
-            price_stated: true,
-            children: vec![],
+            ..en16931::SubInvoiceLine::from(child)
         }],
     )];
 

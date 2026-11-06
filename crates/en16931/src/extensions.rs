@@ -5,8 +5,10 @@
 //! e.g. itemised advance payments with their tax (§14 Abs. 5 Satz 2 UStG),
 //! which core BT-113 cannot express.
 
-use crate::invoice::{InvoiceLine, LineVat, VatBreakdown};
-use crate::{Date, DocumentReference, InvoiceAmount};
+use crate::invoice::{
+    Code, InvoiceLine, Item, LineAllowanceCharge, LineVat, Period, PriceDetails, VatBreakdown,
+};
+use crate::{Date, DocumentReference, Identifier, InvoiceAmount, Quantity};
 
 /// One previously invoiced and received advance payment, with its tax.
 ///
@@ -124,52 +126,88 @@ pub const THIRD_PARTY_PAYMENTS: &str = "BG-DEX-09";
 
 /// `BG-DEX-01` SUB INVOICE LINE — a line beneath a line.
 ///
-/// Sub-lines nest; `BR-DEX-02` sums a line's BT-131 over its children.
+/// Its terms follow the XRechnung 3.0.2 specification, section 16. Sub-lines
+/// nest; `BR-DEX-02` sums a line's BT-131 over its children.
+///
+/// The specification's table gives BT-129, BT-130 and BG-DEX-07 cardinality 1
+/// on a sub-line, but no KoSIT rule checks it, `BR-22`, `BR-23` and `BR-26`
+/// hold on `cac:InvoiceLine | cac:CreditNoteLine` only, and KoSIT's own
+/// `ubl-inv-br-dex-03-test.xml` leaves them out. So [`quantity`](Self::quantity)
+/// and [`price`](Self::price) are `None` when a sub-line does not state them.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubInvoiceLine {
-    /// The line itself, with the same business terms as BG-25.
-    ///
-    /// Any sub-line, grouping or childless, may leave `line.quantity` and
-    /// `line.price` at their default; see
-    /// [`quantity_stated`](Self::quantity_stated) and
-    /// [`price_stated`](Self::price_stated).
-    pub line: InvoiceLine,
+    /// BT-126 — the sub-line's identifier.
+    pub id: String,
+    /// BT-127 — a note.
+    pub note: Option<String>,
+    /// BT-128 — the invoiced object identifier.
+    pub object_identifier: Option<Identifier>,
+    /// BT-129 with its unit, BT-130; `None` when the sub-line states no
+    /// quantity.
+    pub quantity: Option<SubLineQuantity>,
+    /// BT-131 — the net amount.
+    pub net_amount: InvoiceAmount,
+    /// BT-132 — the referenced purchase order line.
+    pub order_line_reference: Option<DocumentReference>,
+    /// BT-133 — the buyer accounting reference.
+    pub accounting_reference: Option<String>,
+    /// `BG-DEX-05` — the sub-line's period.
+    pub period: Option<Period>,
+    /// `BG-DEX-03` — its allowances.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub allowances: Vec<LineAllowanceCharge>,
+    /// `BG-DEX-04` — its charges.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub charges: Vec<LineAllowanceCharge>,
+    /// `BG-DEX-02` — the item.
+    pub item: Item,
     /// `BG-DEX-06` — its VAT information. Exactly one (`BR-DEX-03`), on every
-    /// sub-line, grouping or not.
+    /// sub-line, grouping or not; `None` when the document carries none or
+    /// several, so the rule fires.
     pub vat: Option<LineVat>,
-    /// Whether the sub-line carries `BT-129` (`cbc:InvoicedQuantity` /
-    /// `cbc:CreditedQuantity`).
-    ///
-    /// `BR-22`'s context is `cac:InvoiceLine | cac:CreditNoteLine` (CEN's
-    /// EN 16931 UBL Schematron), never `cac:SubInvoiceLine`: a sub-line,
-    /// grouping or childless, may leave it out, and the KoSIT validator
-    /// accepts that. `false` means it is absent and `line.quantity` is zero.
-    /// A quantity that is present but empty or does not parse is `true`: the
-    /// reader reports it (`Kind::Malformed`, the UBL schema refuses it) and
-    /// holds a placeholder, as on a line. Its unit, BT-130, may be absent
-    /// even when the quantity is stated (`BR-23` holds on lines only);
-    /// `line.unit_code` is then empty.
-    #[cfg_attr(feature = "serde", serde(default = "stated_by_default"))]
-    pub quantity_stated: bool,
-    /// Whether the sub-line carries `BG-29` (`cac:Price`), on the same terms
-    /// as [`quantity_stated`](Self::quantity_stated) but for `BR-26`. `false`
-    /// means it is absent and `line.price` is `PriceDetails::default()`. A
-    /// `cac:Price` whose `cbc:PriceAmount` is absent, empty or does not parse
-    /// is `true`, reported by the reader and held with a placeholder price.
-    #[cfg_attr(feature = "serde", serde(default = "stated_by_default"))]
-    pub price_stated: bool,
+    /// `BG-DEX-07` — its price; `None` when the sub-line states none.
+    pub price: Option<PriceDetails>,
     /// Its own sub-lines, if it decomposes further.
     #[cfg_attr(feature = "serde", serde(default))]
     pub children: Vec<SubInvoiceLine>,
 }
 
-/// Serde default for [`SubInvoiceLine::quantity_stated`] and
-/// [`SubInvoiceLine::price_stated`]: data from before these fields existed
-/// carried both, so an absent field reads as `true`.
-#[cfg(feature = "serde")]
-const fn stated_by_default() -> bool {
-    true
+/// A sub-line's BT-129 with its unit, BT-130, which a sub-line may leave out
+/// even when it states the quantity.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubLineQuantity {
+    /// BT-129 — the quantity.
+    pub value: Quantity,
+    /// BT-130 — its unit of measure.
+    pub unit_code: Option<Code>,
+}
+
+impl From<InvoiceLine> for SubInvoiceLine {
+    /// The sub-line stating every term `line` carries, its quantity, unit,
+    /// price and VAT information included, and no children.
+    fn from(line: InvoiceLine) -> Self {
+        Self {
+            id: line.id,
+            note: line.note,
+            object_identifier: line.object_identifier,
+            quantity: Some(SubLineQuantity {
+                value: line.quantity,
+                unit_code: Some(line.unit_code),
+            }),
+            net_amount: line.net_amount,
+            order_line_reference: line.order_line_reference,
+            accounting_reference: line.accounting_reference,
+            period: line.period,
+            allowances: line.allowances,
+            charges: line.charges,
+            item: line.item,
+            vat: Some(line.vat),
+            price: Some(line.price),
+            children: vec![],
+        }
+    }
 }
 
 impl SubInvoiceLine {
@@ -179,7 +217,7 @@ impl SubInvoiceLine {
     /// [`crate::AmountError::Overflow`].
     pub fn total(&self) -> Result<InvoiceAmount, crate::AmountError> {
         if self.children.is_empty() {
-            return Ok(self.line.net_amount);
+            return Ok(self.net_amount);
         }
         InvoiceAmount::checked_sum(
             self.children

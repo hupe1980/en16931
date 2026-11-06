@@ -622,30 +622,16 @@ fn xrechnung_extension_with_a_group() -> Invoice {
     let mut inv = xrechnung();
     inv.specification_id = Some(profiles::XRECHNUNG_EXTENSION.specification_id.to_owned());
 
-    let mut group = inv.lines[0].clone();
-    group.id = "1.".to_owned();
-    group.quantity = en16931::Quantity::default();
-    group.unit_code = en16931::invoice::Code::default();
-    group.price = en16931::invoice::PriceDetails::default();
-    let mut child = inv.lines[0].clone();
+    let mut child = en16931::SubInvoiceLine::from(inv.lines[0].clone());
     child.id = "1.1.".to_owned();
-
-    inv.extensions.sub_invoice_lines = vec![(
-        0,
-        vec![en16931::SubInvoiceLine {
-            vat: Some(group.vat.clone()),
-            quantity_stated: false,
-            price_stated: false,
-            line: group,
-            children: vec![en16931::SubInvoiceLine {
-                vat: Some(child.vat.clone()),
-                quantity_stated: true,
-                price_stated: true,
-                line: child,
-                children: vec![],
-            }],
-        }],
-    )];
+    let group = en16931::SubInvoiceLine {
+        id: "1.".to_owned(),
+        quantity: None,
+        price: None,
+        children: vec![child.clone()],
+        ..child
+    };
+    inv.extensions.sub_invoice_lines = vec![(0, vec![group])];
     let report = profiles::XRECHNUNG_EXTENSION.validate(&inv);
     assert!(report.is_valid(), "{report}");
     inv
@@ -670,13 +656,10 @@ fn a_grouping_sub_line_without_quantity_or_price_is_accepted() {
         .filter(|e| e.level() == Severity::Fatal)
         .collect();
     assert!(fatal.is_empty(), "{fatal:?}");
-    let group = &read.invoice.extensions.sub_lines(0)[0];
-    assert!(!group.quantity_stated, "the group states no BT-129");
-    assert!(!group.price_stated, "the group states no BG-29");
-    assert_eq!(group.line.quantity, en16931::Quantity::default());
-    assert_eq!(group.line.price, en16931::invoice::PriceDetails::default());
-    assert!(group.children[0].quantity_stated, "the child states BT-129");
-    assert!(group.children[0].price_stated, "the child states BG-29");
+    assert_eq!(
+        read.invoice.extensions.sub_invoice_lines, inv.extensions.sub_invoice_lines,
+        "the group reads back without quantity or price, the child with both"
+    );
 
     let got = receive(&bytes, &policy(Some(&profiles::XRECHNUNG_EXTENSION)));
     assert_eq!(
@@ -698,21 +681,13 @@ fn a_grouping_sub_line_without_quantity_or_price_is_accepted() {
 fn a_childless_sub_line_without_quantity_or_price_is_accepted() {
     let mut inv = xrechnung();
     inv.specification_id = Some(profiles::XRECHNUNG_EXTENSION.specification_id.to_owned());
-    let mut leaf = inv.lines[0].clone();
-    leaf.id = "1.".to_owned();
-    leaf.quantity = en16931::Quantity::default();
-    leaf.unit_code = en16931::invoice::Code::default();
-    leaf.price = en16931::invoice::PriceDetails::default();
-    inv.extensions.sub_invoice_lines = vec![(
-        0,
-        vec![en16931::SubInvoiceLine {
-            vat: Some(leaf.vat.clone()),
-            quantity_stated: false,
-            price_stated: false,
-            line: leaf,
-            children: vec![],
-        }],
-    )];
+    let leaf = en16931::SubInvoiceLine {
+        id: "1.".to_owned(),
+        quantity: None,
+        price: None,
+        ..en16931::SubInvoiceLine::from(inv.lines[0].clone())
+    };
+    inv.extensions.sub_invoice_lines = vec![(0, vec![leaf])];
     let report = profiles::XRECHNUNG_EXTENSION.validate(&inv);
     assert!(report.is_valid(), "{report}");
 
@@ -730,8 +705,8 @@ fn a_childless_sub_line_without_quantity_or_price_is_accepted() {
             read.invoice.extensions.sub_lines(0)
         );
     };
-    assert!(!sub.quantity_stated, "no BT-129 was written");
-    assert!(!sub.price_stated, "no BG-29 was written");
+    assert_eq!(sub.quantity, None, "no BT-129 was written");
+    assert_eq!(sub.price, None, "no BG-29 was written");
 
     let got = receive(&bytes, &policy(Some(&profiles::XRECHNUNG_EXTENSION)));
     assert_eq!(
@@ -962,13 +937,15 @@ fn a_sub_line_quantity_without_a_unit_is_written_without_one() {
         .collect();
     assert!(fatal.is_empty(), "{fatal:?}");
     let child = &read.invoice.extensions.sub_lines(0)[0].children[0];
-    assert!(child.quantity_stated);
-    assert_eq!(child.line.unit_code.as_str(), "");
+    let Some(stated) = &child.quantity else {
+        panic!("the child states its quantity: {child:?}");
+    };
+    assert_eq!(stated.unit_code, None);
 
     let back = String::from_utf8(xml(&read.invoice, Syntax::Ubl)).expect("utf-8");
     let quantity = format!(
         "<cbc:InvoicedQuantity>{}</cbc:InvoicedQuantity>",
-        child.line.quantity
+        stated.value
     );
     assert!(back.contains(&quantity), "{quantity} not in {back}");
 }
@@ -993,10 +970,14 @@ fn a_sub_line_value_that_does_not_parse_keeps_its_element() {
             .collect();
         assert_eq!(values, [Some("abc")], "{tag}");
         let child = &read.invoice.extensions.sub_lines(0)[0].children[0];
-        assert!(child.quantity_stated && child.price_stated, "{tag}");
-        assert_eq!(child.line.unit_code, inv.lines[0].unit_code, "{tag}");
         assert_eq!(
-            child.line.price.base_quantity, inv.lines[0].price.base_quantity,
+            child.quantity.as_ref().map(|q| q.unit_code.clone()),
+            Some(Some(inv.lines[0].unit_code.clone())),
+            "{tag}"
+        );
+        assert_eq!(
+            child.price.as_ref().map(|p| p.base_quantity),
+            Some(inv.lines[0].price.base_quantity),
             "{tag}"
         );
 

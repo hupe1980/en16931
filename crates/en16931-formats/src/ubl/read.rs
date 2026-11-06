@@ -504,9 +504,7 @@ impl Reader {
                     self.required_totals(root, Some(c), &mut inv);
                 }
                 "InvoiceLine" | "CreditNoteLine" => {
-                    // A line's BT-129 and BT-146 are required (`BR-22`,
-                    // `BR-26`); an absent one is already `Missing`.
-                    let (l, _, _) = self.line(c, inv.lines.len() + 1);
+                    let l = self.line(c, inv.lines.len() + 1);
                     // BG-DEX-01 hangs beneath the line, keyed by its index.
                     let subs = self.sub_lines(c);
                     if !subs.is_empty() {
@@ -1132,16 +1130,14 @@ impl Reader {
     /// One line; `index` is its 1-based position among its siblings, passed
     /// in rather than counted, which would make a document quadratic.
     ///
-    /// Returns, besides the line, whether it carries a quantity element and a
-    /// `cac:Price` (`en16931::SubInvoiceLine::quantity_stated`,
-    /// `price_stated`). `BR-22`, `BR-23` and `BR-26` hold on `cac:InvoiceLine |
+    /// `BR-22`, `BR-23` and `BR-26` hold on `cac:InvoiceLine |
     /// cac:CreditNoteLine` only (`eInvoicing-EN16931/ubl/schematron/
     /// preprocessed/EN16931-UBL-validation-preprocessed.sch`), so a
     /// `cac:SubInvoiceLine`, grouping or childless, may leave BT-129, BT-130
     /// and BG-29 out; the KoSIT validator accepts it. Present but empty is
     /// still refused: UBL's schema requires a value wherever the element is.
     /// A value that is refused is held as a placeholder, as on a line.
-    fn line(&mut self, n: Node<'_, '_>, index: usize) -> (InvoiceLine, bool, bool) {
+    fn line(&mut self, n: Node<'_, '_>, index: usize) -> InvoiceLine {
         // A sub-line is BG-DEX-01; its index is among its siblings, and its
         // path says which line it hangs beneath.
         let sub = name(n) == "SubInvoiceLine";
@@ -1192,7 +1188,6 @@ impl Reader {
                 .term(Term::new(&group, "BT-129").to_string()),
             );
         }
-        let quantity_stated = kid(n, quantity_el).is_some();
         let quantity = quantity.map_or(Quantity::ZERO, Quantity::new);
         let unit_code = if let Some(u) = kid(n, quantity_el)
             .and_then(|q| q.attribute("unitCode"))
@@ -1248,7 +1243,6 @@ impl Reader {
             vat: LineVat::default(),
             item: Item::default(),
         };
-        let mut price_stated = false;
         for c in kids(n) {
             match name(c) {
                 "InvoicePeriod" => l.period = Some(self.period(c)),
@@ -1314,10 +1308,7 @@ impl Reader {
                         l.allowances.push(a);
                     }
                 }
-                "Price" => {
-                    l.price = self.price(c, &group, sub);
-                    price_stated = true;
-                }
+                "Price" => l.price = self.price(c, &group, sub),
                 "Item" => {
                     let (item, vat) = self.item(c, &group);
                     l.item = item;
@@ -1334,7 +1325,7 @@ impl Reader {
                 _ => self.skip("InvoiceLine", c),
             }
         }
-        (l, quantity_stated, price_stated)
+        l
     }
 
     /// What UBL's schema refuses in a sub-line although no rule requires the
@@ -1351,13 +1342,17 @@ impl Reader {
         );
     }
 
-    /// `cac:SubInvoiceLine` children, recursively — BG-DEX-01.
+    /// `cac:SubInvoiceLine` children, recursively — BG-DEX-01. Its quantity
+    /// and price are `None` when the sub-line has no such element.
     fn sub_lines(&mut self, n: Node<'_, '_>) -> Vec<en16931::SubInvoiceLine> {
         kids(n)
             .filter(|c| name(*c) == "SubInvoiceLine")
             .enumerate()
             .map(|(i, c)| {
-                let (line, quantity_stated, price_stated) = self.line(c, i + 1);
+                let stated_quantity = kid(c, "InvoicedQuantity")
+                    .or_else(|| kid(c, "CreditedQuantity"))
+                    .is_some();
+                let stated_price = kid(c, "Price").is_some();
                 // BG-DEX-06: `BR-DEX-03` requires exactly one, so two map to
                 // `None` and the rule fires.
                 let categories = kid(c, "Item").map_or(0, |i| {
@@ -1365,13 +1360,18 @@ impl Reader {
                         .filter(|x| name(*x) == "ClassifiedTaxCategory")
                         .count()
                 });
-                en16931::SubInvoiceLine {
-                    vat: (categories == 1).then(|| line.vat.clone()),
-                    line,
-                    quantity_stated,
-                    price_stated,
-                    children: self.sub_lines(c),
-                }
+                let mut sub = en16931::SubInvoiceLine::from(self.line(c, i + 1));
+                sub.quantity =
+                    sub.quantity
+                        .filter(|_| stated_quantity)
+                        .map(|q| en16931::SubLineQuantity {
+                            unit_code: q.unit_code.filter(|u| !u.as_str().is_empty()),
+                            ..q
+                        });
+                sub.price = sub.price.filter(|_| stated_price);
+                sub.vat = sub.vat.filter(|_| categories == 1);
+                sub.children = self.sub_lines(c);
+                sub
             })
             .collect()
     }

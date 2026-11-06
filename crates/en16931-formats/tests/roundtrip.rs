@@ -802,8 +802,9 @@ fn a_logistics_service_charge_is_a_charge_only_under_an_extension() {
 
 /// A grouping `cac:SubInvoiceLine` (one with its own child) round-trips
 /// without `cbc:InvoicedQuantity` or `cac:Price`: the writer omits them when
-/// `en16931::SubInvoiceLine::quantity_stated` / `price_stated` are `false`,
-/// and the reader puts both back absent, not as a stated zero.
+/// `en16931::SubInvoiceLine::quantity` / `price` are `None`, and the reader
+/// puts both back absent, not as a stated zero. Every other term the child
+/// carries, from its note to its allowances, comes back as written.
 #[cfg(feature = "ubl")]
 #[test]
 fn a_grouping_sub_line_round_trips_without_quantity_or_price() {
@@ -818,29 +819,16 @@ fn a_grouping_sub_line_round_trips_without_quantity_or_price() {
             .to_owned(),
     );
 
-    let mut group = inv.lines[0].clone();
-    group.id = "1.".to_owned();
-    group.quantity = en16931::Quantity::default();
-    group.unit_code = en16931::invoice::Code::default();
-    group.price = en16931::invoice::PriceDetails::default();
-    let mut child = inv.lines[0].clone();
+    let mut child = en16931::SubInvoiceLine::from(inv.lines[0].clone());
     child.id = "1.1.".to_owned();
-    inv.extensions.sub_invoice_lines = vec![(
-        0,
-        vec![en16931::SubInvoiceLine {
-            vat: Some(group.vat.clone()),
-            quantity_stated: false,
-            price_stated: false,
-            line: group,
-            children: vec![en16931::SubInvoiceLine {
-                vat: Some(child.vat.clone()),
-                quantity_stated: true,
-                price_stated: true,
-                line: child,
-                children: vec![],
-            }],
-        }],
-    )];
+    let group = en16931::SubInvoiceLine {
+        id: "1.".to_owned(),
+        quantity: None,
+        price: None,
+        children: vec![child.clone()],
+        ..child
+    };
+    inv.extensions.sub_invoice_lines = vec![(0, vec![group])];
 
     let written = write(&inv, Syntax::Ubl);
     assert!(
@@ -874,16 +862,55 @@ fn a_grouping_sub_line_round_trips_without_quantity_or_price() {
         "{:?}",
         back.entries
     );
-    let group = &back.invoice.extensions.sub_lines(0)[0];
-    assert!(!group.quantity_stated, "the group states no BT-129");
-    assert!(!group.price_stated, "the group states no BG-29");
-    assert_eq!(group.line.quantity, en16931::Quantity::default());
-    assert_eq!(group.line.price, en16931::invoice::PriceDetails::default());
-    let [child] = &group.children[..] else {
-        panic!("one child, got {:?}", group.children);
-    };
-    assert!(child.quantity_stated, "the child states BT-129");
-    assert!(child.price_stated, "the child states BG-29");
+    assert_eq!(
+        back.invoice.extensions.sub_invoice_lines,
+        inv.extensions.sub_invoice_lines
+    );
+}
+
+/// A sub-line carrying every term BG-DEX-01 defines (XRechnung 3.0.2, section
+/// 16) is written in full and reads back unchanged: note, BT-128, BT-132,
+/// BT-133, its period, allowances and charges included.
+#[cfg(feature = "ubl")]
+#[test]
+fn a_fully_filled_sub_line_round_trips() {
+    use en16931_formats::Syntax;
+
+    let mut inv = common::maximal();
+    inv.specification_id = Some(
+        en16931::profiles::XRECHNUNG_EXTENSION
+            .specification_id
+            .to_owned(),
+    );
+    let sub = en16931::SubInvoiceLine::from(inv.lines[0].clone());
+    assert!(
+        sub.note.is_some()
+            && sub.object_identifier.is_some()
+            && sub.order_line_reference.is_some()
+            && sub.accounting_reference.is_some()
+            && sub.period.is_some()
+            && !sub.allowances.is_empty()
+            && !sub.charges.is_empty()
+            && sub.quantity.is_some()
+            && sub.price.is_some()
+            && sub.vat.is_some(),
+        "the fixture fills every term: {sub:?}"
+    );
+    inv.extensions.sub_invoice_lines = vec![(0, vec![sub])];
+
+    let written = write(&inv, Syntax::Ubl);
+    let dropped: Vec<_> = written
+        .entries
+        .iter()
+        .filter(|e| e.path.contains("SubInvoiceLine"))
+        .collect();
+    assert!(dropped.is_empty(), "{dropped:?}");
+    let back = read(&written.xml, Syntax::Ubl);
+    assert_eq!(
+        back.invoice.extensions.sub_invoice_lines, inv.extensions.sub_invoice_lines,
+        "{}",
+        written.xml
+    );
 }
 
 /// A `cac:SubInvoiceLine` is UBL's `InvoiceLineType`, which has

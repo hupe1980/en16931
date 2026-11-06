@@ -16,9 +16,13 @@ Before 1.0, a minor release may break; every break is listed here.
 
 ### Breaking
 
-- `en16931::SubInvoiceLine` has two new fields, `quantity_stated` and
-  `price_stated`: `false` means the sub-line states no BT-129 or no BG-29, and
-  `line.quantity` or `line.price` holds a placeholder.
+- `en16931::SubInvoiceLine` has its own fields instead of an embedded
+  `InvoiceLine`, following XRechnung 3.0.2, section 16: `sub.line.net_amount`
+  is `sub.net_amount`, and so on. Its quantity (with an optional unit, the
+  new `SubLineQuantity`) and its price are `Option`s, `None` when the
+  sub-line states none; `vat` is its only VAT information.
+  `From<InvoiceLine>` builds a sub-line that states everything a line
+  carries.
 - `invoice::JSON_VERSION` is `"0.10"`: the model changed shape, and a reader
   of `"0.8"` would drop the new fields and write a stated zero back. An
   envelope of `"0.8"` is refused, as any other version.
@@ -46,6 +50,12 @@ Before 1.0, a minor release may break; every break is listed here.
   `cac:Price` without `cbc:PriceAmount`, is still `Malformed`: UBL's schema
   refuses both. The UBL writer omits what a sub-line does not state, an
   absent unit included.
+- The UBL writer dropped a sub-line's note, BT-128, BT-132, BT-133, period,
+  allowances and charges: the element order taken from the corpus knows only
+  a few sub-line elements, and the writer did not write the rest. A
+  `cac:SubInvoiceLine` is UBL's `InvoiceLineType`, so it now takes
+  `cac:InvoiceLine`'s order and the same writer. A line's quantity without a
+  unit is written without an empty `unitCode`, as a sub-line's is.
 - A `cbc:CreditedQuantity` inside a `cac:SubInvoiceLine` is reported as
   `Schema`: UBL's `InvoiceLineType` has `cbc:InvoicedQuantity` only, and a
   credit note nests `cac:SubCreditNoteLine`.
