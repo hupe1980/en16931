@@ -17,6 +17,15 @@ fn paths(inv: &Invoice, rule: &str) -> Vec<String> {
         .collect()
 }
 
+fn hints(inv: &Invoice, rule: &str) -> Vec<String> {
+    validate(inv)
+        .findings()
+        .iter()
+        .filter(|f| f.rule.as_str() == rule)
+        .map(|f| f.hint.clone().unwrap_or_default())
+        .collect()
+}
+
 fn categorise(inv: &mut Invoice, category: &str) {
     for l in &mut inv.lines {
         l.vat.category = Code::new(category);
@@ -66,4 +75,86 @@ fn br_o_11_points_at_the_other_breakdown() {
     let at = paths(&inv, "BR-O-11");
     assert_eq!(at.len(), 1, "{at:?}");
     assert!(at[0].starts_with("BG-23[1]"), "{at:?}");
+}
+
+/// Two exempt lines whose sum exceeds an `InvoiceAmount`, with every total at
+/// zero: the sums are exact, so `BR-CO-10` and `BR-E-08` fail instead of
+/// skipping on overflow.
+#[test]
+fn a_sum_beyond_an_invoice_amount_fails_its_total_rules() {
+    let mut inv = base();
+    categorise(&mut inv, "E");
+    let half = InvoiceAmount::parse("50000000000000000.00").expect("fits an amount");
+    inv.lines.truncate(1);
+    inv.lines[0].net_amount = half;
+    let mut second = inv.lines[0].clone();
+    second.id = "2".to_owned();
+    inv.lines.push(second);
+    inv.allowances.clear();
+    inv.charges.clear();
+    inv.vat_breakdown = vec![VatBreakdown {
+        taxable_amount: InvoiceAmount::ZERO,
+        tax_amount: InvoiceAmount::ZERO,
+        category: Code::new("E"),
+        rate: Some(Percentage::ZERO),
+        exemption_reason: Some("Exempt".to_owned()),
+        exemption_reason_code: None,
+    }];
+    inv.totals = en16931::invoice::DocumentTotals::default();
+    assert_eq!(
+        (paths(&inv, "BR-CO-10").len(), paths(&inv, "BR-E-08").len()),
+        (1, 1)
+    );
+}
+
+/// A rate whose tax exceeds `Decimal`'s range matches no stated tax:
+/// `BR-CO-17` and `BR-S-09` fail instead of skipping the breakdown.
+#[test]
+fn a_tax_beyond_the_decimal_range_fails_its_rules() {
+    let mut inv = base();
+    let entry = inv
+        .vat_breakdown
+        .iter_mut()
+        .find(|e| e.category.as_str() == "S")
+        .expect("the example has a standard rate");
+    entry.rate = Some(Percentage::new(rust_decimal::Decimal::MAX));
+    assert_eq!(
+        (paths(&inv, "BR-CO-17").len(), paths(&inv, "BR-S-09").len()),
+        (1, 1)
+    );
+}
+
+/// A rate with 27 places makes the tax on 101.01 need 29: `BR-CO-17` says the
+/// places are the reason, not the range; a rate at `Decimal::MAX` the range.
+#[test]
+fn a_tax_that_cannot_be_checked_names_the_reason() {
+    let mut inv = base();
+    let entry = inv
+        .vat_breakdown
+        .iter_mut()
+        .find(|e| e.category.as_str() == "S")
+        .expect("the example has a standard rate");
+    entry.taxable_amount = InvoiceAmount::parse("101.01").expect("amount");
+    entry.rate = Some(Percentage::new(
+        rust_decimal::Decimal::from_str_exact("19.333333333333333333333333333").expect("rate"),
+    ));
+    let places = hints(&inv, "BR-CO-17");
+    assert_eq!(places.len(), 1, "{places:?}");
+    assert!(
+        places[0].contains("28 decimal places") && !places[0].contains("range"),
+        "{places:?}"
+    );
+
+    let entry = inv
+        .vat_breakdown
+        .iter_mut()
+        .find(|e| e.category.as_str() == "S")
+        .expect("the example has a standard rate");
+    entry.rate = Some(Percentage::new(rust_decimal::Decimal::MAX));
+    let range = hints(&inv, "BR-CO-17");
+    assert_eq!(range.len(), 1, "{range:?}");
+    assert!(
+        range[0].contains("range") && !range[0].contains("places"),
+        "{range:?}"
+    );
 }

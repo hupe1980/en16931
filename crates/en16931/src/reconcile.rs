@@ -69,6 +69,17 @@ pub enum ReconcileError {
         /// Which business term was being computed.
         term: &'static str,
     },
+
+    /// An intermediate is exact only with more than a `Decimal`'s 28 places,
+    /// such as a tax on a rate with that many decimals; rounding it could
+    /// move the result by a cent.
+    #[error(
+        "{term} needs more than 28 decimal places while reconciling, so it cannot be computed exactly"
+    )]
+    Precision {
+        /// Which business term was being computed.
+        term: &'static str,
+    },
 }
 
 // ── The result ────────────────────────────────────────────────────────────────
@@ -428,15 +439,20 @@ fn breakdown_rate(rate: Option<Percentage>) -> Option<Percentage> {
 /// Rounds half away from zero (`−0.125` → `−0.13`).
 fn tax_on(base: InvoiceAmount, rate: Option<Percentage>) -> Result<InvoiceAmount, ReconcileError> {
     let rate = rate.map_or(Decimal::ZERO, Percentage::into_decimal);
-    let exact = base
-        .into_decimal()
-        .checked_mul(rate)
-        .map(|v| v / Decimal::ONE_HUNDRED)
-        .ok_or(ReconcileError::Overflow { term: "BT-117" })?;
-    InvoiceAmount::from_decimal_exact(
-        exact.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero),
-    )
-    .map_err(|_| ReconcileError::Overflow { term: "BT-117" })
+    let overflow = || ReconcileError::Overflow { term: "BT-117" };
+    let exact =
+        crate::validation::rules::exact_mul(base.into_decimal(), rate).map_err(|reason| {
+            match reason {
+                crate::validation::rules::Inexact::Range => overflow(),
+                crate::validation::rules::Inexact::Places => {
+                    ReconcileError::Precision { term: "BT-117" }
+                }
+            }
+        })?;
+    // `round(x ÷ 100, 2)` is `round(x, 0) ÷ 100`; rounding first divides an
+    // integer, which loses no digit.
+    let cents = exact.round_dp_with_strategy(0, RoundingStrategy::MidpointAwayFromZero);
+    InvoiceAmount::from_decimal_exact(cents / Decimal::ONE_HUNDRED).map_err(|_| overflow())
 }
 
 #[cfg(test)]
@@ -444,6 +460,59 @@ mod tests {
     use rust_decimal::dec;
 
     use super::*;
+
+    /// Every everyday base and rate gives the tax rounded half away from zero
+    /// to the cent; none is refused.
+    #[test]
+    fn every_everyday_rate_gives_its_tax() {
+        for base in ["0.01", "1.00", "99.99", "1234.56", "-500.00", "1000000.00"] {
+            let base = InvoiceAmount::parse(base).unwrap();
+            for rate in [
+                dec!(0),
+                dec!(0.5),
+                dec!(2.75),
+                dec!(5),
+                dec!(7),
+                dec!(7.7),
+                dec!(19),
+                dec!(21),
+                dec!(25.5),
+            ] {
+                let expected = (base.into_decimal() * rate / Decimal::ONE_HUNDRED)
+                    .round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero);
+                assert_eq!(
+                    tax_on(base, Some(Percentage::new(rate))).map(InvoiceAmount::into_decimal),
+                    Ok(expected),
+                    "{base} × {rate} %"
+                );
+            }
+        }
+    }
+
+    /// A tax that is exact only with 29 places is a precision error, not an
+    /// overflow; one beyond the range stays an overflow.
+    #[test]
+    fn a_tax_beyond_28_places_is_a_precision_error() {
+        let base = InvoiceAmount::parse("101.01").unwrap();
+        let rate = Percentage::new(dec!(19.333333333333333333333333333));
+        assert_eq!(
+            tax_on(base, Some(rate)),
+            Err(ReconcileError::Precision { term: "BT-117" })
+        );
+        assert_eq!(
+            tax_on(base, Some(Percentage::new(Decimal::MAX))),
+            Err(ReconcileError::Overflow { term: "BT-117" })
+        );
+    }
+
+    /// 0.01 × 49.99999999999999999999999999 % is just below half a cent;
+    /// divided by 100 first it rounds to half a cent and then up to 0.01.
+    #[test]
+    fn tax_just_below_half_a_cent_rounds_down() {
+        let base = InvoiceAmount::parse("0.01").unwrap();
+        let rate = Percentage::new(dec!(49.99999999999999999999999999));
+        assert_eq!(tax_on(base, Some(rate)), Ok(InvoiceAmount::ZERO));
+    }
     use crate::invoice::{DocumentAllowanceCharge, Item, LineVat, PriceDetails};
     use crate::{Date, InvoiceLine, Quantity, validate};
 
