@@ -361,7 +361,8 @@ fuzz TARGET SECS="60":
         extract|embed) extra=("$ref/zugferd-corpus") ;;
         *)             extra=() ;;
     esac
-    for d in "${extra[@]}"; do [ -d "$d" ] && seeds+=("$d"); done
+    # `${a[@]+…}`: bash 3.2 (macOS) calls an empty array unbound under `set -u`.
+    for d in ${extra[@]+"${extra[@]}"}; do [ -d "$d" ] && seeds+=("$d"); done
     cargo +nightly fuzz run --target "$(rustc +nightly -vV | sed -n 's/^host: //p')" {{ TARGET }} \
         "$out" "${seeds[@]}" -- -max_total_time={{ SECS }} -timeout=10 -rss_limit_mb=2048 -malloc_limit_mb=2048
 

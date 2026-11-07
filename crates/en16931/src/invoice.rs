@@ -1880,8 +1880,8 @@ impl InvoiceBuilder {
     /// ```
     ///
     /// # Errors
-    /// [`crate::ReconcileError`] when the arithmetic cannot be performed at all
-    /// — an unknown VAT category, or a taxed category with no rate.
+    /// [`crate::ReconcileError`] when the arithmetic cannot be performed — see
+    /// [`Reconciler::compute`](crate::Reconciler::compute).
     pub fn build_reconciled(self) -> Result<Invoice, crate::ReconcileError> {
         self.build_reconciled_with(&crate::Reconciler::new())
     }

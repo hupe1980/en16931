@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "en16931"
-version = "0.8.0"
+version = "0.10.1"
 dependencies = [
  "rust_decimal",
  "serde",
@@ -246,7 +246,7 @@ dependencies = [
 
 [[package]]
 name = "en16931-formats"
-version = "0.8.0"
+version = "0.10.1"
 dependencies = [
  "en16931",
  "flate2",

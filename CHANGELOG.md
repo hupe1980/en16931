@@ -14,34 +14,34 @@ Before 1.0, a minor release may break; every break is listed here.
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-11-07
+
+No rule passes or panics any more because its arithmetic left the `Decimal`
+range ([#22]). Contributed by Andreas Isaak.
+
 ### Fixed
 
-- `PEPPOL-EN16931-R120` and `R040` no longer panic when expected minus stated
-  amount overflows, and no longer skip a line or allowance whose expected
-  amount exceeds the `Decimal` range: they report it, with a hint. When
-  quantity × price alone overflows, R120 divides the larger factor by the base
-  quantity first, so a price is not rounded away. `R046` reports a gross price
-  minus discount beyond the range instead of panicking.
-- No total or tax rule passes on overflow any more. `BR-CO-10` … `BR-CO-16`,
-  the category `-08` rows, R120's line allowances and charges, `BR-DEX-02` and
-  `BR-DEX-09` sum the amounts exactly in `Decimal` instead of skipping when a
-  sum of `InvoiceAmount`s overflows; `BR-CO-17` and the category `-09` rows
-  report a tax beyond the `Decimal` range, with a hint.
-- Rule products and differences that decide a result by one digit or one
-  cent keep every digit or are reported: `rust_decimal` rounds a result
-  beyond 28 places without saying so, which turned a tax just below half a
-  cent into a cent (`BR-CO-17`, the category `-09` rows, the reconciler's
-  BT-117) and let R046 compare a rounded net price. XPath's `round` no longer
-  rounds `x + 0.5` first. R120 and R040, which compare within a slack of
-  0.02, accept the rounding at 28 places and report only an overflow; R040
-  compares a hundredfold instead of dividing by 100.
-- A finding that cannot be checked names the reason: an amount beyond a
-  `Decimal`'s range, or one that is exact only with more than 28 places.
+- `PEPPOL-EN16931-R120`, `R040` and `R046` panicked when the expected amount
+  minus the stated one overflowed, so `receive` aborted on such a document
+  instead of rejecting it. They now fail, with a hint.
+- `BR-CO-10` … `BR-CO-16`, the category `-08` rows, `BR-DEX-02` and
+  `BR-DEX-09` passed when a sum overflowed `InvoiceAmount`; sums are now exact.
+  `BR-CO-17` and the category `-09` rows fail on a tax beyond the `Decimal`
+  range instead of skipping it.
+- `rust_decimal` rounds a product beyond 28 places silently, which turned a tax
+  just below half a cent into a cent. `BR-CO-17`, the category `-09` rows,
+  `R046` and the reconciler's BT-117 keep every digit or say they cannot.
+  XPath's `round` no longer rounds `x + 0.5` first. `R120` and `R040`, which
+  compare within 0.02, still accept the rounding.
+- A finding that cannot be checked says why: beyond the `Decimal` range, or
+  more than 28 decimal places.
 
 ### Added
 
-- `ReconcileError::Precision`: BT-117 is exact only with more than 28 places,
-  for a rate with that many decimals. An overflow stays `Overflow`.
+- `ReconcileError::Precision`: BT-117 needs more than 28 decimal places. An
+  overflow stays `Overflow`.
+
+[#22]: https://github.com/hupe1980/en16931/pull/22
 
 ## [0.10.0] — 2026-11-06
 
@@ -1298,7 +1298,8 @@ directions, ZUGFeRD / Factur-X extraction, and the command.
 - `en16931-cli`: `validate`, `convert`, `diff`, `extract`, `inspect`, `explain`,
   `rules`, `profiles`, and CI-shaped exit codes.
 
-[Unreleased]: https://github.com/hupe1980/en16931/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/hupe1980/en16931/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/hupe1980/en16931/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/hupe1980/en16931/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/hupe1980/en16931/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/hupe1980/en16931/compare/v0.7.3...v0.8.0
