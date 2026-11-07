@@ -991,3 +991,29 @@ fn a_sub_line_value_that_does_not_parse_keeps_its_element() {
         }
     }
 }
+
+/// A crafted XRechnung whose line quantity is `Decimal::MAX` and whose BT-131
+/// is negative: the expected line amount minus the stated one overflows.
+/// `receive` rejects it rather than panicking.
+#[test]
+fn a_quantity_at_the_decimal_limit_is_rejected_not_a_panic() {
+    let mut inv = xrechnung();
+    inv.lines[0].quantity = en16931::Quantity::new(rust_decimal::Decimal::MAX);
+    inv.lines[0].price.net_price = en16931::UnitPriceAmount::new(rust_decimal::Decimal::ONE);
+    inv.lines[0].price.base_quantity = None;
+    inv.lines[0].allowances.clear();
+    inv.lines[0].charges.clear();
+    inv.lines[0].net_amount = en16931::InvoiceAmount::parse("-1.00").unwrap();
+    let bytes = xml(&inv, Syntax::Ubl);
+    assert!(
+        String::from_utf8_lossy(&bytes).contains("79228162514264337593543950335"),
+        "the quantity is written"
+    );
+    let got = receive(&bytes, &Policy::default());
+    assert_eq!(
+        got.recommendation,
+        Recommendation::Reject,
+        "{:?}",
+        got.reasons
+    );
+}
