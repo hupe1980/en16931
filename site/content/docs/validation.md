@@ -148,8 +148,9 @@ and pick the zero-rate branch of `BR-CO-17` on `round(Percent) = 0`. Both are
 | half away from zero | `1` | `3` | `-1` |
 
 Banker's and half-away-from-zero each get one of the two midpoint columns
-wrong, so the rules use `floor(x + 0.5)` — the definition rather than an
-approximation of it. A VAT rate of exactly **0.5 %** (Spain's *recargo de
+wrong, so the rules use the definition, `floor(x + 0.5)` — taken as `floor(x)`
+plus one when the fraction is at least a half, since `x + 0.5` would itself
+round a value with 28 places. A VAT rate of exactly **0.5 %** (Spain's *recargo de
 equivalencia* on reduced-rate goods) rounds to `1` for the artefact and to `0`
 for banker's, which would send `BR-CO-17` down its zero-rate branch.
 
@@ -405,10 +406,15 @@ to point into.
 
 A clearing platform does not choose its inputs. A property suite generates
 structurally valid, semantically absurd documents — `i64::MAX` amounts that
-overflow when summed, zero base quantities that `R120` would divide by, empty
-codes, thousands of lines — and asserts that validation terminates, never panics,
-is **deterministic and stably ordered**, and never cites a rule id that
-`explain()` cannot resolve.
+overflow when summed, quantities, prices and rates at `Decimal`'s limits, zero
+base quantities that `R120` would divide by, empty codes, thousands of lines —
+and asserts that validation terminates, never panics, is **deterministic and
+stably ordered**, and never cites a rule id that `explain()` cannot resolve.
+
+Nor does a rule pass because its arithmetic failed. A sum is exact; a product
+or difference that leaves `Decimal`'s range, or that a rule comparing to the
+digit would need more than 28 places for, fails the rule with a hint saying
+which.
 
 The property suite runs on every commit; coverage-guided fuzzing of the readers
 runs in CI beside it.

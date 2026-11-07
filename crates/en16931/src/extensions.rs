@@ -98,7 +98,7 @@ impl Extensions {
             .map_or(&[], |(_, v)| v.as_slice())
     }
 
-    /// `Σ BT-DEX-002`, as `BR-DEX-09` needs it.
+    /// `Σ BT-DEX-002`.
     ///
     /// # Errors
     /// [`crate::AmountError::Overflow`].

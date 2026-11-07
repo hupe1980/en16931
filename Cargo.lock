@@ -837,7 +837,7 @@ checksum = "9e5e8f6c15a24b9a3ee5efec809ccd006d3b30e8b3bb63c39af737c7f87daa1d"
 
 [[package]]
 name = "en16931"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "billing",
  "chrono",
@@ -854,7 +854,7 @@ dependencies = [
 
 [[package]]
 name = "en16931-cli"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -871,7 +871,7 @@ dependencies = [
 
 [[package]]
 name = "en16931-formats"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "billing",
  "criterion",

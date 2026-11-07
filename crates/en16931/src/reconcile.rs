@@ -184,7 +184,8 @@ impl Reconciler {
     ///
     /// # Errors
     /// [`ReconcileError`] when the arithmetic cannot be performed — an unknown
-    /// VAT category, a taxed category with no rate, or an overflow.
+    /// VAT category, a taxed category with no rate, an overflow, or a tax that
+    /// needs more than 28 decimal places.
     pub fn compute(&self, inv: &Invoice) -> Result<Reconciled, ReconcileError> {
         let vat_breakdown = self.breakdown(inv)?;
         let totals = self.totals(inv, &vat_breakdown)?;
