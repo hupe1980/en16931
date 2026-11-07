@@ -20,7 +20,7 @@ use crate::invoice::{Invoice, VatBreakdown, terms as bt};
 use crate::validation::{Findings, Rule, RuleId, Severity, Source};
 use crate::{Percentage, VatCategory};
 
-use super::arith::{BEYOND_RANGE, derived_vat, exact_sum, within_vat_tolerance};
+use super::arith::{derived_vat, exact_sum, within_vat_tolerance};
 
 /// How many BG-23 groups a category may occupy — the `-01` row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -329,9 +329,12 @@ pub fn check_tax_amount(inv: &Invoice, p: CategoryProfile, f: &mut Findings<'_>)
             }
             TaxRule::Derived => {
                 let rate = entry.rate.map_or(Decimal::ZERO, Percentage::into_decimal);
-                let Some(expected) = derived_vat(entry.taxable_amount.into_decimal(), rate) else {
-                    f.at_with_hint(path, BEYOND_RANGE);
-                    continue;
+                let expected = match derived_vat(entry.taxable_amount.into_decimal(), rate) {
+                    Ok(expected) => expected,
+                    Err(reason) => {
+                        f.at_with_hint(path, reason.hint());
+                        continue;
+                    }
                 };
                 let stated = entry.tax_amount.into_decimal().abs();
                 if !within_vat_tolerance(stated, expected) {

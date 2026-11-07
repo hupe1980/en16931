@@ -17,6 +17,15 @@ fn paths(inv: &Invoice, rule: &str) -> Vec<String> {
         .collect()
 }
 
+fn hints(inv: &Invoice, rule: &str) -> Vec<String> {
+    validate(inv)
+        .findings()
+        .iter()
+        .filter(|f| f.rule.as_str() == rule)
+        .map(|f| f.hint.clone().unwrap_or_default())
+        .collect()
+}
+
 fn categorise(inv: &mut Invoice, category: &str) {
     for l in &mut inv.lines {
         l.vat.category = Code::new(category);
@@ -112,5 +121,40 @@ fn a_tax_beyond_the_decimal_range_fails_its_rules() {
     assert_eq!(
         (paths(&inv, "BR-CO-17").len(), paths(&inv, "BR-S-09").len()),
         (1, 1)
+    );
+}
+
+/// A rate with 27 places makes the tax on 101.01 need 29: `BR-CO-17` says the
+/// places are the reason, not the range; a rate at `Decimal::MAX` the range.
+#[test]
+fn a_tax_that_cannot_be_checked_names_the_reason() {
+    let mut inv = base();
+    let entry = inv
+        .vat_breakdown
+        .iter_mut()
+        .find(|e| e.category.as_str() == "S")
+        .expect("the example has a standard rate");
+    entry.taxable_amount = InvoiceAmount::parse("101.01").expect("amount");
+    entry.rate = Some(Percentage::new(
+        rust_decimal::Decimal::from_str_exact("19.333333333333333333333333333").expect("rate"),
+    ));
+    let places = hints(&inv, "BR-CO-17");
+    assert_eq!(places.len(), 1, "{places:?}");
+    assert!(
+        places[0].contains("28 decimal places") && !places[0].contains("range"),
+        "{places:?}"
+    );
+
+    let entry = inv
+        .vat_breakdown
+        .iter_mut()
+        .find(|e| e.category.as_str() == "S")
+        .expect("the example has a standard rate");
+    entry.rate = Some(Percentage::new(rust_decimal::Decimal::MAX));
+    let range = hints(&inv, "BR-CO-17");
+    assert_eq!(range.len(), 1, "{range:?}");
+    assert!(
+        range[0].contains("range") && !range[0].contains("places"),
+        "{range:?}"
     );
 }

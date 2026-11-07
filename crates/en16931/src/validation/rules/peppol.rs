@@ -8,7 +8,7 @@
 
 use rust_decimal::Decimal;
 
-use super::arith::{BEYOND_RANGE, exact_add, exact_mul, exact_sub, exact_sum};
+use super::arith::{BEYOND_RANGE, exact_mul, exact_sub, exact_sum};
 use super::{Findings, Rule, RuleId, Severity, Source};
 use crate::bt::BtId;
 use crate::bt::{Group, Path};
@@ -90,25 +90,34 @@ pub(crate) fn check_line_amount(
             line.quantity.into_decimal(),
             line.price.net_price.into_decimal(),
         );
-        // Dividing first only when the product alone overflows keeps the exact
-        // result for every line that fits; dividing the larger factor keeps its
-        // digits, so `None` is then truly out of range.
+        // R120 compares within a slack of 0.02, so rounding at 28 places,
+        // as XPath's decimal arithmetic does, never changes its outcome; only
+        // an overflow is reported. The exact product comes first, then the
+        // larger factor divided first, which keeps its digits where the
+        // product alone overflows or a tiny base quantity would magnify the
+        // rounding; only then the rounded product.
         let (large, small) = if quantity.abs() >= price.abs() {
             (quantity, price)
         } else {
             (price, quantity)
         };
-        let expected = exact_mul(quantity, price)
+        let divided_first = |multiply: fn(Decimal, Decimal) -> Option<Decimal>| {
+            large
+                .checked_div(base)
+                .and_then(|share| multiply(share, small))
+        };
+        let exact = |a: Decimal, b: Decimal| exact_mul(a, b).ok();
+        let expected = exact(quantity, price)
             .and_then(|p| p.checked_div(base))
+            .or_else(|| divided_first(exact))
             .or_else(|| {
-                large
-                    .checked_div(base)
-                    .and_then(|share| exact_mul(share, small))
+                quantity
+                    .checked_mul(price)
+                    .and_then(|p| p.checked_div(base))
             })
-            // The division rounds at 28 places, as XPath's decimal division
-            // does; the charges and allowances keep every digit or are reported.
-            .and_then(|p| exact_add(p, charges))
-            .and_then(|p| exact_sub(p, allowances));
+            .or_else(|| divided_first(Decimal::checked_mul))
+            .and_then(|p| p.checked_add(charges))
+            .and_then(|p| p.checked_sub(allowances));
         match expected {
             None => f.at_with_hint(path, BEYOND_RANGE),
             Some(expected) if !within(expected, line.net_amount.into_decimal(), tolerance) => {
@@ -142,8 +151,9 @@ fn check_basis(
         return;
     };
     // A stated amount fits an `i64` of cents, far below `Decimal::MAX / 100`,
-    // so none matches a product beyond `Decimal`'s range.
-    let Some(product) = exact_mul(base.into_decimal(), pct.into_decimal()) else {
+    // so none matches a product beyond `Decimal`'s range. R040 compares within
+    // a slack, so the product's rounding at 28 places is accepted.
+    let Some(product) = base.into_decimal().checked_mul(pct.into_decimal()) else {
         f.at_with_hint(path, BEYOND_RANGE);
         return;
     };
@@ -269,9 +279,12 @@ terms: [bt::ITEM_NET_PRICE, bt::ITEM_GROSS_PRICE, bt::ITEM_PRICE_DISCOUNT],
             .price_discount
             .map_or(Decimal::ZERO, |d| d.into_decimal());
         let path = Path::at_term(Group::Line, i, bt::ITEM_NET_PRICE);
-        let Some(expected) = exact_sub(gross.into_decimal(), discount) else {
-            f.at_with_hint(path, BEYOND_RANGE);
-            continue;
+        let expected = match exact_sub(gross.into_decimal(), discount) {
+            Ok(expected) => expected,
+            Err(reason) => {
+                f.at_with_hint(path, reason.hint());
+                continue;
+            }
         };
         // Exact: no `u:slack`, unlike R040.
         if expected != line.price.net_price.into_decimal() {
@@ -1016,23 +1029,149 @@ mod tests {
         assert_eq!(fired(&R120, &inv).len(), 1);
     }
 
-    /// 0.0200000000000000000000000001 plus a charge of 10.00 needs more digits
-    /// than `Decimal` holds; rounded, the allowance of 10.00 would bring it back
-    /// onto the slack of 0.02 from a stated 0.00.
-    #[test]
-    fn r120_does_not_round_away_a_digit_when_charges_are_added() {
-        let d = |s: &str| Decimal::from_str_exact(s).unwrap();
-        let mut inv = one_line(d("0.0200000000000000000000000001"), Decimal::ONE, "0.00");
-        let ten = LineAllowanceCharge {
-            amount: InvoiceAmount::parse("10.00").unwrap(),
+    fn line_charge(amount: &str) -> LineAllowanceCharge {
+        LineAllowanceCharge {
+            amount: InvoiceAmount::parse(amount).unwrap(),
             base_amount: None,
             percentage: None,
             reason: None,
             reason_code: None,
+        }
+    }
+
+    /// A price per 3 with a line charge: the share 0.333… (28 places) plus
+    /// 10.00 needs more digits than a `Decimal` holds. R120 compares within
+    /// 0.02, so the rounding at 28 places is accepted, not reported.
+    #[test]
+    fn r120_accepts_a_base_quantity_with_a_line_charge() {
+        let d = |s: &str| Decimal::from_str_exact(s).unwrap();
+        let mut inv = one_line(d("1"), d("1.00"), "10.33");
+        inv.lines[0].price.base_quantity = Some(crate::Quantity::new(d("3")));
+        inv.lines[0].charges.push(line_charge("10.00"));
+        assert!(fired(&R120, &inv).is_empty());
+
+        let mut inv = one_line(d("1"), d("1.00"), "-9.67");
+        inv.lines[0].price.base_quantity = Some(crate::Quantity::new(d("3")));
+        inv.lines[0].allowances.push(line_charge("10.00"));
+        assert!(fired(&R120, &inv).is_empty());
+    }
+
+    /// 2 000 lines from a fixed pseudo-random sequence: quantities with up to
+    /// three places, unit prices with up to six, base quantities up to 1 000
+    /// with or without cents, up to two line charges and two allowances. A
+    /// BT-131 rounded to the cent passes R120; 0.03 off fires it.
+    #[test]
+    fn r120_holds_on_random_everyday_lines() {
+        let mut state: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut next = |below: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % below
         };
-        inv.lines[0].charges.push(ten.clone());
-        inv.lines[0].allowances.push(ten);
-        assert_eq!(fired(&R120, &inv).len(), 1);
+        let d = |mantissa: u64, scale: u32| Decimal::new(i64::try_from(mantissa).unwrap(), scale);
+        for _ in 0..2000 {
+            let quantity = d(next(10_000_000) + 1, 3);
+            let price = d(next(10_000_000_000) + 1, 6);
+            let base = match next(3) {
+                0 => None,
+                1 => Some(d(next(1000) + 1, 0)),
+                _ => Some(d(next(100_000) + 1, 2)),
+            };
+            let charges: Vec<Decimal> = (0..next(3)).map(|_| d(next(100_000), 2)).collect();
+            let allowances: Vec<Decimal> = (0..next(3)).map(|_| d(next(100_000), 2)).collect();
+            let expected = quantity * price / base.unwrap_or(Decimal::ONE)
+                + charges.iter().sum::<Decimal>()
+                - allowances.iter().sum::<Decimal>();
+            let stated = expected
+                .round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero);
+            let off = Decimal::from_str_exact("0.03").unwrap();
+            for (net, fires) in [(stated, 0), (stated + off, 1)] {
+                let mut inv = one_line(quantity, price, &net.to_string());
+                inv.lines[0].price.base_quantity = base.map(crate::Quantity::new);
+                inv.lines[0].charges = charges
+                    .iter()
+                    .map(|c| line_charge(&c.to_string()))
+                    .collect();
+                inv.lines[0].allowances = allowances
+                    .iter()
+                    .map(|a| line_charge(&a.to_string()))
+                    .collect();
+                assert_eq!(
+                    fired(&R120, &inv).len(),
+                    fires,
+                    "{quantity} × {price} / {base:?} + {charges:?} − {allowances:?} = {net}"
+                );
+            }
+        }
+    }
+
+    /// Quantity × price with 31 places is rounded at 28, not reported.
+    #[test]
+    fn r120_accepts_a_product_with_more_than_28_places() {
+        let d = |s: &str| Decimal::from_str_exact(s).unwrap();
+        let inv = one_line(d("1.123456789012345"), d("1.1234567890123456"), "1.26");
+        assert!(fired(&R120, &inv).is_empty());
+    }
+
+    /// Everyday lines: base quantities, prices with up to four places,
+    /// quantities with up to three, line charges and allowances. A BT-131
+    /// rounded to the cent passes R120; 0.03 off fires it.
+    #[test]
+    fn r120_accepts_every_everyday_line_and_fires_beyond_the_slack() {
+        let d = |s: &str| Decimal::from_str_exact(s).unwrap();
+        let bases = [
+            None,
+            Some("1"),
+            Some("2"),
+            Some("3"),
+            Some("6"),
+            Some("7"),
+            Some("12"),
+            Some("100"),
+        ];
+        let prices = [
+            "0.01", "1.00", "1.23", "9.99", "19.95", "1.2345", "0.3333", "1234.56",
+        ];
+        let quantities = ["1", "2", "3", "0.5", "1.5", "7", "12.345", "0.333"];
+        let extras: [(&[&str], &[&str]); 4] = [
+            (&[], &[]),
+            (&["10.00"], &[]),
+            (&[], &["10.00"]),
+            (&["8.50", "0.99"], &["1.25"]),
+        ];
+        let mut checked = 0;
+        for base in bases {
+            for price in prices {
+                for quantity in quantities {
+                    for (charges, allowances) in extras {
+                        let divisor = base.map_or(Decimal::ONE, d);
+                        let expected = d(quantity) * d(price) / divisor
+                            + charges.iter().map(|c| d(c)).sum::<Decimal>()
+                            - allowances.iter().map(|a| d(a)).sum::<Decimal>();
+                        let stated = expected.round_dp_with_strategy(
+                            2,
+                            rust_decimal::RoundingStrategy::MidpointAwayFromZero,
+                        );
+                        for (net, fires) in [(stated, 0), (stated + d("0.03"), 1)] {
+                            let mut inv = one_line(d(quantity), d(price), &net.to_string());
+                            inv.lines[0].price.base_quantity =
+                                base.map(|b| crate::Quantity::new(d(b)));
+                            inv.lines[0].charges = charges.iter().map(|c| line_charge(c)).collect();
+                            inv.lines[0].allowances =
+                                allowances.iter().map(|a| line_charge(a)).collect();
+                            assert_eq!(
+                                fired(&R120, &inv).len(),
+                                fires,
+                                "{quantity} × {price} / {base:?} + {charges:?} − {allowances:?} = {net}"
+                            );
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 8 * 8 * 8 * 4 * 2);
     }
 
     /// Gross 4 + 5·10^-28 minus its negative is 8 + 10^-27: exact, though
@@ -1075,6 +1214,71 @@ mod tests {
             reason_code: None,
         }];
         assert_eq!(fired(&R040, &inv).len(), 1);
+    }
+
+    fn document_allowance(
+        amount: &str,
+        base: &str,
+        percent: &str,
+    ) -> crate::invoice::DocumentAllowanceCharge {
+        crate::invoice::DocumentAllowanceCharge {
+            amount: InvoiceAmount::parse(amount).unwrap(),
+            base_amount: Some(InvoiceAmount::parse(base).unwrap()),
+            percentage: Some(Percentage::new(Decimal::from_str_exact(percent).unwrap())),
+            vat: crate::invoice::LineVat::default(),
+            reason: None,
+            reason_code: None,
+        }
+    }
+
+    /// 1.01 × 33.333333333333333333333333333 % needs 29 places; R040
+    /// compares within 0.02, so the rounding at 28 places is accepted.
+    #[test]
+    fn r040_accepts_a_product_with_more_than_28_places() {
+        let mut inv = one_line(Decimal::ONE, Decimal::ONE, "1.00");
+        inv.allowances = vec![document_allowance(
+            "0.34",
+            "1.01",
+            "33.333333333333333333333333333",
+        )];
+        assert!(fired(&R040, &inv).is_empty());
+    }
+
+    /// Everyday allowances: an amount rounded to the cent passes R040, 0.03
+    /// off fires it.
+    #[test]
+    fn r040_accepts_every_everyday_allowance_and_fires_beyond_the_slack() {
+        let d = |s: &str| Decimal::from_str_exact(s).unwrap();
+        let mut checked = 0;
+        for base in ["0.01", "1.00", "99.99", "1234.56", "1000000.00"] {
+            for percent in [
+                "0.5",
+                "2",
+                "2.75",
+                "3",
+                "7",
+                "12.5",
+                "19",
+                "33.33",
+                "33.333333333333333333333333333",
+            ] {
+                let stated = (d(base) * d(percent) / Decimal::ONE_HUNDRED).round_dp_with_strategy(
+                    2,
+                    rust_decimal::RoundingStrategy::MidpointAwayFromZero,
+                );
+                for (amount, fires) in [(stated, 0), (stated + d("0.03"), 1)] {
+                    let mut inv = one_line(Decimal::ONE, Decimal::ONE, "1.00");
+                    inv.allowances = vec![document_allowance(&amount.to_string(), base, percent)];
+                    assert_eq!(
+                        fired(&R040, &inv).len(),
+                        fires,
+                        "{base} × {percent} % = {amount}"
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 5 * 9 * 2);
     }
 
     /// A base amount × percentage beyond `Decimal`'s range matches no amount.

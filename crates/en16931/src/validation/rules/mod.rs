@@ -25,8 +25,8 @@ use crate::invoice::{Invoice, terms as bt};
 use crate::{InvoiceAmount, VatCategory};
 
 /// Exact products for the reconciler, as the rules compute them.
-pub(crate) use arith::exact_mul;
-use arith::{BEYOND_RANGE, derived_vat, exact_sum, within_vat_tolerance, xpath_round};
+pub(crate) use arith::{Inexact, exact_mul};
+use arith::{derived_vat, exact_sum, within_vat_tolerance, xpath_round};
 
 /// Declare a rule with its metadata beside its predicate.
 macro_rules! rule {
@@ -381,11 +381,14 @@ rule!(BR_CO_17, "BR-CO-17", Fatal, Both, terms: [bt::VAT_TAX_AMOUNT, bt::VAT_TAX
             continue;
         }
 
-        // Absolute values on both sides, ±1.00. A tax beyond `Decimal`'s range
-        // matches no stated amount.
-        let Some(expected) = derived_vat(e.taxable_amount.into_decimal(), rate) else {
-            f.at_with_hint(path, BEYOND_RANGE);
-            continue;
+        // Absolute values on both sides, ±1.00. A tax that cannot be taken
+        // exactly matches no stated amount; the hint says why.
+        let expected = match derived_vat(e.taxable_amount.into_decimal(), rate) {
+            Ok(expected) => expected,
+            Err(reason) => {
+                f.at_with_hint(path, reason.hint());
+                continue;
+            }
         };
         let stated = e.tax_amount.into_decimal().abs();
         if !within_vat_tolerance(stated, expected) {

@@ -40,23 +40,52 @@ pub(crate) fn xpath_round(x: Decimal) -> Decimal {
     }
 }
 
+/// Why a product or difference cannot be taken exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Inexact {
+    /// It exceeds `Decimal`'s range.
+    Range,
+    /// It is exact only with more than the 28 places a `Decimal` holds.
+    Places,
+}
+
+impl Inexact {
+    /// The advice for a finding that could not be checked for this reason.
+    pub(crate) const fn hint(self) -> &'static str {
+        match self {
+            Self::Range => BEYOND_RANGE,
+            Self::Places => BEYOND_PLACES,
+        }
+    }
+}
+
+/// Advice for a finding whose expected amount exceeds a `Decimal`'s range.
+pub(crate) const BEYOND_RANGE: &str =
+    "The expected amount exceeds the range of a decimal, so it cannot be checked.";
+
+/// Advice for a finding whose expected amount is exact only with more places
+/// than a `Decimal` holds.
+const BEYOND_PLACES: &str = "The expected amount needs more than the 28 decimal places a \
+     decimal holds, so it cannot be checked exactly.";
+
 /// The artefacts' derived VAT amount: `round(|base| × rate ÷ 100 × 100) ÷ 100`.
 ///
-/// Computed as the equivalent `round(|base| × rate) ÷ 100`. `None` when the
+/// Computed as the equivalent `round(|base| × rate) ÷ 100`. An error when the
 /// product is not exact ([`exact_mul`]); callers report that group.
-pub(crate) fn derived_vat(base: Decimal, rate: Decimal) -> Option<Decimal> {
+pub(crate) fn derived_vat(base: Decimal, rate: Decimal) -> Result<Decimal, Inexact> {
     exact_mul(base.abs(), rate).map(|product| xpath_round(product) / Decimal::ONE_HUNDRED)
 }
 
-/// `a × b` when a `Decimal` holds it exactly. `None` when it overflows, or when
-/// it needs more than 28 places, which `rust_decimal` would round without
-/// saying so.
-pub(crate) fn exact_mul(a: Decimal, b: Decimal) -> Option<Decimal> {
+/// `a × b` when a `Decimal` holds it exactly: an error when it overflows, or
+/// when it needs more than 28 places, which `rust_decimal` would round without
+/// saying so. For the rules that compare exactly or round to a cent; a rule
+/// with a slack of 0.02 takes `checked_mul` and its rounding at 28 places.
+pub(crate) fn exact_mul(a: Decimal, b: Decimal) -> Result<Decimal, Inexact> {
     // A zero factor gives an exact zero, whatever scale `rust_decimal` keeps.
     if a.is_zero() || b.is_zero() {
-        return Some(Decimal::ZERO);
+        return Ok(Decimal::ZERO);
     }
-    let product = a.checked_mul(b)?;
+    let product = a.checked_mul(b).ok_or(Inexact::Range)?;
     // The exact product has the scale `a.scale() + b.scale()`. To hold it,
     // `rust_decimal` drops its lowest digits; the product is exact when each
     // of them is zero, that is when the mantissas have as many factors of 2
@@ -64,7 +93,11 @@ pub(crate) fn exact_mul(a: Decimal, b: Decimal) -> Option<Decimal> {
     let dropped = (a.scale() + b.scale()).saturating_sub(product.scale());
     let (ma, mb) = (a.mantissa().unsigned_abs(), b.mantissa().unsigned_abs());
     let holds = |prime: u128| factors(ma, prime) + factors(mb, prime) >= dropped;
-    (holds(2) && holds(5)).then_some(product)
+    if holds(2) && holds(5) {
+        Ok(product)
+    } else {
+        Err(Inexact::Places)
+    }
 }
 
 /// How often `prime` divides `m`, which is not zero.
@@ -78,8 +111,8 @@ fn factors(mut m: u128, prime: u128) -> u32 {
 }
 
 /// `a − b` when a `Decimal` holds it exactly, as [`exact_mul`].
-pub(crate) fn exact_sub(a: Decimal, b: Decimal) -> Option<Decimal> {
-    let difference = a.checked_sub(b)?;
+pub(crate) fn exact_sub(a: Decimal, b: Decimal) -> Result<Decimal, Inexact> {
+    let difference = a.checked_sub(b).ok_or(Inexact::Range)?;
     // The exact difference has the larger scale of the two; the digits
     // `rust_decimal` drops below the result's scale must all be zero.
     let scale = a.scale().max(b.scale());
@@ -94,17 +127,12 @@ pub(crate) fn exact_sub(a: Decimal, b: Decimal) -> Option<Decimal> {
             d.mantissa().rem_euclid(10_i128.pow(dropped - shift)) * 10_i128.pow(shift)
         }
     };
-    ((rest(a) - rest(b)).rem_euclid(modulus) == 0).then_some(difference)
+    if (rest(a) - rest(b)).rem_euclid(modulus) == 0 {
+        Ok(difference)
+    } else {
+        Err(Inexact::Places)
+    }
 }
-
-/// `a + b` when a `Decimal` holds it exactly, as [`exact_mul`].
-pub(crate) fn exact_add(a: Decimal, b: Decimal) -> Option<Decimal> {
-    exact_sub(a, -b)
-}
-
-/// Advice for a finding whose expected amount does not fit a `Decimal`.
-pub(crate) const BEYOND_RANGE: &str = "The expected amount exceeds the range or the 28 places \
-     of a decimal, so it cannot be checked exactly.";
 
 /// The exact sum of `amounts`. Each fits an `i64` of cents, so a `Decimal`
 /// holds the sum of more amounts than a document can carry, where a sum of
@@ -146,7 +174,7 @@ mod tests {
     fn a_product_beyond_decimal_precision_is_not_rounded_silently() {
         assert_eq!(
             derived_vat(dec!(1.01), dec!(1.4851485148514851485148514851)),
-            None
+            Err(Inexact::Places)
         );
     }
 
@@ -154,14 +182,14 @@ mod tests {
     /// `BIS_Billing_30-Telefoni.xml` has 693.8 × 0).
     #[test]
     fn zero_is_exact() {
-        assert_eq!(exact_mul(dec!(693.8), dec!(0)), Some(Decimal::ZERO));
-        assert_eq!(exact_sub(dec!(1.50), dec!(1.5)), Some(Decimal::ZERO));
+        assert_eq!(exact_mul(dec!(693.8), dec!(0)), Ok(Decimal::ZERO));
+        assert_eq!(exact_sub(dec!(1.50), dec!(1.5)), Ok(Decimal::ZERO));
     }
 
     #[test]
     fn a_rate_of_half_a_per_cent_is_not_a_zero_rate() {
         assert_ne!(xpath_round(dec!(0.5)), Decimal::ZERO);
-        assert_eq!(derived_vat(dec!(1000.00), dec!(0.5)), Some(dec!(5)));
+        assert_eq!(derived_vat(dec!(1000.00), dec!(0.5)), Ok(dec!(5)));
     }
 
     #[test]
@@ -185,11 +213,11 @@ mod tests {
     fn a_product_that_drops_only_zeros_is_exact() {
         assert_eq!(
             exact_mul(dec!(0.20), dec!(5.0000000000000000000000000005)),
-            Some(dec!(1.0000000000000000000000000001))
+            Ok(dec!(1.0000000000000000000000000001))
         );
         assert_eq!(
             derived_vat(dec!(0.20), dec!(5.0000000000000000000000000005)),
-            Some(dec!(0.01))
+            Ok(dec!(0.01))
         );
     }
 
@@ -200,11 +228,11 @@ mod tests {
         let gross = dec!(4.0000000000000000000000000005);
         assert_eq!(
             exact_sub(gross, -gross),
-            Some(dec!(8.000000000000000000000000001))
+            Ok(dec!(8.000000000000000000000000001))
         );
         assert_eq!(
             exact_sub(gross, dec!(-4.0000000000000000000000000004)),
-            None
+            Err(Inexact::Places)
         );
     }
 
@@ -216,7 +244,51 @@ mod tests {
         assert_eq!(xpath_round(dec!(-7.5000000000000000000000000001)), dec!(-8));
         assert_eq!(
             derived_vat(dec!(1.00), dec!(7.4999999999999999999999999999)),
-            Some(dec!(0.07))
+            Ok(dec!(0.07))
+        );
+    }
+
+    /// Every everyday base and rate derives its tax; none is refused.
+    #[test]
+    fn every_everyday_rate_derives_a_tax() {
+        let bases = [
+            dec!(0.01),
+            dec!(1.00),
+            dec!(99.99),
+            dec!(1234.56),
+            dec!(-500.00),
+            dec!(1000000.00),
+        ];
+        let rates = [
+            dec!(0),
+            dec!(0.5),
+            dec!(2.75),
+            dec!(3.8),
+            dec!(5),
+            dec!(7),
+            dec!(7.7),
+            dec!(10),
+            dec!(16),
+            dec!(19),
+            dec!(20),
+            dec!(21),
+            dec!(25.5),
+        ];
+        for base in bases {
+            for rate in rates {
+                assert!(derived_vat(base, rate).is_ok(), "{base} × {rate} %");
+            }
+        }
+    }
+
+    /// Beyond the range is `Range`, beyond the places `Places`.
+    #[test]
+    fn the_reason_tells_range_from_places() {
+        assert_eq!(exact_mul(Decimal::MAX, dec!(2)), Err(Inexact::Range));
+        assert_eq!(exact_sub(Decimal::MAX, dec!(-1)), Err(Inexact::Range));
+        assert_eq!(
+            derived_vat(dec!(101.01), dec!(19.333333333333333333333333333)),
+            Err(Inexact::Places)
         );
     }
 }
